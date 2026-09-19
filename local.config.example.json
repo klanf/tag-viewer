@@ -1,0 +1,16 @@
+{
+  "//": "本机专属配置的模板。复制成 local.config.json 后按本机情况填写（该文件已被 .gitignore 排除）。",
+  "//优先级": "环境变量 > local.config.json > 各脚本自己的仓库内相对默认值",
+
+  "//electronDist": "Electron 运行时所在目录，按顺序尝试；可以是含 electron.exe 的 dist 目录，也可以是包含 dist 的上层目录。留空则用 node_modules/electron/dist（npm install 后的标准位置）。等价环境变量：TV_ELECTRON / TV_ELECTRON_DIST",
+  "electronDist": [
+    "D:/path/to/electron/dist",
+    "E:/another/electron"
+  ],
+
+  "//dataDir": "命令行工具（selftest / db.mjs / harness）默认使用的数据目录。留空则用 <仓库>/data。等价环境变量：TV_DATA_DIR",
+  "dataDir": "D:/path/to/tag-viewer-data",
+
+  "//oldRoot": "旧版 Python 工具根目录，只有 scripts/build-char-lib.mjs 的迁移路径用得到。留空表示不用。等价环境变量：TV_OLD_ROOT",
+  "oldRoot": ""
+}

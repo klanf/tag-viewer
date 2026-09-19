@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <!-- CSP: 只允许加载本地资源 + 自定义图片协议 tv:, 不允许远程脚本/内联脚本。
+       connect-src 的 ws:/http://localhost 是给 vite dev server 的 HMR 用的。
+       style-src 需要 unsafe-inline —— Vue 的 scoped 样式在 dev 下是动态注入的。 -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 img-src 'self' tv: data: blob:;
+                 style-src 'self' 'unsafe-inline';
+                 script-src 'self';
+                 connect-src 'self' ws: http://localhost:*;
+                 font-src 'self' data:;
+                 object-src 'none'; base-uri 'self'; form-action 'none'" />
+  <title>WD14 标签看板</title>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

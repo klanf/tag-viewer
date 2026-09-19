@@ -1,0 +1,50 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 测试工作目录（数据副本 / 截图 / 独立的 userData），跑 e2e 时会自动建
+.e2e-work/
+.selftest-userdata/
+
+# 运行期生成（Electron 与显卡驱动会在 cwd 下落缓存）
+NVIDIA Corporation/
+
+# 本地调试产物
+# logs/ 由启动脚本与主进程共同读写: launch.log(启动日志) + ready.flag(就绪标记)
+logs/
+*.log
+
+# 本机专属配置（Electron 运行时位置 / 数据目录 / 旧版工具根目录）
+# 模板见 local.config.example.json
+local.config.json
+
+# ---------------- 数据目录 ----------------
+# data/ 是**用户自己的数据**，一律不进仓库：
+#   · 用户数据(绝不出机器): 黑名单 / 替换规则 / 背景补全 / 收藏备注 / 购物车历史 /
+#     扫描文件夹记录 / 缩略图缓存      —— 里面全是本机文件路径
+#   · 可再生派生物: tags.db(由标签 txt 同步生成) / scan_cache.json(重扫即可重建)
+#   · 知识类: local_translations.json / character_library.json / weilin_data*/
+#     内容是标签翻译与系列角色映射(不含图片)，将来作为「知识包」单独分发，
+#     在此之前需要先核实数据来源与授权(见 README 的合规说明)
+# 只放行 *.example.json 模板 —— 用 data/* 而不是 data/，这样否定规则才生效
+data/*
+!data/*.example.json
+
+# 测试夹具的产物（图片由 test-fixtures/make_scan_test.py 生成）
+test-fixtures/scan-test/
+
+# Python 字节码（跑一次 test-fixtures/make_scan_test.py 就会生成）
+__pycache__/
+*.pyc
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+*.tmp
+
+# 内部交接记录与规划文档（不是给用户看的文档，开源前不进仓库）
+# 这类文档含有本机真实路径与私有目录名，对外分发前需要先脱敏
+交接日志.md
+docs/数据源合并与增量入库方案.md

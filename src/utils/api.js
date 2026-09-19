@@ -1,0 +1,126 @@
+/**
+ * 渲染进程访问主进程的唯一入口
+ * ============================
+ * 所有后端调用都从这里出去。做了三件事:
+ *  1. 包一层 Promise, 把主进程返回的 { error } 变成真正的 reject ——
+ *     调用处就能用 try/catch, 不用每次判断返回值里有没有 error 字段。
+ *  2. 保留一个浏览器降级: 万一在浏览器里打开(dist 目录直接双击), window.tv 不存在,
+ *     给出明确的报错而不是 "undefined is not a function"。
+ *  3. 图片 URL 构造集中在这里 —— 与主进程 imageproto.js 成对, 改一边必须改另一边。
+ */
+
+const tv = typeof window !== 'undefined' ? window.tv : null
+
+export const isElectron = !!tv?.isElectron
+
+export function thumbUrl(path, width = 400) {
+  if (!path) return ''
+  return tv ? tv.thumbUrl(path, width) : ''
+}
+
+export function fileUrl(path) {
+  if (!path) return ''
+  return tv ? tv.fileUrl(path) : ''
+}
+
+/**
+ * 调主进程。失败时 throw Error, message 是主进程给的错误文本。
+ */
+export async function call(channel, payload) {
+  if (!tv) {
+    throw new Error('未在 Electron 中运行 —— 请用 npm start 启动应用, 不要直接打开 dist/index.html')
+  }
+  const r = await tv.invoke(channel, payload)
+  if (r && typeof r === 'object' && r.error) {
+    const err = new Error(r.error)
+    err.code = r.code
+    err.payload = r
+    throw err
+  }
+  return r
+}
+
+/** 订阅主进程推送。返回退订函数。 */
+export function onPush(channel, cb) {
+  if (!tv) return () => {}
+  return tv.on(channel, cb)
+}
+
+/* ------------------------------------------------------------ 分领域封装
+   这些薄封装不是为了"少打字", 而是让调用处的语义明确:
+   看到 `api.search({q})` 就知道在走搜索接口, 而不是一堆魔法字符串。 */
+
+export const api = {
+  // 应用 / 数据集
+  status: () => call('app:status'),
+  reload: () => call('app:reload'),
+  appConfig: () => call('app:config'),
+  pickDataDir: () => call('app:pickDataDir'),
+  openPath: (target) => call('app:openPath', { target }),
+  revealPath: (target) => call('app:revealPath', { target }),
+  /** 图片右键菜单: 主进程弹原生菜单, 返回 { action: 'detail'|'toggle-fav'|null } */
+  ctxMenu: (payload) => call('app:ctxMenu', payload),
+
+  // 统计 / 搜索
+  stats: (q) => call('stats:get', q),
+  search: (q) => call('search:do', q),
+
+  // 系列 / 角色
+  series: (q) => call('series:get', q),
+  seriesMeta: () => call('series:meta:get'),
+  saveSeriesMeta: (body) => call('series:meta:post', body),
+  characters: (q) => call('characters:get', q),
+
+  // 标签
+  suggest: (q) => call('suggest:get', q),
+  allTags: (q) => call('tags:all', q),
+  tagsForPath: (path) => call('tags:forPath', { path }),
+  lightbox: (path) => call('lightbox:data', { path }),
+  translate: (tags) => call('translate:get', { q: tags.join(',') }),
+
+  // 规则
+  blacklistGet: () => call('blacklist:get'),
+  blacklistSave: (text) => call('blacklist:save', { text }),
+  blacklistToggle: (tag) => call('blacklist:toggle', { tag }),
+  replaceGet: () => call('replace:get'),
+  replaceSave: (text) => call('replace:save', { text }),
+  bgGet: () => call('bg:get'),
+  rulesReload: () => call('rules:reload'),
+
+  // 购物车历史
+  cartHistory: () => call('cart:history'),
+  cartDetail: (name) => call('cart:detail', { name }),
+  cartSave: (name, cart) => call('cart:save', { name, cart }),
+  cartDelete: (name) => call('cart:delete', { name }),
+  cartRename: (oldName, newName) => call('cart:rename', { old_name: oldName, new_name: newName }),
+
+  // 导出
+  exportPreview: (q) => call('export:preview', q),
+  exportSave: (q) => call('export:save', q),
+  exportText: (q) => call('export:text', q),
+  exportCart: (tags, opts) => call('export:cart', { tags, ...opts }),
+
+  // 扫描
+  pickFolder: (opts) => call('scan:pickFolder', opts),
+  scanFolder: (q) => call('scan:folder', q),
+
+  // 图片删除(移入系统回收站)
+  trashImages: (paths) => call('image:trash', { paths }),
+
+  // 扫描文件夹「收藏夹」(扫过的目录会记下来, 下次直接点开)
+  folders: () => call('folders:list'),
+  addFolder: (q) => call('folders:add', q),
+  removeFolder: (path) => call('folders:remove', { path }),
+  updateFolder: (q) => call('folders:update', q),
+  rescanFolder: (q) => call('folders:rescan', q),
+  openFolder: (q) => call('folders:open', q),
+  pruneFolders: () => call('folders:prune'),
+
+  // 剪贴板
+  copy: (text) => call('clipboard:write', { text }),
+
+  // 诊断
+  diag: () => call('diag:stats'),
+  clearSearchCache: () => call('diag:clearSearchCache'),
+  clearThumbs: () => call('diag:clearThumbs'),
+}

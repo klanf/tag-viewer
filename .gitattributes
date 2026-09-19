@@ -1,0 +1,18 @@
+# 换行符策略
+# ============
+# 默认文本走 LF、检出时也按 LF —— 但下面两个启动脚本必须**原样字节**：
+# cmd.exe / WSH 按当前 ANSI 代码页(本机 936/GBK)读它们，任何 eol 转换都会
+# 破坏 CRLF，直接导致「双击没反应」。scripts/check-launchers.mjs 会在
+# npm run check 时校验字节，一旦被 git 改过就会立刻变红。
+* text=auto eol=lf
+启动看板.bat -text
+启动看板.vbs -text
+
+# 二进制资源不要做任何转换
+*.ico -text
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.webp -text
+*.onnx -text
+*.db -text
