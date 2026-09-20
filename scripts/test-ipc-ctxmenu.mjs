@@ -176,6 +176,54 @@ await ta('新增的预设立刻出现在下一次菜单里(读回生效)', async
   assert.ok(labels.some((l) => l.includes(srcDir)), `菜单里没有新预设: ${JSON.stringify(labels)}`)
 })
 
+console.log('\n[3] image:trash / shell API 只认反斜杠(2026-09-20 真机 bug)')
+console.log('     库内正斜杠路径此前被 trashItem 以 "Failed to parse path" 拒收,')
+console.log('     表面上是「文件被占用」—— 隔离探针 A/B 已实锤是分隔符问题。')
+await ta('正斜杠路径(库内写法) -> 传给 trashItem 的是反斜杠, 文件真被删掉', async () => {
+  const img = path.join(srcDir, 'trash-fwd.png')
+  fs.writeFileSync(img, 'trash-me')
+  const fwd = img.split('\\').join('/')            // 全正斜杠(库内 images.path 的写法)
+  ctl.calls = []
+  const trash = ctl.handlers.get('image:trash')
+  const r = await trash({}, { paths: [fwd] })
+  const call = ctl.calls.find((c) => c[0] === 'shell.trashItem')
+  assert.ok(call, 'shell.trashItem 没被调用')
+  assert.ok(!call[1].includes('/'), `传给 trashItem 的仍是正斜杠: ${call[1]}`)
+  assert.ok(/^[A-Z]:\\/.test(call[1]), `盘符没转大写/不是盘符开头: ${call[1]}`)
+  assert.ok(!fs.existsSync(img), '文件还在原位(没删掉)')
+  assert.deepEqual(r.trashed, [fwd], '回执必须保留调用方原文(渲染层靠它对号剔除网格)')
+  assert.equal(r.failed.length, 0, `误报失败: ${JSON.stringify(r.failed)}`)
+})
+
+await ta('小写盘符 + 反斜杠 -> 盘符统一成大写后照样删', async () => {
+  const img = path.join(srcDir, 'trash-lower.png')
+  fs.writeFileSync(img, 'trash-me-2')
+  const lower = img.replace(/^[A-Z]:/, (s) => s.toLowerCase())
+  ctl.calls = []
+  const trash = ctl.handlers.get('image:trash')
+  const r = await trash({}, { paths: [lower] })
+  assert.equal(r.failed.length, 0, `误报失败: ${JSON.stringify(r.failed)}`)
+  assert.ok(!fs.existsSync(img), '文件还在原位')
+  const call = ctl.calls.find((c) => c[0] === 'shell.trashItem')
+  assert.equal(call[1][0], img[0], `盘符大小写被改动: ${call[1]}`)
+})
+
+await ta('右键菜单「打开」/「在资源管理器中显示」也走反斜杠', async () => {
+  const img = path.join(srcDir, 'ctx-shell.png')
+  fs.writeFileSync(img, 'shell-me')
+  const fwd = img.split('\\').join('/')
+  ctl.calls = []
+  // 不设 ctl.pick -> 菜单构建后没人选, 但 open/reveal 是构建时记录、click 时触发的,
+  // 所以这里手动找到对应项点掉
+  ctl.pick = (tpl) => {
+    tpl.find((i) => i.label === '🖥️ 用系统查看器打开').click()
+  }
+  await handler(fakeEvent(), { path: fwd, name: 'ctx-shell.png' })
+  const op = ctl.calls.find((c) => c[0] === 'shell.openPath')
+  assert.ok(op, 'shell.openPath 没被调用')
+  assert.ok(!op[1].includes('/'), `openPath 收到的仍是正斜杠: ${op[1]}`)
+})
+
 /* ---------------- 汇总 ---------------- */
 fs.rmSync(root, { recursive: true, force: true })
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`)

@@ -15,6 +15,8 @@
  * 注意: 桩只实现主进程真正用到的那一小部分 API(见下面导出), 不做行为模拟。
  */
 
+import fs from 'node:fs'
+
 /** 控制面板: 测试通过它设桩 / 读副作用 */
 export const ctl = {
   /** ipcMain.handle 注册进来的 channel -> handler */
@@ -108,7 +110,12 @@ export const shell = {
   async openPath(p) { ctl.calls.push(['shell.openPath', p]); return '' },
   showItemInFolder(p) { ctl.calls.push(['shell.showItemInFolder', p]) },
   async openExternal(p) { ctl.calls.push(['shell.openExternal', p]) },
-  async trashItem(p) { ctl.calls.push(['shell.trashItem', p]) },
+  // 与真实语义对齐: 成功 = 文件离开原位(测试里直接删掉, 真机是进回收站)。
+  // 不删的话 image:trash 的 existsSync 兜底会把它判成"真失败", 用例没法往下走。
+  async trashItem(p) {
+    ctl.calls.push(['shell.trashItem', p])
+    try { fs.unlinkSync(p) } catch { /* 已不在 = 也算成功 */ }
+  },
   beep() {},
 }
 

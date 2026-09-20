@@ -48,6 +48,24 @@ import { flog } from './core/filelog.js'
 
 const log = (...a) => console.log('[ipc]', ...a)
 
+/**
+ * 库内路径 -> Windows 原生路径(只给 shell API 用)
+ * ================================================
+ * 数据库 `images.path` 存的是正斜杠写法, fs.*(libuv)两种写法通吃,
+ * 但 **shell API 只认反斜杠** —— 2026-09-20 隔离探针 A/B 实测(同目录同命名, 只换写法):
+ *   · 反斜杠(磁盘枚举的原生写法)   三盘 trashItem 全部成功;
+ *   · 正斜杠(DB 存的写法)          三盘全部 "Failed to parse path", 文件原地不动
+ *     (Electron 内部走 IShellItem 解析, 正斜杠解析失败)。
+ * 这就是"扫描页删除正常、库内删除全报文件被占用"的根因: 扫描页路径来自磁盘枚举,
+ * 库内路径来自数据库, 之前被误判成"文件占用"。
+ * 盘符顺手转大写(正斜杠+小写盘符的写法同样探针复现失败)。
+ */
+function toNativePath(p) {
+  let s = String(p || '')
+  if (/^[a-z]:/i.test(s)) s = s[0].toUpperCase() + s.slice(1)
+  return path.normalize(s)          // / 与混写统一成 \
+}
+
 /** 统一包一层: 异常变成 { error } */
 function safe(fn) {
   return async (event, payload) => {
@@ -163,8 +181,11 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     // 主进程能自己干的(复制图片/文本、系统查看器、资源管理器)当场干完;
     // 需要渲染层接手的(打开详情页/切换收藏)把 action 原样返回, 由调用方处理。
     'app:ctxMenu': safe(async (payload, event) => {
-      const { path: imgPath, name, tags, favable, favorited } = payload || {}
-      if (!imgPath || typeof imgPath !== 'string') return { action: null }
+      const { path: rawPath, name, tags, favable, favorited } = payload || {}
+      if (!rawPath || typeof rawPath !== 'string') return { action: null }
+      // openPath / showItemInFolder 同 trashItem 一样是 shell API —— 只认反斜杠
+      // (库内正斜杠路径上「打开」「在资源管理器中显示」会静默失败); fs 类调用顺带受益。
+      const imgPath = toNativePath(rawPath)
       const win = BrowserWindow.fromWebContents(event.sender)
       if (!win) return { action: null }
 
@@ -429,10 +450,13 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       if (!list.length) return { error: 'no paths' }
       const trashed = []
       const failed = []
-      for (const p of list) {
+      for (const raw of list) {
+        // trashItem 只吃反斜杠(见 toNativePath 注释); 但**回执仍按调用方传来的原文** ——
+        // 渲染层靠这些字符串把图从网格/光箱里剔除, 归一化成反斜杠就对不上号了。
+        const p = toNativePath(raw)
         try {
           await shell.trashItem(p)
-          trashed.push(p)
+          trashed.push(raw)
         } catch (e) {
           /**
            * ⚠️ 「已进回收站却报错」的兜底 —— 2026-09-19 实测(隔离探针, 沙箱内外一致):
@@ -450,10 +474,10 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
            * 只有原文件还在, 才算真失败(比如被别的进程占用)。
            */
           if (!fs.existsSync(p)) {
-            trashed.push(p)
+            trashed.push(raw)
             flog('trash-warn', `trashItem 报错但文件已不在原位(按成功处理): ${p} — ${e?.message || e}`)
           } else {
-            failed.push(p)
+            failed.push(raw)
             flog('trash-err', `trashItem 真失败(文件仍在): ${p} — ${e?.message || e}`)
           }
         }
