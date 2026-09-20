@@ -31,6 +31,9 @@ import { buildExport, buildCartExport } from './core/exporter.js'
 import { scanFolder, scanCacheStats, purgeScanCachePaths } from './core/scan.js'
 import { runIngest, ingestStatus, pauseIngest, ingestState, queueStats } from './core/ingest.js'
 import {
+  runTagger, taggerStatus, pauseTagger, taggerConfig, taggerState,
+} from './core/tagger.js'
+import {
   listFolders, addFolder, removeFolder, updateFolder, rescanFolder, openFolder, pruneMissing,
 } from './core/folders.js'
 import { thumbStats, clearThumbs, thumbCacheSize } from './core/thumbs.js'
@@ -112,7 +115,12 @@ function pushIngestProgress(p) {
   mainWindow()?.webContents.send('ingest:progress', p)
 }
 
-export function registerIpc({ onReload, onIngestDone } = {}) {
+/** WD14 反推进度 -> 渲染端(与同步共用右下角那根胶囊) */
+function pushTaggerProgress(p) {
+  mainWindow()?.webContents.send('tagger:progress', p)
+}
+
+export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
   const map = {
     // ---------------- 应用 / 数据集 ----------------
     'app:status': safe(() => status()),
@@ -366,6 +374,23 @@ export function registerIpc({ onReload, onIngestDone } = {}) {
     }),
     'ingest:pause': safe(() => pauseIngest()),
 
+    // ---------------- WD14 反推(消费 tag_queue, 写 tags_src='wd14') ----------------
+    // 与同步同样是"启动即返回": 模型要加载 1.27GB + 逐张推理, 首轮分钟级。
+    // 缺 python / 模型时不是报错, 而是**降级**: 队列留着, 看板照常 —— 见 core/tagger.js。
+    'tagger:status': safe(() => taggerStatus()),
+    'tagger:config': safe(() => taggerConfig()),
+    'tagger:run': safe(async (raw = {}) => {
+      if (taggerState.running) return { ok: false, error: '已有反推在跑' }
+      const limit = Math.max(0, parseInt(raw.limit, 10) || 0)
+      runTagger({ onProgress: pushTaggerProgress, limit })
+        .then((r) => {
+          if (r && !r.skipped) onTaggerDone?.(r)
+        })
+        .catch((e) => flog('tagger-err', `${e?.stack || e}`))
+      return { ok: true, started: true }
+    }),
+    'tagger:pause': safe(() => pauseTagger()),
+
     // ---------------- 扫描文件夹「收藏夹」----------------
     // 扫过的目录记进 dataDir/scan_folders.json, 下次直接点开; 删除记录不动磁盘文件
     'folders:list': safe(() => listFolders()),
@@ -441,6 +466,7 @@ export function registerIpc({ onReload, onIngestDone } = {}) {
       scanCache: scanCacheStats(),
       ingest: ingestStatus(),
       tagQueue: queueStats(),
+      tagger: taggerStatus(),
       memory: process.memoryUsage(),
       memoryMB: {
         rss: +(process.memoryUsage().rss / 1048576).toFixed(1),
@@ -469,4 +495,4 @@ export function registerIpc({ onReload, onIngestDone } = {}) {
 }
 
 /** 主进程主动推送的事件名(渲染进程用 tv.on 订阅) */
-export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress']
+export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress', 'tagger:progress']

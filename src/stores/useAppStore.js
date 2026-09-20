@@ -28,6 +28,12 @@ export const useAppStore = defineStore('app', () => {
    */
   const ingest = ref(null)
   /**
+   * WD14 反推(消费 tag_queue)的运行状态。由主进程在同步结束后按队列非空自动起一次,
+   * 也可手动跑。phase: idle | probe | infer | rebuild-tags | done | error
+   * 缺 python/模型时是 `degraded` 而不是 error —— 队列留着, 看板照用。
+   */
+  const tagger = ref(null)
+  /**
    * 数据集版本号 —— 每次"从 loading 变成 ready"就 +1。
    * 视图用它来决定"要不要重跑一次初始查询":
    *   窗口先渲染、数据后到, 视图挂载时发的第一次查询可能发生在数据就绪之前
@@ -68,6 +74,7 @@ export const useAppStore = defineStore('app', () => {
       applyStatus(st)
     })
     onPush('ingest:progress', (p) => { ingest.value = p })
+    onPush('tagger:progress', (p) => { tagger.value = p })
 
     applyStatus(await api.status())
     // 主进程是页面 did-finish-load 之后才开始加载数据, 有可能这里已经 ready 了
@@ -75,6 +82,7 @@ export const useAppStore = defineStore('app', () => {
 
     // 同步可能在页面渲染之前就已经开跑(它只等数据集就绪, 不等界面), 所以补拉一次
     try { ingest.value = await api.ingestStatus() } catch { /* 主进程还没注册, 忽略 */ }
+    try { tagger.value = await api.taggerStatus() } catch { /* 同上 */ }
 
     // 兜底轮询: 万一某个推送丢了, 也别让界面永远停在"加载中"
     const timer = setInterval(async () => {
@@ -104,9 +112,45 @@ export const useAppStore = defineStore('app', () => {
     applyStatus(await api.reload())
   }
 
+  /**
+   * 手动触发后台任务。
+   *
+   * ⚠️ 这几个 action 之前**不存在**(2026-09-20 修): 徽标里的「再同步一次」
+   * 写的是 `app.ingestRun()`, 而 store 从来没导出过这个名字 —— pinia 上取到
+   * undefined, 调用直接抛 TypeError, 又被徽标那圈 `try{}catch{}` 吞掉。
+   * 表现是"点了没反应, 也不报错", 极难发现。所以这里补上真实实现,
+   * 让调用点写的就是它实际调的东西。
+   */
+  const RUNNING_PHASES = new Set([
+    'running', 'enum', 'compare', 'read', 'folder-done', 'rebuild-tags', 'probe', 'infer',
+  ])
+
+  async function ingestRun() {
+    if (ingest.value && RUNNING_PHASES.has(ingest.value.phase)) return { ok: false, error: '已在同步' }
+    // 立刻置成进行中, 让徽标在第一个推送到达之前就显示出来(否则有 1-2 秒空档)
+    ingest.value = { ...(ingest.value || {}), phase: 'running', note: '正在启动同步 ...', done: 0, total: 0 }
+    return api.ingestRun()
+  }
+
+  async function ingestPause() { return api.ingestPause() }
+
+  async function taggerRun(opts) {
+    if (tagger.value && RUNNING_PHASES.has(tagger.value.phase)) return { ok: false, error: '已在反推' }
+    tagger.value = { ...(tagger.value || {}), phase: 'probe', note: '正在启动反推 ...', done: 0, total: 0 }
+    return api.taggerRun(opts)
+  }
+
+  async function taggerPause() { return api.taggerPause() }
+
+  async function taggerRefresh() {
+    try { tagger.value = await api.taggerStatus() } catch { /* 忽略 */ }
+    return tagger.value
+  }
+
   return {
     phase, error, progress, stats, translate, workspace, config, sourcesInfo, loadMs, epoch,
-    theme, ready, loading, totalImages, ingest,
+    theme, ready, loading, totalImages, ingest, tagger,
     init, reload, applyStatus, toggleTheme, applyTheme,
+    ingestRun, ingestPause, taggerRun, taggerPause, taggerRefresh,
   }
 })

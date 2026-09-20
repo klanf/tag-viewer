@@ -20,12 +20,32 @@ import { registerIpc } from './ipc.js'
 import { initWorkspace, getWorkspace } from './core/workspace.js'
 import { resolveLogDir, setLogDir, logFile, readyFlag } from './core/paths.js'
 import { bootstrap, status } from './core/app-state.js'
-import { runIngest } from './core/ingest.js'
+import { runIngest, queueStats } from './core/ingest.js'
+import { runTagger, stopTagger, taggerState } from './core/tagger.js'
 import { ds } from './core/dataset.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || ''
 const isDev = !!DEV_URL
+
+/**
+ * 开发期先注入本机专属配置(local.config.json, 不进仓库)。
+ * =====================================================
+ * WD14 反推需要知道"本机的 python 在哪、模型在哪", 而 `electron/core/*` 是
+ * **打包后也要跑**的代码 —— 它不能 import `scripts/local-config.mjs`
+ * (打包产物里没有 scripts/)。所以那层薄封装把值导出成 `TV_*` 环境变量
+ * (见 scripts/local-config.mjs 的 applyLocalEnv), 这里在最早的时机调一次即可。
+ *
+ * 打包后跳过: 用户机器上由环境变量或 settings.json 提供, 缺了就降级(反推不跑,
+ * 看板照常), 这是设计好的行为, 不是故障。
+ */
+if (!app.isPackaged) {
+  try {
+    const { applyLocalEnv } = await import('../scripts/local-config.mjs')
+    const applied = applyLocalEnv()
+    if (applied.length) console.log('[env] 本机配置已注入:', applied.join(', '))
+  } catch { /* 没有这个文件是正常情况(开源用户 / 新克隆) */ }
+}
 
 /* ---- 启动日志 ----
  * 双击 bat/vbs 启动时没有控制台, 早期错误(缺模块/协议注册失败/权限)会静默消失,
@@ -223,6 +243,56 @@ async function runIngestOnce() {
   } catch (e) {
     log('warn', `后台增量同步失败: ${e?.stack || e}`)
   }
+  // 同步会把新的裸图放进 tag_queue, 这里顺手接上反推。
+  // 放在同步**之后**(而不是并行)是有意的: 反推要先把队列建出来, 而且模型加载
+  // 会吃掉十几秒 CPU/GPU —— 跟枚举几万个文件抢资源只会让两边都变慢。
+  scheduleTagging()
+}
+
+/* ------------------------------------------------------------ WD14 反推自启 */
+
+/**
+ * 反推自启 —— 只在"队列里真有东西"时才拉起服务。
+ *
+ * 为什么必须看队列: 拉起反推服务意味着加载 1.27GB 模型(+首次推理预热),
+ * 而绝大多数日子队列是空的(实测第二轮同步后队列 0 张)。为了一个空队列
+ * 每次启动都花十几秒和一大块显存, 是纯粹的浪费。
+ *
+ * 与同步共用 `TV_INGEST=0` 这个总闸(测试/dev 默认关, 见 scripts/electron-path.mjs):
+ * 沙箱库的 folders 行指向用户真实盘符, 反推一旦漏跑就会把标签写进沙箱库并污染断言。
+ * 另外留一个独立的 `TV_TAGGER=0` 用于"只想关反推、同步照跑"。
+ */
+let tagTimer = null
+
+function scheduleTagging(delay = 1500) {
+  if (process.env.TV_TAGGER === '0' || process.env.TV_INGEST === '0') {
+    log('ok', '后台反推已关闭(TV_TAGGER=0 / TV_INGEST=0)')
+    return
+  }
+  clearTimeout(tagTimer)
+  tagTimer = setTimeout(runTagOnce, delay)
+}
+
+async function runTagOnce() {
+  tagTimer = null
+  if (taggerState.running) return
+  let pending = 0
+  try { pending = queueStats().pending } catch { /* 库还没建好 */ }
+  if (!pending) return                       // 队列空 -> 不拉进程、不加载模型
+  const push = (p) => { if (win && !win.isDestroyed()) win.webContents.send('tagger:progress', p) }
+  try {
+    log('ok', `后台反推开始(队列 ${pending} 张)`)
+    const st = await runTagger({ onProgress: push })
+    log('ok', `后台反推结束: ${JSON.stringify(st)}`)
+    if (st && st.tagged) {
+      // 反推把新标签写进了库 -> 内存里的数据集已经过期, 必须重载, 否则
+      // 界面看不到刚反推出来的标签(库是新的、界面是旧的)。
+      log('ok', `反推新增 ${st.tagged} 张标签, 重载数据集`)
+      await startLoad()
+    }
+  } catch (e) {
+    log('warn', `后台反推失败: ${e?.stack || e}`)
+  }
 }
 
 let loading = false
@@ -360,7 +430,9 @@ app.whenReady().then(() => {
       onReload: () => { /* 数据集重载后由渲染进程自己重取 */ },
       // 手动「立即同步」跑完: 内存里的数据集已经过期, 必须重载一次,
       // 否则看板数字和搜索索引还停在同步前(库是新的、界面是旧的)。
-      onIngestDone: () => { startLoad() },
+      onIngestDone: () => { startLoad(); scheduleTagging() },
+      // 手动「反推」跑完: 同理, 新标签要进内存才看得见
+      onTaggerDone: () => { startLoad() },
     })
     buildMenu()
     log('ok', 'ipc / protocol / menu 注册完成')
@@ -383,5 +455,8 @@ app.on('child-process-gone', (_e, d) => log('warn', `child-process-gone: ${JSON.
 app.on('window-all-closed', () => {
   if (!gotLock) return
   log('ok', '所有窗口已关闭, 退出')
+  // 反推服务是独立子进程(python), Electron 不会连带把它带走 —— 不显式收掉
+  // 就会留下一个常驻 1.27GB 模型的孤儿进程, 下次启动又起一个。
+  try { stopTagger() } catch { /* 忽略 */ }
   app.quit()
 })

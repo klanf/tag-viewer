@@ -12,5 +12,13 @@
   "dataDir": "D:/path/to/tag-viewer-data",
 
   "//oldRoot": "旧版 Python 工具根目录，只有 scripts/build-char-lib.mjs 的迁移路径用得到。留空表示不用。等价环境变量：TV_OLD_ROOT",
-  "oldRoot": ""
+  "oldRoot": "",
+
+  "//pythonPath": "WD14 反推用的 python 解释器（需装 onnxruntime + pillow + numpy，如 miniconda 环境）。留空则由 core/tagger.js 自动探测 PATH 与 conda 常规位置。等价环境变量：TV_PYTHON",
+  "pythonPath": "",
+
+  "//wd14Model": "WD14/PixAI onnx 模型路径。留空则依次找 <oldRoot>/model/wd-pixai-tagger-v0.9.onnx 与 <仓库>/models/。等价环境变量：TV_WD14_MODEL",
+  "wd14Model": "",
+  "//wd14Csv": "标签表 csv。留空规则同上。等价环境变量：TV_WD14_CSV",
+  "wd14Csv": ""
 }

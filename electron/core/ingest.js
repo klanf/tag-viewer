@@ -238,9 +238,15 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
   for (const [npath, d] of disk) {
     const r = dbByPath.get(npath)
     if (!r) {
-      // 库里没有 -> 规则 3/4。已在队列里且指纹一致 -> 不重读(等反推)。
+      // 库里没有 -> 规则 3/4。**只要队列里有一条同指纹的记录就跳过**, 不重读。
+      //
+      // 条件刻意**不要求 state='pending'** (2026-09-20 收紧): 阶段 3 的反推会把
+      // 跑通但没出标签的图标成 `done`(留 pending 会永远循环)。若这里只认 pending,
+      // 那一行下轮就会被重新读图、重新入队、重新反推 —— 每轮白烧一张。
+      // 认指纹而不是认状态, 语义也更准: "这张图我已经判过了, 而且它没变过"。
+      // 图变了(mtime/size 不同)自然落到下面的 toRead, 会重新走一遍完整判定。
       const q = queued.get(npath)
-      if (q && q.state === 'pending' && Number(q.mtime_ms) === d.m && Number(q.size) === d.s) {
+      if (q && Number(q.mtime_ms) === d.m && Number(q.size) === d.s) {
         skipped++
         continue
       }

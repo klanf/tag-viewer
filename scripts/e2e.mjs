@@ -1346,6 +1346,26 @@ async function main() {
     check('增量同步: 测试环境未自动跑(绝不能去扫用户的真实磁盘)',
       ig?.phase === 'idle' && !ig?.lastRunAt && !ig?.running,
       `phase=${ig?.phase} · running=${ig?.running} · lastRunAt=${ig?.lastRunAt}`)
+
+    /* WD14 反推(阶段 3) —— IPC 通路 + 同一道闸门
+     * ==========================================
+     * 反推比同步更危险: 它要拉 python 子进程 + 加载 1.27GB 模型, 而且**会把标签写进库**。
+     * 沙箱库既然指向用户真实盘符, 漏跑一次就会往沙箱里塞进真实图片的标签。
+     * 所以它同样受 TV_INGEST=0 / TV_TAGGER=0 挡着 —— 而且**队列为空时本就不该拉起服务**
+     * (那条在 core/tagger.js 里, 由 test:tagger 单独守)。 */
+    const tg = await cdp.eval(`return await window.tv.invoke('tagger:status')`)
+    check('反推: tagger:status 可调且带队列与配置',
+      !!tg && 'phase' in tg && !!tg.queue && !!tg.config,
+      `phase=${tg?.phase} · queue=${JSON.stringify(tg?.queue)}`)
+    check('反推: diag 里有 tagger 诊断',
+      !!diag.tagger, `tagger.phase=${diag.tagger?.phase}`)
+    check('反推: 测试环境未自动跑(绝不能加载模型去反推)',
+      tg?.phase === 'idle' && !tg?.lastRunAt && !tg?.running,
+      `phase=${tg?.phase} · running=${tg?.running} · lastRunAt=${tg?.lastRunAt}`)
+    const tgc = await cdp.eval(`return await window.tv.invoke('tagger:config')`)
+    check('反推: tagger:config 能报出静态配置(脚本/模型/标签表各自在不在)',
+      !!tgc && 'scriptExists' in tgc && 'modelExists' in tgc && 'available' in tgc,
+      `script=${tgc?.scriptExists} model=${tgc?.modelExists} csv=${tgc?.csvExists}`)
   } catch (e) {
     check('e2e 流程未中断', false, e.message)
     console.error(e)

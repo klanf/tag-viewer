@@ -34,6 +34,8 @@ const CHANNELS = new Set([
   'scan:pickFolder', 'scan:folder',
   // 增量入库(磁盘 <-> tags.db 对齐)
   'ingest:status', 'ingest:run', 'ingest:pause',
+  // WD14 反推(消费 tag_queue)
+  'tagger:status', 'tagger:config', 'tagger:run', 'tagger:pause',
   // 图片删除(移入回收站)
   'image:trash',
   // 收藏找回(按文件名搜已知目录)
@@ -47,7 +49,7 @@ const CHANNELS = new Set([
   'diag:stats', 'diag:clearSearchCache', 'diag:clearThumbs', 'diag:fileInfo',
 ])
 
-const PUSH = new Set(['app:progress', 'app:reloaded', 'scan:progress', 'ingest:progress'])
+const PUSH = new Set(['app:progress', 'app:reloaded', 'scan:progress', 'ingest:progress', 'tagger:progress'])
 
 /** 自定义协议的 URL 构造 —— 与 imageproto.js 的解析必须成对 */
 function thumbUrl(p, w = 400) {

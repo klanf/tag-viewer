@@ -33,9 +33,13 @@ export function findElectron() {
  * 把「5 images」「68,376 条结果」这类断言全部带偏, 还白扫几分钟磁盘。
  * 真实使用者走 `启动看板.bat` 直接起 electron, 不经这里, 所以默认是开的。
  * 想测同步行为就显式传 { TV_INGEST: '1' }。
+ *
+ * `TV_TAGGER=0` 一并默认关掉(阶段 3 起): 反推比同步更贵 —— 要拉 python 子进程 +
+ * 加载 1.27GB 模型, 而且**会把标签写进沙箱库**。它的自启闸门本来就与 TV_INGEST 共用
+ * (见 main.js 的 scheduleTagging), 这里显式写上是为了让意图可见、也方便单独开。
  */
 export function electronEnv(extra = {}) {
-  const env = { ...process.env, TV_INGEST: '0', ...extra }
+  const env = { ...process.env, TV_INGEST: '0', TV_TAGGER: '0', ...extra }
   delete env.ELECTRON_RUN_AS_NODE
   return env
 }

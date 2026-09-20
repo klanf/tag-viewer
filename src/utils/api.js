@@ -109,6 +109,13 @@ export const api = {
   ingestRun: () => call('ingest:run'),
   ingestPause: () => call('ingest:pause'),
 
+  // WD14 反推(消费 tag_queue, 写 tags_src='wd14')。同样是"启动即返回", 进度走 tagger:progress。
+  // 缺 python / 模型时不是失败而是降级 —— status().degraded / config.missing 会说明缺什么。
+  taggerStatus: () => call('tagger:status'),
+  taggerConfig: () => call('tagger:config'),
+  taggerRun: (opts) => call('tagger:run', opts),
+  taggerPause: () => call('tagger:pause'),
+
   // 图片删除(移入系统回收站)
   trashImages: (paths) => call('image:trash', { paths }),
 

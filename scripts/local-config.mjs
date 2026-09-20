@@ -79,3 +79,35 @@ export function localOldRoot() {
   if (typeof cfg === 'string' && cfg.trim()) return path.resolve(cfg)
   return ''
 }
+
+/**
+ * 把 local.config.json 里的机器专属值导出成 `TV_*` 环境变量。
+ *
+ * 为什么绕一道环境变量, 而不是让用到的模块直接读这个文件
+ * ------------------------------------------------------
+ * `electron/core/*` 是**打包后也要跑**的代码, 它不能依赖 `scripts/`
+ * (打包产物里根本没有这个目录, import 会直接炸)。而环境变量在两种形态下都成立:
+ * 开发期由这里注入, 打包后由用户自己设(或写进 settings.json)。
+ * 已经存在的环境变量不覆盖 —— 命令行临时指定的优先级最高。
+ *
+ * 调用点:
+ *   · scripts/tagger.mjs 等 CLI —— 直接调
+ *   · electron/main.js —— 仅开发期(`!app.isPackaged`)在启动最前面调一次
+ */
+export function applyLocalEnv(env = process.env) {
+  const c = localConfig()
+  const map = {
+    TV_OLD_ROOT: c.oldRoot,       // 旧版工具根目录(WD14 模型就住在它的 model/ 下)
+    TV_PYTHON: c.pythonPath,      // 反推用的 python 解释器
+    TV_WD14_MODEL: c.wd14Model,   // 显式覆盖模型路径(一般不必填, 有 oldRoot 就够)
+    TV_WD14_CSV: c.wd14Csv,
+  }
+  const applied = []
+  for (const [k, v] of Object.entries(map)) {
+    if (typeof v !== 'string' || !v.trim()) continue
+    if (env[k] && String(env[k]).trim()) continue
+    env[k] = v.trim()
+    applied.push(k)
+  }
+  return applied
+}
