@@ -21,6 +21,13 @@ export const useAppStore = defineStore('app', () => {
   const loadMs = ref(0)
   const started = ref(false)
   /**
+   * 增量同步(磁盘 <-> tags.db)的运行状态。
+   * 由主进程在 app 就绪后延迟自启一次(见 electron/main.js 的 scheduleIngest),
+   * 也可以点界面上的按钮手动跑。phase: idle | running | enum | compare | read |
+   * folder-done | rebuild-tags | done | error | skipped
+   */
+  const ingest = ref(null)
+  /**
    * 数据集版本号 —— 每次"从 loading 变成 ready"就 +1。
    * 视图用它来决定"要不要重跑一次初始查询":
    *   窗口先渲染、数据后到, 视图挂载时发的第一次查询可能发生在数据就绪之前
@@ -60,10 +67,14 @@ export const useAppStore = defineStore('app', () => {
     onPush('app:reloaded', (st) => {
       applyStatus(st)
     })
+    onPush('ingest:progress', (p) => { ingest.value = p })
 
     applyStatus(await api.status())
     // 主进程是页面 did-finish-load 之后才开始加载数据, 有可能这里已经 ready 了
     if (phase.value === 'idle') phase.value = 'loading'
+
+    // 同步可能在页面渲染之前就已经开跑(它只等数据集就绪, 不等界面), 所以补拉一次
+    try { ingest.value = await api.ingestStatus() } catch { /* 主进程还没注册, 忽略 */ }
 
     // 兜底轮询: 万一某个推送丢了, 也别让界面永远停在"加载中"
     const timer = setInterval(async () => {
@@ -95,7 +106,7 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     phase, error, progress, stats, translate, workspace, config, sourcesInfo, loadMs, epoch,
-    theme, ready, loading, totalImages,
+    theme, ready, loading, totalImages, ingest,
     init, reload, applyStatus, toggleTheme, applyTheme,
   }
 })

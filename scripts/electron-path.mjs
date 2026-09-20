@@ -23,9 +23,19 @@ export function findElectron() {
   )
 }
 
-/** Electron 主进程需要的环境: 剔除执行层注入的 ELECTRON_RUN_AS_NODE, 否则它会被当成纯 Node 跑 */
+/**
+ * Electron 主进程需要的环境: 剔除执行层注入的 ELECTRON_RUN_AS_NODE, 否则它会被当成纯 Node 跑。
+ *
+ * 另外**默认关掉后台增量同步**(TV_INGEST=0): 测试与 dev 起的是同一份代码,
+ * 而 e2e 沙箱里的 tag_viewer_config.json 是从真实数据目录拷来的 ——
+ * 沙箱库会自动从 tags_*.txt 建出 folders 行(根目录是用户真实的盘符路径),
+ * 于是"启动后台同步"会真的去 stat 用户 F 盘那 4 万多张图, 顺手把新增图写进沙箱库,
+ * 把「5 images」「68,376 条结果」这类断言全部带偏, 还白扫几分钟磁盘。
+ * 真实使用者走 `启动看板.bat` 直接起 electron, 不经这里, 所以默认是开的。
+ * 想测同步行为就显式传 { TV_INGEST: '1' }。
+ */
 export function electronEnv(extra = {}) {
-  const env = { ...process.env, ...extra }
+  const env = { ...process.env, TV_INGEST: '0', ...extra }
   delete env.ELECTRON_RUN_AS_NODE
   return env
 }

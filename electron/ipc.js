@@ -29,6 +29,7 @@ import {
 } from './core/cart.js'
 import { buildExport, buildCartExport } from './core/exporter.js'
 import { scanFolder, scanCacheStats, purgeScanCachePaths } from './core/scan.js'
+import { runIngest, ingestStatus, pauseIngest, ingestState, queueStats } from './core/ingest.js'
 import {
   listFolders, addFolder, removeFolder, updateFolder, rescanFolder, openFolder, pruneMissing,
 } from './core/folders.js'
@@ -106,7 +107,12 @@ function pushScanProgress(p) {
   mainWindow()?.webContents.send('scan:progress', p)
 }
 
-export function registerIpc({ onReload } = {}) {
+/** 后台增量同步进度 -> 渲染端顶栏 */
+function pushIngestProgress(p) {
+  mainWindow()?.webContents.send('ingest:progress', p)
+}
+
+export function registerIpc({ onReload, onIngestDone } = {}) {
   const map = {
     // ---------------- 应用 / 数据集 ----------------
     'app:status': safe(() => status()),
@@ -343,6 +349,23 @@ export function registerIpc({ onReload } = {}) {
     }),
     'scan:folder': safe((raw) => scanFolder(raw, pushScanProgress)),
 
+    // ---------------- 增量入库(磁盘 <-> tags.db 对齐) ----------------
+    // 见 core/ingest.js 与方案 §2.2 的六条判定规则。**DB 是准入闸门** ——
+    // 库里已有标签的图一次图都不读, 更不会重跑反推。
+    // run 刻意"启动即返回": 首轮要枚举 4 万多个文件、耗时 1-2 分钟,
+    // 让 invoke 挂着等会把界面拖住。完成后由 main.js 重载数据集并推 app:reloaded。
+    'ingest:status': safe(() => ingestStatus()),
+    'ingest:run': safe(async () => {
+      if (ingestState.running) return { ok: false, error: '已有同步在跑' }
+      runIngest({ onProgress: pushIngestProgress })
+        .then((r) => {
+          if (r && !r.skipped && !r.error) onIngestDone?.(r)
+        })
+        .catch((e) => flog('ingest-err', `${e?.stack || e}`))
+      return { ok: true, started: true }
+    }),
+    'ingest:pause': safe(() => pauseIngest()),
+
     // ---------------- 扫描文件夹「收藏夹」----------------
     // 扫过的目录记进 dataDir/scan_folders.json, 下次直接点开; 删除记录不动磁盘文件
     'folders:list': safe(() => listFolders()),
@@ -416,6 +439,8 @@ export function registerIpc({ onReload } = {}) {
       thumbCache: thumbCacheSize(),
       translate: translateInfo(),
       scanCache: scanCacheStats(),
+      ingest: ingestStatus(),
+      tagQueue: queueStats(),
       memory: process.memoryUsage(),
       memoryMB: {
         rss: +(process.memoryUsage().rss / 1048576).toFixed(1),
@@ -444,4 +469,4 @@ export function registerIpc({ onReload } = {}) {
 }
 
 /** 主进程主动推送的事件名(渲染进程用 tv.on 订阅) */
-export const PUSH_EVENTS = ['app:progress', 'app:reloaded']
+export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress']

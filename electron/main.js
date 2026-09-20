@@ -20,6 +20,7 @@ import { registerIpc } from './ipc.js'
 import { initWorkspace, getWorkspace } from './core/workspace.js'
 import { resolveLogDir, setLogDir, logFile, readyFlag } from './core/paths.js'
 import { bootstrap, status } from './core/app-state.js'
+import { runIngest } from './core/ingest.js'
 import { ds } from './core/dataset.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -187,6 +188,43 @@ function createWindow() {
   win.on('closed', () => { win = null })
 }
 
+/* ---- 后台增量同步(磁盘 <-> tags.db) ----
+ * 方案见 docs/数据源合并与增量入库方案.md §2.2。这里只负责"什么时候跑":
+ *   · 等数据集**先就绪**再跑 —— 两者都要读 tags.db, 且同步会写库+改内存快照,
+ *     叠在一起启动会互相踩(启动期本来就在读 8 万行)。
+ *   · 延迟 3s 起, 让窗口先画出来、用户能立刻操作。
+ *   · 只有真的改动了东西才重载数据集 —— 第二遍起同步基本是空转(绝大多数图
+ *     指纹没变, 连图都不读), 没必要白白重读一遍。
+ *   · TV_INGEST=0 可关(测试/dev 默认关, 见 scripts/electron-path.mjs 的注释)。
+ */
+let ingestStarted = false
+function scheduleIngest() {
+  if (ingestStarted) return
+  if (process.env.TV_INGEST === '0') {
+    log('ok', '后台增量同步已关闭(TV_INGEST=0)')
+    return
+  }
+  ingestStarted = true
+  setTimeout(() => { runIngestOnce() }, 3000)
+}
+
+async function runIngestOnce() {
+  const push = (p) => { if (win && !win.isDestroyed()) win.webContents.send('ingest:progress', p) }
+  try {
+    log('ok', '后台增量同步开始')
+    const st = await runIngest({ onProgress: push })
+    log('ok', `后台增量同步结束: ${JSON.stringify(st)}`)
+    const changed = st && !st.skipped && !st.error
+      && (st.inserted || st.metaUpdated || st.goneSet || st.goneCleared)
+    if (changed) {
+      log('ok', `同步有改动(新增 ${st.inserted} / 更新 ${st.metaUpdated} / 消失 ${st.goneSet}), 重载数据集`)
+      await startLoad()
+    }
+  } catch (e) {
+    log('warn', `后台增量同步失败: ${e?.stack || e}`)
+  }
+}
+
 let loading = false
 async function startLoad() {
   if (loading) return
@@ -218,6 +256,7 @@ async function startLoad() {
       else log('ok', line)
     }
     if (win && !win.isDestroyed()) win.webContents.send('app:reloaded', st)
+    if (st.phase !== 'error') scheduleIngest()
   } catch (e) {
     log('fatal', `数据集加载失败: ${e?.stack || e}`)
     if (win && !win.isDestroyed()) {
@@ -317,7 +356,12 @@ app.whenReady().then(() => {
 
   try {
     registerHandler()
-    registerIpc({ onReload: () => { /* 数据集重载后由渲染进程自己重取 */ } })
+    registerIpc({
+      onReload: () => { /* 数据集重载后由渲染进程自己重取 */ },
+      // 手动「立即同步」跑完: 内存里的数据集已经过期, 必须重载一次,
+      // 否则看板数字和搜索索引还停在同步前(库是新的、界面是旧的)。
+      onIngestDone: () => { startLoad() },
+    })
     buildMenu()
     log('ok', 'ipc / protocol / menu 注册完成')
   } catch (e) {

@@ -104,6 +104,11 @@ export const api = {
   pickFolder: (opts) => call('scan:pickFolder', opts),
   scanFolder: (q) => call('scan:folder', q),
 
+  // 增量入库(磁盘 <-> tags.db 对齐)。run 是"启动即返回", 进度走 ingest:progress 推送。
+  ingestStatus: () => call('ingest:status'),
+  ingestRun: () => call('ingest:run'),
+  ingestPause: () => call('ingest:pause'),
+
   // 图片删除(移入系统回收站)
   trashImages: (paths) => call('image:trash', { paths }),
 

@@ -598,8 +598,14 @@ export function rebuildTags() {
 export function readRecords(onRecord, onProgress = () => {}) {
   const db = openDb()
   const srcNames = new Map(db.prepare('SELECT id, name FROM src').all().map((r) => [Number(r.id), r.name]))
+  // 来源名兜底: 增量入库进来的记录不属于任何 txt 源(src_id=0),
+  // 它们的来源应该由 folders.label 决定。少了这一层, 看板的来源列表里
+  // 会冒出一组空名字, 而那些图既筛不到也藏不掉。
+  const folderNames = new Map(
+    db.prepare('SELECT id, label FROM folders').all().map((r) => [Number(r.id), String(r.label || '')]),
+  )
   const chunk = db.prepare(`
-    SELECT i.id AS id, i.path AS path, i.src_id AS src_id, i.tags AS tags
+    SELECT i.id AS id, i.path AS path, i.src_id AS src_id, i.folder_id AS folder_id, i.tags AS tags
     FROM images i WHERE i.id > ? AND i.gone = 0 ORDER BY i.id LIMIT ?
   `)
   let lastId = 0
@@ -620,7 +626,13 @@ export function readRecords(onRecord, onProgress = () => {}) {
         }
       }
       if (!tags.length) continue
-      onRecord({ path: r.path, source: srcNames.get(Number(r.src_id)) || '', tags })
+      onRecord({
+        path: r.path,
+        source: srcNames.get(Number(r.src_id))
+          || folderNames.get(Number(r.folder_id))
+          || '',
+        tags,
+      })
       n++
     }
     onProgress({ phase: 'db-read', records: n })

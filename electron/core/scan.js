@@ -144,7 +144,7 @@ export function purgeScanCachePaths(paths) {
 
 /* ---------------------------------------------------------------- 枚举 / stat */
 
-async function listImages(folder, recursive) {
+export async function listImages(folder, recursive) {
   const files = []
   if (recursive) {
     const stack = [folder]
@@ -176,7 +176,7 @@ async function listImages(folder, recursive) {
 }
 
 /** 并发 stat 全部文件 —— 增量对账的依据; stat 失败的(刚被删)不进结果 */
-async function statAll(files) {
+export async function statAll(files) {
   const map = new Map()      // fp -> { m: mtimeMs, s: size }
   let cursor = 0
   const workers = new Array(Math.min(CONCURRENCY, files.length || 1)).fill(0).map(async () => {
@@ -203,7 +203,7 @@ async function statAll(files) {
  * 进度消息实时回来, 转发给渲染端画进度条。
  * @returns {Promise<Array<{tags:string[], source:string}>>} 与 files 下标一一对应
  */
-function parseInWorker(files, onProgress) {
+export function parseInWorker(files, onProgress) {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL('./scanWorker.js', import.meta.url), {
       workerData: { files },

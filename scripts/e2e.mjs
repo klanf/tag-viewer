@@ -1330,6 +1330,22 @@ async function main() {
         ? `失效路径: ${diag.translate.dirWanted}（已回落到数据目录, 但配置该改）`
         : `dirWanted=${diag.translate?.dirWanted || '（空, 走自动发现）'}`)
     console.log('[diag] 内存:', JSON.stringify(diag.memoryMB))
+
+    /* 增量同步(阶段 2) —— IPC 通路 + 诊断字段 + 一条安全断言
+     * ====================================================
+     * 第三条是最有价值的: e2e 沙箱里的 tag_viewer_config.json 是从用户**真实**数据目录
+     * 拷来的, 所以沙箱库会从 tags_*.txt 建出 folders 行、根目录指向用户真实的盘符。
+     * 一旦"启动自启同步"在测试里漏开, 它会真的去 stat 用户几万张图、把新增图写进沙箱库,
+     * 把「5 images」「68,376 条结果」这类断言全部带偏 —— 而且是**静默**带偏。
+     * 靠 harness 注入的 TV_INGEST=0 挡住; 这条断言就是钉住那道闸门。 */
+    const ig = await cdp.eval(`return await window.tv.invoke('ingest:status')`)
+    check('增量同步: ingest:status 可调且带队列统计',
+      !!ig && 'phase' in ig && !!ig.queue, `phase=${ig?.phase} · queue=${JSON.stringify(ig?.queue)}`)
+    check('增量同步: diag 里有 ingest / tagQueue 两份诊断',
+      !!diag.ingest && !!diag.tagQueue, `ingest.phase=${diag.ingest?.phase}`)
+    check('增量同步: 测试环境未自动跑(绝不能去扫用户的真实磁盘)',
+      ig?.phase === 'idle' && !ig?.lastRunAt && !ig?.running,
+      `phase=${ig?.phase} · running=${ig?.running} · lastRunAt=${ig?.lastRunAt}`)
   } catch (e) {
     check('e2e 流程未中断', false, e.message)
     console.error(e)

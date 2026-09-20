@@ -102,10 +102,33 @@ if (cmd === 'verify') {
   // 另外要套用与迁移**相同的去重规则**: 同一个规范化路径只算一条(保留最后出现的那条),
   // 否则 txt 里同路径重复的行会与库里的单条对不上(实测只有 涩涩涩涩涩 的 2 行)。
   const bySrc = new Map()
-  store.readRecords((rec) => {
-    if (!bySrc.has(rec.source)) bySrc.set(rec.source, [])
-    bySrc.get(rec.source).push({ path: store.normalizeImagePath(rec.path), tags: rec.tags.join('\u0001') })
-  })
+  // ⚠️ 只比 `tags_src='legacy'` 的记录, 且**不过滤 gone**
+  // ==================================================
+  // 库里现在住着三类来源(见 core/ingest.js):
+  //   legacy —— 从 txt 导入的, **只有它属于本检查的范围**;
+  //   meta   —— 增量入库写进来的(磁盘上新增、图自带提示词), 本来就不在任何 txt 里,
+  //             混进来比对就是自己给自己造误报;
+  //   wd14   —— 反推得到的, 同理(阶段 3)。
+  // 而 gone=1 的行仍然在库里(tags 一个字节没改), txt 是历史快照也不会少这一行,
+  // 所以这里**不能**加 gone=0 —— 加了反而会把"磁盘上被删掉"误报成"导入丢失"。
+  // 直查 SQL 而不走 store.readRecords: 后者是给运行时加载用的, 语义上只看 gone=0。
+  {
+    const db = store.openDb()
+    const rows = db.prepare(`
+      SELECT i.path AS path, s.name AS source, i.tags AS tags
+      FROM images i JOIN src s ON s.id = i.src_id
+      WHERE i.tags_src = 'legacy'
+      ORDER BY i.id
+    `).all()
+    for (const r of rows) {
+      if (!bySrc.has(r.source)) bySrc.set(r.source, [])
+      bySrc.get(r.source).push({
+        path: store.normalizeImagePath(r.path),
+        tags: String(r.tags || '').split(',').map((t) => t.trim()).filter(Boolean).join('\u0001'),
+      })
+    }
+    line(`库内 legacy 记录: ${rows.length} 条(其余 tags_src 不参与本检查)\n`)
+  }
   // 按「路径 -> 标签」比较, 而不是按下标逐位比
   // ==========================================
   // 这个检查的职责是"导入**无损**" —— 无损是集合性质, 不是位置性质。
