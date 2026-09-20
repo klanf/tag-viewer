@@ -3,7 +3,11 @@
  * "新起的实例到底落在哪个视图, 首屏有多少卡片"。
  * 完整断言在 scripts/e2e.mjs; 这个脚本用于改完代码后快速回看, 免得跑几分钟的全量。
  *
- * 用法: node scripts/smoke.mjs [--keep]
+ * 用法: node scripts/smoke.mjs [--keep] [--route=/sources] [--sel=.source-view]
+ *
+ * `--route` 定点截某个视图(默认截首页)。这是 e2e 之外的补充手段:
+ * e2e 的截图对**图片网格这类重页面**会卡满 60s 超时(本机实测),
+ * 而冒烟只起一个实例、只截一张, 拿来给单个视图留档更稳。
  */
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -12,6 +16,9 @@ import { findElectron, electronEnv } from './electron-path.mjs'
 import { freePort, clearPageState, ensureWorkDir, sleep, ROOT } from './harness.mjs'
 
 const KEEP = process.argv.includes('--keep')
+const arg = (name) => (process.argv.find((a) => a.startsWith(`--${name}=`)) || '').slice(name.length + 3)
+const ROUTE = arg('route')          // 例如 /sources; 空 = 首页
+const SEL = arg('sel')              // 等这个选择器出现再截, 例如 .source-view
 
 async function main() {
   const work = ensureWorkDir()
@@ -113,13 +120,29 @@ async function main() {
     }
     await sleep(1500)
 
-    // 手动触发一次搜索, 顺便把页面实际发出的查询参数录下来
-    await evalJs(`
-      const btn = [...document.querySelectorAll('.btns .tv-btn')].find(b => b.textContent.includes('搜索'))
-      if (btn) btn.click()
-      await new Promise(r => setTimeout(r, 1600))
-      return !!btn
-    `)
+    if (ROUTE) {
+      // 定点视图: 跳过去等它渲染, 不点首页那个「搜索」按钮(它在别的视图上不存在)
+      await evalJs(`location.hash = ${JSON.stringify('#' + ROUTE)}; return true`)
+      if (SEL) {
+        let hit = false
+        for (let i = 0; i < 40 && !hit; i++) {
+          hit = await evalJs(`return !!document.querySelector(${JSON.stringify(SEL)})`)
+          if (!hit) await sleep(250)
+        }
+        console.log(`[smoke] 视图 ${ROUTE} 渲染:`, hit ? 'ok' : `没等到 ${SEL}`)
+      } else {
+        await sleep(2000)
+      }
+      await sleep(600)
+    } else {
+      // 手动触发一次搜索, 顺便把页面实际发出的查询参数录下来
+      await evalJs(`
+        const btn = [...document.querySelectorAll('.btns .tv-btn')].find(b => b.textContent.includes('搜索'))
+        if (btn) btn.click()
+        await new Promise(r => setTimeout(r, 1600))
+        return !!btn
+      `)
+    }
     const info = await evalJs(`
       const out = {
         hash: location.hash,
@@ -160,10 +183,13 @@ async function main() {
     } else {
       console.log('[smoke] 页面无错误/警告')
     }
+    const shotName = ROUTE
+      ? `rt-${ROUTE.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.png`
+      : '00-smoke.png'
     const shot = await send('Page.captureScreenshot', { format: 'png' })
     fs.mkdirSync(SHOTS, { recursive: true })
-    fs.writeFileSync(path.join(SHOTS, '00-smoke.png'), Buffer.from(shot.data, 'base64'))
-    console.log('[smoke] 截图:', path.join(SHOTS, '00-smoke.png'))
+    fs.writeFileSync(path.join(SHOTS, shotName), Buffer.from(shot.data, 'base64'))
+    console.log('[smoke] 截图:', path.join(SHOTS, shotName))
   } finally {
     if (!KEEP) {
       try { ws.close() } catch { /* 忽略 */ }
