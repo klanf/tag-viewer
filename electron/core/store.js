@@ -23,7 +23,7 @@ import { dataFile } from './workspace.js'
 import { streamTagFile } from './tagfile.js'
 
 const DB_NAME = 'tags.db'
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 /** 读回内存时的分块大小 —— 一次性 .all() 会把 80+MB 文本全摆进内存 */
 const READ_CHUNK = 4000
 
@@ -62,20 +62,360 @@ CREATE TABLE IF NOT EXISTS tags (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
 `
 
-/** 打开(必要时创建)数据库; 同一进程内复用同一个句柄 */
-export function openDb() {
+/* ------------------------------------------------------------ v2 schema */
+
+/**
+ * v2 新增: `folders` 表 —— 文件夹登记表, **取代** scan_folders.json 与
+ * 配置里那份「tags_*.txt 出现在哪个目录」的隐式来源列表。
+ *
+ * 两个独立开关是要害(2026-09-20 用户澄清):
+ *   as_source=1 → 参与标签库: 图片进 images、进看板统计、可被搜索
+ *   as_scan=1   → 仅浏览: 扫描页能打开看图, **不进库**
+ * 同一目录可以两者都是(如 Syncthing/Download 下的「涩不了一点」);
+ * 而 ai图/26_09_18 这种**只看新生成的 AI 图**的目录是扫描夹, 必须
+ * as_source=0 —— 它不该被追平进标签库。
+ *
+ * path 用 COLLATE NOCASE 的唯一索引: Windows 路径大小写不敏感, 只探针到
+ * 盘符大小写不同也算同一目录, 不清洗就会长出两条一样目录的记录。
+ */
+const SCHEMA_V2 = `
+CREATE TABLE IF NOT EXISTS folders (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  path         TEXT    NOT NULL UNIQUE COLLATE NOCASE,  -- 规范化绝对路径 = 唯一身份
+  label        TEXT    NOT NULL DEFAULT '',
+  as_source    INTEGER NOT NULL DEFAULT 0,
+  as_scan      INTEGER NOT NULL DEFAULT 0,
+  recursive    INTEGER NOT NULL DEFAULT 1,
+  auto_tag     INTEGER NOT NULL DEFAULT 1,
+  added_at     INTEGER NOT NULL DEFAULT 0,
+  last_scan_ms INTEGER NOT NULL DEFAULT 0,
+  cover        TEXT    NOT NULL DEFAULT '',
+  note         TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_folders_use ON folders(as_source, as_scan);
+`
+
+/** v2 给 images 补的列: [列名, 定义]。缺哪个补哪个, 已有则跳过(幂等) */
+const IMAGES_V2_COLS = [
+  ['folder_id', 'INTEGER'],
+  ['mtime_ms', 'INTEGER'],
+  ['size', 'INTEGER'],
+  ['tags_src', "TEXT"],          // meta=图内原生元数据 / wd14=反推 / legacy=旧 txt
+  ['gone', 'INTEGER DEFAULT 0'], // 磁盘上已不存在(灰显保留, 不删记录)
+  ['tagged_at', 'INTEGER'],
+]
+
+/**
+ * 图片路径规范化 —— 迁移、入库、磁盘枚举**必须共用这一个实现**。
+ *
+ * 为什么必须要它: 库里同一批图有两种写法, 实测 81650 行里 **10436 行**是
+ * 混写的(目录段正斜杠 + 文件名前反斜杠, 形如
+ * `…/涩一点点\26_07_24Anima_00091_.png`)。不统一的话,
+ * 「磁盘有的是什么 / 库里有的是什么」这个差集比对会把同一张图算成两个来源,
+ * 于是首轮同步冒出一堆假新增。
+ *
+ * 只做三件事, 不做大小写整体小写 —— 路径其余部分保留原样(Windows 虽然不区分,
+ * 但显示出来还是用户自己的写法顺眼); 盘符统一小写, 这样 `F:` 与 `f:` 能对上。
+ */
+export function normalizeImagePath(p) {
+  const s = String(p ?? '').trim()
+  if (!s) return ''
+  return s
+    .replace(/\\/g, '/')          // 分隔符统一正斜杠
+    .replace(/\/{2,}/g, '/')      // 折叠重复分隔符(UNC 前缀已在此类数据里绝迹)
+    .replace(/^([A-Za-z]):/, (m, c) => `${c.toLowerCase()}:`)  // 盘符小写
+}
+
+/* ------------------------------------------------------------ 迁移与备份 */
+
+/**
+ * 一致性备份到 `<dataDir>/tags.db.bak-<suffix>`。
+ *
+ * 用 `VACUUM INTO` 而不是 `cp`: 前者在事务层做快照, **App 正开着也能拿到一致的
+ * 副本**; 直接复制一个正在被写的 SQLite 文件会得到撕裂的副本(WAL 下尤其明显)。
+ * 已存在则跳过(迁移只备份一次, 重启不会重复占盘)。
+ */
+export function backupDb(suffix = 'manual', db = null) {
+  const src = dbPath()
+  if (!fs.existsSync(src)) return { ok: false, reason: 'no-db', file: '' }
+  const file = path.join(path.dirname(src), `tags.db.bak-${suffix}`)
+  if (fs.existsSync(file)) {
+    return { ok: true, skipped: true, file, bytes: fs.statSync(file).size }
+  }
+  const h = db || openRaw()
+  const before = countAll(h)
+  h.exec(`VACUUM INTO '${file.replace(/\\/g, '/')}'`)
+  const chk = new DatabaseSync(file, { readOnly: true })
+  let after = null
+  let integrity = ''
+  try {
+    after = countAll(chk)
+    integrity = chk.prepare('PRAGMA integrity_check').get()?.integrity_check || ''
+  } finally { chk.close() }
+  const same = JSON.stringify(before) === JSON.stringify(after)
+  const ok = same && integrity === 'ok'
+  if (!ok) return { ok: false, reason: 'verify-failed', file, before, after, integrity }
+  return { ok: true, file, bytes: fs.statSync(file).size, before, after, integrity }
+}
+
+function countAll(db) {
+  const g = (t) => Number(db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()?.n || 0)
+  return { images: g('images'), tags: g('tags'), src: g('src') }
+}
+
+function setSchemaVersion(db, v) {
+  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('schema_version', String(v))
+}
+
+export function dbSchemaVersion() {
+  const db = openDb()
+  return Number(db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')?.value || 0)
+}
+
+/** 只建 v2 的形状(表 + 列 + 索引), 不搬数据。幂等。 */
+function applyV2Shape(db) {
+  db.exec(SCHEMA_V2)
+  const cols = new Set(db.prepare('PRAGMA table_info(images)').all().map((r) => r.name))
+  for (const [name, def] of IMAGES_V2_COLS) {
+    if (!cols.has(name)) db.exec(`ALTER TABLE images ADD COLUMN ${name} ${def}`)
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_images_folder ON images(folder_id)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_images_gone ON images(gone)')
+}
+
+/**
+ * 路径规范化 + 去重(全库一次)。
+ *
+ * 去重策略: 同一规范化路径只留 **id 最大**的那条(最后一次导入 = 最贴近文件
+ * 当前内容), 被丢掉的整行写进报告 —— 不做静默删除。实测 81650 行里只有
+ * 2 组碰撞(涩涩涩涩涩 的两张 ComfyUI 临时图, 同名但标签完全不同), 属边缘情形,
+ * 但"丢数据不吭声"这种事一次都不能干。
+ */
+export function normalizeAllPaths(db, onProgress = () => {}) {
+  const rows = db.prepare('SELECT id, path FROM images ORDER BY id').all()
+  const seen = new Map()              // 规范化路径 -> 当前保留的 id(取最大)
+  const collide = []                  // [规范路径, 被丢的 id, 保留的 id]
+  const upd = db.prepare('UPDATE images SET path = ? WHERE id = ?')
+  for (const r of rows) {
+    const n = normalizeImagePath(r.path)
+    const prev = seen.get(n)
+    if (prev === undefined) {
+      seen.set(n, r.id)
+      if (n !== r.path) upd.run(n, r.id)
+    } else {
+      collide.push([n, prev, r.id])   // prev 的 id 更小 -> 丢它
+      seen.set(n, r.id)
+      if (n !== r.path) upd.run(n, r.id)
+    }
+  }
+  // 收集被丢那几行的原貌(只有极少数, 按需取)
+  const dropped = []
+  const getRow = db.prepare('SELECT id, path, src_id, tags FROM images WHERE id = ?')
+  const del = db.prepare('DELETE FROM images WHERE id = ?')
+  for (const [n, dropId, keepId] of collide) {
+    const row = getRow.get(dropId)
+    if (row) dropped.push({ path: n, dropped: { ...row }, kept_id: keepId })
+    del.run(dropId)
+  }
+  onProgress({ phase: 'migrate', note: `路径规范化: ${rows.length} 行 -> ${seen.size} 条唯一路径, 去重 ${dropped.length} 行` })
+  return { rows: rows.length, unique: seen.size, dropped }
+}
+
+/** 每个 src 的「物理根目录」= 它的所有图片所属目录的公共前缀 */
+export function folderRootOfSrc(db, srcId) {
+  const dirs = db.prepare('SELECT path FROM images WHERE src_id = ?').all(srcId)
+  if (!dirs.length) return ''
+  const split = dirs.map((r) => normalizeImagePath(r.path).split('/').slice(0, -1))
+  const first = split[0]
+  let k = 0
+  for (; k < first.length; k++) if (!split.every((a) => a[k] === first[k])) break
+  return first.slice(0, k).join('/')
+}
+
+/** 读兼容期的 scan_folders.json(登记表的老家)。读不到就是空数组。 */
+function readScanFoldersLegacy() {
+  try {
+    const p = dataFile('scan_folders.json')
+    if (!fs.existsSync(p)) return []
+    const d = JSON.parse(fs.readFileSync(p, 'utf8'))
+    return Array.isArray(d?.folders) ? d.folders : []
+  } catch { return [] }
+}
+
+/**
+ * 建/更新 folders 行:
+ *   · 每个 src(来自 tags_*.txt) -> as_source=1, 物理根目录从 images.path 反查
+ *   · scan_folders.json 里登记的目录 -> as_scan=1(已在 src 里的直接叠加),
+ *     不在 src 里的(如 26_09_18) -> as_source=0 纯扫描夹
+ * **目录一律从数据里反查, 不写死机器路径** —— 否则脚本就不可移植了。
+ */
+export function buildFoldersFromSources(db, onProgress = () => {}) {
+  const scan = readScanFoldersLegacy()
+  const scanNorm = new Map(scan.map((f) => [normalizeImagePath(f.path), f]))
+  const now = Date.now()
+  const up = db.prepare(`
+    INSERT INTO folders (path, label, as_source, as_scan, recursive, added_at, last_scan_ms, cover, note)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(path) DO UPDATE SET
+      label        = CASE WHEN excluded.label <> '' THEN excluded.label ELSE folders.label END,
+      as_source    = MAX(folders.as_source, excluded.as_source),
+      as_scan      = MAX(folders.as_scan,   excluded.as_scan),
+      recursive    = MAX(folders.recursive, excluded.recursive),
+      last_scan_ms = MAX(folders.last_scan_ms, excluded.last_scan_ms),
+      cover        = CASE WHEN excluded.cover <> '' THEN excluded.cover ELSE folders.cover END
+  `)
+  const made = []
+
+  for (const s of db.prepare('SELECT id, name FROM src ORDER BY id').all()) {
+    const root = folderRootOfSrc(db, s.id)
+    if (!root) continue
+    const legacy = scanNorm.get(root)
+    up.run(root, String(s.name), 1, legacy ? 1 : 0,
+      legacy ? (legacy.recursive === false ? 0 : 1) : 1,
+      Number(legacy?.added_at) || now,
+      Number(legacy?.last_scan) || 0,
+      String(legacy?.cover || ''),
+      String(legacy?.note || ''))
+    made.push({ path: root, label: String(s.name), as_source: 1, as_scan: legacy ? 1 : 0 })
+    if (root.split('/').length < 3) {
+      onProgress({ phase: 'migrate', note: `⚠ 来源「${s.name}」的公共根目录过浅: ${root} —— 请人工确认` })
+    }
+  }
+
+  // 只在 scan_folders.json 里、不在任何 src 里的目录 -> 纯扫描夹
+  const known = new Set(db.prepare('SELECT path FROM folders').all().map((r) => normalizeImagePath(r.path)))
+  for (const f of scan) {
+    const p = normalizeImagePath(f.path)
+    if (!p || known.has(p)) continue
+    up.run(p, String(f.label || ''), 0, 1,
+      f.recursive === false ? 0 : 1,
+      Number(f.added_at) || now, Number(f.last_scan) || 0,
+      String(f.cover || ''), String(f.note || ''))
+    made.push({ path: p, label: String(f.label || ''), as_source: 0, as_scan: 1 })
+  }
+
+  onProgress({ phase: 'migrate', note: `folders 表: ${made.length} 条记录` })
+  return made
+}
+
+/** v1 -> v2 的数据搬运(在事务里跑) */
+function backfillV2(db, onProgress) {
+  // 老记录一律 legacy: 它们是从 tags_*.txt 导入的, 不是从图里读的、也不是反推的
+  const legacy = db.prepare("UPDATE images SET tags_src = 'legacy' WHERE tags_src IS NULL OR tags_src = ''").run()
+  onProgress({ phase: 'migrate', note: `tags_src 回填 legacy: ${legacy.changes} 行` })
+
+  const paths = normalizeAllPaths(db, onProgress)
+  const folders = buildFoldersFromSources(db, onProgress)
+
+  // folder_id: 由 src_id 映射到 folders.id(label 就是来源名)
+  const fidByName = new Map(db.prepare('SELECT id, label FROM folders').all().map((r) => [r.label, r.id]))
+  let linked = 0
+  for (const s of db.prepare('SELECT id, name FROM src ORDER BY id').all()) {
+    const fid = fidByName.get(String(s.name))
+    if (!fid) continue
+    linked += db.prepare('UPDATE images SET folder_id = ? WHERE src_id = ?').run(fid, s.id).changes
+  }
+  onProgress({ phase: 'migrate', note: `folder_id 关联: ${linked} 行` })
+  return { legacy: legacy.changes, paths, folders, linked }
+}
+
+let _migrateMemo = null
+
+/**
+ * 按 meta.schema_version 决定要不要迁移。幂等: 版本够了立刻返回。
+ *
+ * 全新库走"直接建 v2 形状"的短路 —— 没有历史数据要搬, 也就不需要备份。
+ * v1 老库走完整路径, **先备份再动数据**; 整个搬运放在一个事务里,
+ * SQLite 的 DDL 也在事务内, 所以中途失败是干净的"全有或全无"。
+ */
+export function runMigrations(db, onProgress = () => {}) {
+  const cur = Number(db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')?.value || 0)
+  if (cur >= SCHEMA_VERSION) return { from: cur, to: cur, changed: false }
+  if (_migrateMemo) return _migrateMemo
+
+  if (cur === 0) {
+    applyV2Shape(db)
+    setSchemaVersion(db, SCHEMA_VERSION)
+    _migrateMemo = { from: 0, to: SCHEMA_VERSION, changed: true, fresh: true }
+    return _migrateMemo
+  }
+
+  const bak = backupDb(`v${cur}`, db)
+  onProgress({ phase: 'migrate', note: `schema v${cur} -> v${SCHEMA_VERSION}; 备份 ${bak.ok ? '完成' : '失败: ' + bak.reason}` })
+  if (!bak.ok) {
+    // 备份失败就不动数据 —— 迁移是可选动作, 数据安全不是
+    throw new Error(`迁移前备份失败(${bak.reason}), 已放弃迁移以免数据不可回退`)
+  }
+
+  db.exec('BEGIN')
+  let report
+  try {
+    applyV2Shape(db)
+    report = backfillV2(db, onProgress)
+    setSchemaVersion(db, SCHEMA_VERSION)
+    db.exec('COMMIT')
+  } catch (e) {
+    try { db.exec('ROLLBACK') } catch { /* 忽略 */ }
+    throw e
+  }
+  // 迁移自己留审计痕迹 —— 不依赖调用方记得落盘。
+  // 丢掉的行(路径规范化产生的重复)必须能查到原貌, 否则"去重"就成了静默删数据。
+  const reportFile = writeMigrationReport(cur, SCHEMA_VERSION, report, bak)
+  _migrateMemo = { from: cur, to: SCHEMA_VERSION, changed: true, backup: bak.file, report, reportFile }
+  return _migrateMemo
+}
+
+/** 迁移报告落盘 —— 事后能查清"这次迁移到底动了什么、丢了哪几行" */
+function writeMigrationReport(from, to, report, bak) {
+  const file = path.join(path.dirname(dbPath()), 'cache', `migration-report-v${from}-to-v${to}.json`)
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify({
+      at: new Date().toISOString(),
+      from,
+      to,
+      backup: bak?.file || '',
+      counts: {
+        legacyTagged: report.legacy,
+        pathRows: report.paths.rows,
+        pathUnique: report.paths.unique,
+        pathDropped: report.paths.dropped.length,
+        folderIdLinked: report.linked,
+        folders: report.folders.length,
+      },
+      droppedRows: report.paths.dropped,
+      folders: report.folders,
+    }, null, 2), 'utf8')
+    return file
+  } catch { return '' }
+}
+
+/* ------------------------------------------------------------ 打开数据库 */
+
+/** 打开库但**不做迁移** —— 迁移本身需要先有个句柄(备份也是) */
+export function openRawDb() {
+  return openRaw()
+}
+
+function openRaw() {
   if (dbHandle) return dbHandle
   const p = dbPath()
   fs.mkdirSync(path.dirname(p), { recursive: true })
   const db = new DatabaseSync(p)
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA synchronous = NORMAL')
+  // 迁移会做 ALTER TABLE + 全表 UPDATE, 需要短暂的写锁。App 可能正开着,
+  // 没有 busy_timeout 时 DDL 会立刻抛 SQLITE_BUSY 而不是等一等。
+  db.exec('PRAGMA busy_timeout = 15000')
   db.exec(SCHEMA)
-  const v = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
-  if (!v) {
-    db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION))
-  }
   dbHandle = db
+  return db
+}
+
+/** 打开(必要时创建)数据库并保证 schema 已是最新; 同一进程内复用同一个句柄 */
+export function openDb() {
+  const db = openRaw()
+  runMigrations(db)
   return db
 }
 
@@ -182,12 +522,17 @@ async function importSource(db, name, fp, st, onProgress) {
     return Number(r.lastInsertRowid)
   })()
 
-  const ins = db.prepare('INSERT INTO images (path, src_id, tags) VALUES (?, ?, ?)')
+  const ins = db.prepare('INSERT INTO images (path, src_id, tags, tags_src, folder_id) VALUES (?, ?, ?, ?, ?)')
+  const srcName = db.prepare('SELECT name FROM src WHERE id = ?').get(srcId)?.name
+  const folderId = srcName
+    ? db.prepare('SELECT id FROM folders WHERE label = ?').get(String(srcName))?.id ?? null
+    : null
   let n = 0
   db.exec('BEGIN')
   try {
     const res = await streamTagFile(fp, (rec) => {
-      ins.run(rec.path, srcId, rec.tags.join(','))
+      // 入库就规范化 —— 与迁移、与磁盘枚举共用 normalizeImagePath, 三处必须一致
+      ins.run(normalizeImagePath(rec.path), srcId, rec.tags.join(','), 'legacy', folderId)
       n++
     }, (count) => {
       if (count % 5000 === 0) {
@@ -255,7 +600,7 @@ export function readRecords(onRecord, onProgress = () => {}) {
   const srcNames = new Map(db.prepare('SELECT id, name FROM src').all().map((r) => [Number(r.id), r.name]))
   const chunk = db.prepare(`
     SELECT i.id AS id, i.path AS path, i.src_id AS src_id, i.tags AS tags
-    FROM images i WHERE i.id > ? ORDER BY i.id LIMIT ?
+    FROM images i WHERE i.id > ? AND i.gone = 0 ORDER BY i.id LIMIT ?
   `)
   let lastId = 0
   let n = 0
@@ -298,11 +643,19 @@ export function dbInfo() {
       path: p,
       bytes,
       walBytes: wal,
+      schemaVersion: g("SELECT CAST(value AS INTEGER) AS n FROM meta WHERE key = 'schema_version'"),
       sources: db.prepare('SELECT COUNT(*) AS n FROM src').get()?.n || 0,
       images: g('SELECT COUNT(*) AS n FROM images'),
       tags: g('SELECT COUNT(*) AS n FROM tags'),
       charTags: g("SELECT COUNT(*) AS n FROM tags WHERE kind='char'"),
+      folders: g('SELECT COUNT(*) AS n FROM folders'),
+      foldersAsSource: g('SELECT COUNT(*) AS n FROM folders WHERE as_source=1'),
+      foldersAsScan: g('SELECT COUNT(*) AS n FROM folders WHERE as_scan=1'),
+      gone: g('SELECT COUNT(*) AS n FROM images WHERE gone=1'),
+      tagged: g('SELECT COUNT(*) AS n FROM images WHERE tagged_at IS NOT NULL'),
+      byTagsSrc: db.prepare("SELECT COALESCE(tags_src,'(空)') AS k, COUNT(*) AS n FROM images GROUP BY k ORDER BY n DESC").all(),
       sourceList: db.prepare('SELECT name, records, bytes, mtime_ms, imported_at FROM src ORDER BY name').all(),
+      folderList: db.prepare('SELECT id, path, label, as_source, as_scan, recursive, auto_tag FROM folders ORDER BY id').all(),
     }
   } catch (e) {
     return { path: p, bytes, walBytes: wal, error: e.message }

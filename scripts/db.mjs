@@ -91,35 +91,68 @@ if (cmd === 'reset') {
 
 if (cmd === 'verify') {
   // 从库里读出来, 与直接解析 txt 的结果逐条比对 —— 证明导入没有丢/改数据
+  //
+  // ⚠️ 两边都必须先过 normalizeImagePath
+  // ==================================
+  // 库里存的是**规范化后**的路径(统一正斜杠 + 盘符小写), 而 txt 是**未规范化**
+  // 的原文(实测 81650 行里 10436 行是混写的)。直接比会对每个来源都报"第 1 条不同",
+  // 看着像导入丢失, 其实只是盘符大小写与混写分隔符的差别 —— 误报一次就
+  // 再也没人信这个检查, 所以这里必须与 store.normalizeImagePath 用同一套规则。
+  //
+  // 另外要套用与迁移**相同的去重规则**: 同一个规范化路径只算一条(保留最后出现的那条),
+  // 否则 txt 里同路径重复的行会与库里的单条对不上(实测只有 涩涩涩涩涩 的 2 行)。
   const bySrc = new Map()
   store.readRecords((rec) => {
     if (!bySrc.has(rec.source)) bySrc.set(rec.source, [])
-    bySrc.get(rec.source).push({ path: rec.path, tags: rec.tags.join('\u0001') })
+    bySrc.get(rec.source).push({ path: store.normalizeImagePath(rec.path), tags: rec.tags.join('\u0001') })
   })
-  let total = 0, mismatch = 0
+  // 按「路径 -> 标签」比较, 而不是按下标逐位比
+  // ==========================================
+  // 这个检查的职责是"导入**无损**" —— 无损是集合性质, 不是位置性质。
+  // 按下标比会被两件与丢失无关的事误伤:
+  //   · 行序漂移: 有的来源的行是**跨多次导入累积**的(实测 涩涩涩涩涩 里同一个
+  //     规范化路径的行 id 相隔两万多, 说明来自两代导入), 库内顺序本就不等于
+  //     txt 当前行序;
+  //   · 规范化合并: txt 里同路径的重复行在库里只剩一条。
+  // 所以主判定用 Map 求差集(丢/多/标签被改), 行序漂移只作为提示报出来。
+  let total = 0, mismatch = 0, driftOnly = 0
   for (const [name, fp] of dataFiles) {
     if (!fs.existsSync(fp)) { line(`跳过 ${name}: txt 读不到`); continue }
     const a = bySrc.get(name) || []
-    const b = []
-    await streamTagFile(fp, (rec) => b.push({ path: rec.path, tags: rec.tags.join('\u0001') }))
+    const raw = []
+    await streamTagFile(fp, (rec) => raw.push({ path: store.normalizeImagePath(rec.path), tags: rec.tags.join('\u0001') }))
+    const dedup = new Map()
+    for (const r of raw) dedup.set(r.path, r)     // 后写覆盖先写 = 保留最后一条, 与迁移一致
+    const b = [...dedup.values()]
     total += b.length
-    const same = a.length === b.length && a.every((x, i) => x.path === b[i].path && x.tags === b[i].tags)
-    if (!same) {
+    const collapsed = raw.length - b.length
+
+    const aMap = new Map(a.map((x) => [x.path, x.tags]))
+    const bMap = new Map(b.map((x) => [x.path, x.tags]))
+    const missing = [...bMap.keys()].filter((p) => !aMap.has(p))        // txt 有、库没有
+    const extra = [...aMap.keys()].filter((p) => !bMap.has(p))          // 库有、txt 没有
+    const changed = [...bMap.keys()].filter((p) => aMap.has(p) && aMap.get(p) !== bMap.get(p))
+    const lost = missing.length + extra.length + changed.length
+
+    if (lost) {
       mismatch++
-      line(`✗ ${name}: 库 ${a.length} 条 / txt ${b.length} 条`)
-      for (let i = 0; i < Math.max(a.length, b.length); i++) {
-        if (!a[i] || !b[i] || a[i].path !== b[i].path || a[i].tags !== b[i].tags) {
-          line(`    第 ${i + 1} 条不同:`)
-          line(`      库 : ${a[i] ? a[i].path + ' | ' + a[i].tags.slice(0, 120) : '(缺)'}`)
-          line(`      txt: ${b[i] ? b[i].path + ' | ' + b[i].tags.slice(0, 120) : '(缺)'}`)
-          break
-        }
-      }
+      line(`✗ ${name}: txt ${raw.length} 条${collapsed ? `(规范化去重后 ${b.length})` : ''} / 库 ${a.length} 条`)
+      for (const p of missing.slice(0, 3)) line(`    · txt 有但库没有: ${p}`)
+      for (const p of extra.slice(0, 3)) line(`    · 库有但 txt 没有: ${p}`)
+      for (const p of changed.slice(0, 3)) line(`    · 标签不一致: ${p}`)
+      if (lost > 9) line(`    … 共 ${lost} 条差异`)
+      continue
+    }
+    // 集合一致, 再看行序
+    const sameOrder = a.length === b.length && a.every((x, i) => x.path === b[i].path)
+    if (sameOrder) {
+      line(`✓ ${name}: ${b.length} 条逐条一致${collapsed ? `(txt ${raw.length} 条, 规范化合并 ${collapsed} 条)` : ''}`)
     } else {
-      line(`✓ ${name}: ${b.length} 条逐条一致`)
+      driftOnly++
+      line(`✓ ${name}: ${b.length} 条内容一致(行序与 txt 不同 —— 该来源的行是多次导入累积的, 不影响数据)`)
     }
   }
-  line(mismatch ? `\n有 ${mismatch} 个来源不一致` : `\n全部一致(共 ${total} 条)`)
+  line(mismatch ? `\n有 ${mismatch} 个来源不一致` : `\n全部无损(共 ${total} 条)${driftOnly ? `; ${driftOnly} 个来源行序有漂移` : ''}`)
   process.exit(mismatch ? 1 : 0)
 }
 

@@ -20,6 +20,7 @@
  * 见文件末尾的 KNOWLEDGE_FILES / USER_FILES / DERIVED_FILES —— 供下一轮的
  * electron-builder extraResources 与「知识包」生成使用, 也是 .gitignore 的依据。
  */
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -154,4 +155,111 @@ export function classifyDataEntry(name) {
   if (DERIVED_FILES.includes(n)) return 'derived'
   if (KNOWLEDGE_DIR_PREFIXES.some((p) => n.startsWith(p))) return 'knowledge'
   return 'unknown'
+}
+
+/* ------------------------------------------------- 数据目录的子目录路由 */
+
+/**
+ * 为什么要有路由表
+ * ================
+ * 改造前 data/ 根目录平铺着 15 个条目(7 个 json/txt + 缩略图目录 + 翻译目录 + 库),
+ * 光看目录名分不清「哪些是用户积累的、哪些删了能重建、哪些将来要给别人」——
+ * 而这三类东西的**处置方式完全不同**(备份谁 / 能不能删 / 开源时带不带)。
+ * 分类知识本来就在上面的三分法里, 只是没落到磁盘上。
+ *
+ * 于是这里把分类变成**唯一的路由表**, 由 workspace.js 的 dataFile() 独占使用。
+ * 全项目的数据文件读写都经过 dataFile(), 所以路由表一改, 所有读点自动跟着走
+ * (不需要去 20 个调用点里逐个改路径)。
+ *
+ * 刻意留在根目录的
+ * ================
+ * `tags.db`(+ -wal/-shm) 与 `tag_viewer_config.json` 不登记:
+ *   · tags.db 是唯一真源且体积大、每次启动都开, 留根省得嵌套;
+ *   · config 是"启动时还不知道数据目录在哪"就要读的文件, 必须能按固定名字找到。
+ */
+export const DATA_SUBDIRS = Object.freeze({
+  knowledge: 'kb',
+  user: 'user',
+  rules: 'rules',
+  derived: 'cache',
+})
+
+/**
+ * 裸文件名 -> 归属。`as` = 迁移时顺便改名(旧名继续可读, 见下面 resolve)
+ *
+ * 键是**改造前的旧名字** —— 兼容期里旧名字必须一直是有效入参,
+ * 调用点不必知道文件搬去了哪。
+ */
+export const DATA_ROUTE = Object.freeze({
+  // K 知识: 内容是标签翻译/角色映射, 不含图片, 将来作为「知识包」分发
+  'local_translations.json': { kind: 'knowledge' },
+  'character_library.json': { kind: 'knowledge' },
+  // U 用户数据: 用户自己的积累, 绝不出机器
+  'user_meta.json': { kind: 'user' },
+  'cart_history.json': { kind: 'user' },
+  // 登记表: 真源是 tags.db 的 folders 表, 这份 json 降级为「导出备份 + 首次导入源」
+  'scan_folders.json': { kind: 'user', as: 'folders.json' },
+  // U 规则: 三个导出词表
+  'export_bg.txt': { kind: 'rules' },
+  'export_blacklist.txt': { kind: 'rules' },
+  'export_replace.txt': { kind: 'rules' },
+  // D 派生: 删了能重建, 但内含本机路径
+  'scan_cache.json': { kind: 'derived' },
+})
+
+/** 目录类的搬迁(阈值低、只有两个) */
+export const DATA_DIR_ROUTE = Object.freeze({
+  '.thumb_cache': { kind: 'derived' },
+})
+
+/**
+ * 一个名字(文件或目录)在 data/ 下的**目标相对路径**。
+ * 未登记的名字原样返回(留在根) —— 这是刻意行为, 不是遗漏。
+ */
+export function dataRelPath(name) {
+  const n = String(name || '')
+  if (!n) return n
+  const hit = DATA_ROUTE[n] || DATA_DIR_ROUTE[n]
+  if (hit) {
+    const file = DATA_ROUTE[n] ? (hit.as || n) : n
+    return `${DATA_SUBDIRS[hit.kind]}/${file}`
+  }
+  // weilin_data*(翻译库)按前缀归 kb —— 目录名带第三方署名, 不能写死全名
+  if (KNOWLEDGE_DIR_PREFIXES.some((p) => n.startsWith(p))) {
+    return `${DATA_SUBDIRS.knowledge}/${n}`
+  }
+  return n
+}
+
+/** 这个名字是否登记过(会搬 / 会改名) */
+export function isRouted(name) {
+  const n = String(name || '')
+  return !!(DATA_ROUTE[n] || DATA_DIR_ROUTE[n]
+    || KNOWLEDGE_DIR_PREFIXES.some((p) => n.startsWith(p)))
+}
+
+/**
+ * 解析数据文件的实际路径 —— **兼容期回退**在这里。
+ *
+ * 新位置存在 -> 用新位置; 新位置没有但根目录还有 -> 继续用根目录那份。
+ * 于是"改代码"和"搬文件"可以分开做: 先把路由接上(行为零变化), 再跑
+ * scripts/data-migrate.mjs 把文件搬过去, 搬完自动切到新位置, 中途任何一步
+ * 中断都不会出现"文件找不到"。
+ *
+ * @param {string} dataDir
+ * @param {string} name      裸文件名(旧名或新名都行)
+ * @param {(p:string)=>boolean} [exists] 便于测试注入
+ */
+export function resolveDataFilePath(dataDir, name, exists) {
+  const n = String(name || '')
+  const full = (rel) => path.join(dataDir || '.', rel)
+  const primary = full(dataRelPath(n))
+  if (!isRouted(n)) return primary          // 没登记 -> 就在根, 没什么可回退的
+  const has = exists || ((p) => {
+    try { return fs.existsSync(p) } catch { return false }
+  })
+  if (has(primary)) return primary
+  const legacy = full(n)
+  if (legacy !== primary && has(legacy)) return legacy
+  return primary                            // 两边都没有 -> 报新位置(写入方据此新建)
 }

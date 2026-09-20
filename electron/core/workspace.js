@@ -17,7 +17,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { resolveDataDir, resolveConfigPath } from './paths.js'
+import { resolveDataDir, resolveConfigPath, resolveDataFilePath } from './paths.js'
 
 const state = {
   appDir: '',
@@ -121,9 +121,19 @@ export function saveSettings(patch) {
   return next
 }
 
-/** 数据目录下的文件路径 */
+/**
+ * 数据目录下的文件路径 —— **全项目唯一的数据文件入口**。
+ *
+ * 分类到子目录的规则不在这里, 在 paths.js 的 DATA_ROUTE(见那里的注释):
+ * 文件该放 kb/ user/ rules/ cache/ 还是根, 只有那一张表说了算。
+ * 本函数只负责把它拼成绝对路径, 并处理**兼容期回退**:
+ * 新位置没有、旧位置(根目录)还有时, 继续用旧的那份 —— 于是"接上路由"
+ * 与"真的搬文件"可以分两步走, 中间中断也不会文件找不到。
+ *
+ * 未登记的名字(如 tags.db / tag_viewer_config.json)原样留在根目录。
+ */
 export function dataFile(name) {
-  return path.join(state.dataDir, name)
+  return resolveDataFilePath(state.dataDir, name)
 }
 
 /** 数据目录此刻是否真的存在(注意 initWorkspace 会主动创建它) */
