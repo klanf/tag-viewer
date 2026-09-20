@@ -112,6 +112,7 @@ export function realDataDir() {
  * 状态分三类:
  *   继承的(从真实目录拷)  配置/黑名单/替换/背景/元数据/购物车/本地翻译
  *   自带的(从夹具拷)      扫描夹的 5 张测试图
+ *   种子的(仅缺失时)      tags.db —— 从真实库 VACUUM INTO 一份(见 1.9 的理由)
  *   重置的(写成空档)      scan_folders.json —— 测试自己产生的, 必须每轮清零,
  *                        否则断言会受上一轮残留影响(见下面的注释)
  *
@@ -205,6 +206,45 @@ export function ensureWorkDir({ quiet = false } = {}) {
   //   若先删就把这条登记整行删掉了, 下一轮沙箱会少一整个来源。
   //   库不存在(第一次跑, 还没建) 时跳过。
   const sandboxDb = path.join(dataDir, 'tags.db')
+
+  /**
+   * 1.9) 沙箱标签库的**冷启动种子** —— 只在沙箱库不存在时, 从真实库拷一份。
+   *
+   * 为什么不能继续让它从 `tags_*.txt` 重建(2026-09-20 改的, 两个理由都是实测出来的):
+   *
+   *   · **归档之后就重建不出来了**。真实 txt 已移进 `_legacy_归档_*`, 沙箱库一旦被删
+   *     (手工清理 .e2e-work 就会), 整轮 e2e 直接挂在"数据集加载失败"上 —— 而原因
+   *     藏在准备阶段, 现象却在断言里, 很难指。
+   *
+   *   · **从 txt 重建会丢掉全部 `gone` 标记**。txt 是历史快照, 里面还留着早已从磁盘
+   *     删掉的图; 于是卡片照样去渲染它们 → 缩略图 404 → 把「运行期无 JS 异常」
+   *     这条总闸**随机**顶红(实测每轮换一张图, 不是固定那张, 所以一直被当成"闪烁"
+   *     而没被追下去)。真实库经过增量入库, `gone` 是准的(实测 44 行, 沙箱那份是 0 行)。
+   *
+   * 用 `VACUUM INTO` 而不是直接拷文件: 真实库跑在 WAL 模式, 单拷主文件可能与 `-wal`
+   * 不一致; VACUUM INTO 出来的是一致快照。失败就退回逐文件拷贝(含 -wal/-shm)。
+   */
+  if (!fs.existsSync(sandboxDb)) {
+    const realDb = path.join(src, 'tags.db')
+    if (fs.existsSync(realDb)) {
+      try {
+        const d = new DatabaseSync(realDb)
+        d.exec('PRAGMA busy_timeout = 5000')
+        d.exec(`VACUUM INTO '${sandboxDb.replace(/'/g, "''")}'`)
+        d.close()
+        seeded.push('tags.db(冷启动种子 <- 真实库, VACUUM INTO)')
+      } catch (e) {
+        console.warn(`[harness] VACUUM INTO 失败(${e.message}), 退回逐文件拷贝`)
+        for (const suf of ['', '-wal', '-shm']) {
+          if (fs.existsSync(realDb + suf)) fs.copyFileSync(realDb + suf, sandboxDb + suf)
+        }
+        seeded.push('tags.db(冷启动种子 <- 真实库, 文件拷贝)')
+      }
+    } else {
+      console.warn(`[harness] 真实库不存在(${realDb}) —— 本轮沙箱标签库要靠自己从 txt 重建`)
+    }
+  }
+
   if (fs.existsSync(sandboxDb)) {
     try {
       const db = new DatabaseSync(sandboxDb)

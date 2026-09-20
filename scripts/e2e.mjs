@@ -1037,6 +1037,27 @@ async function main() {
     const delC = await cdp.eval(`
       window.__tvProbe = []
       window.addEventListener('tv:trashed', (e) => window.__tvProbe.push((e.detail && e.detail.paths) || null))
+      /**
+       * 图片请求记录器 —— 抓「删除之后还有谁在请求那张已经进回收站的图」。
+       * 只挂 HTMLImageElement.prototype 的 src setter 就够了: 光箱主图(Vue 写 .src)
+       * 与 preheat(new Image().src = ...) 都走它, 而且是**请求真的发出去**的那一刻,
+       * 比去轮询 UI 状态可靠(幽灵请求只存在几十毫秒, 轮询抓不到)。
+       * 记 stack 是为了红的时候能直接看出是谁发的。
+       */
+      window.__imgReq = []
+      try {
+        const d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+        Object.defineProperty(HTMLImageElement.prototype, 'src', {
+          configurable: true,
+          get() { return d.get.call(this) },
+          set(v) {
+            try { window.__imgReq.push({ v: String(v), stack: String(new Error().stack || '') }) } catch {}
+            return d.set.call(this, v)
+          },
+        })
+      } catch (e) { window.__imgReq.push({ v: 'patch-fail: ' + e.message, stack: '' }) }
+      // 记下"即将被删掉的那张"的文件名 —— 收尾处用它算幽灵请求总账(记录器一直活到那时)
+      window.__delBase = (__t.text('.lightbox .lb-path') || '').split(/[\\\\/]/).pop()
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
       await new Promise(r => setTimeout(r, 900))
       const modal = __t.count('.mask .foot .tv-btn') >= 2
@@ -1056,6 +1077,7 @@ async function main() {
       return {
         modal, toastText, toastTone,
         probe: window.__tvProbe,
+        imgReq: (window.__imgReq || []).slice(-40),
         path: __t.text('.lightbox .lb-path'),
         open: !!document.querySelector('.lightbox'),
         pos: __t.text('.lightbox .lb-pos').replace(/\\s+/g, ' '),
@@ -1079,6 +1101,19 @@ async function main() {
     check('光箱: 删除后自动切到下一张(不留占位)', delC.open && delC.path === order[2],
       `→ ${path.basename(delC.path || '')} · 期望 ${path.basename(order[2])}`)
     check('光箱: 位置指示跟着收缩到 2 / 4', /2\s*\/\s*4/.test(delC.pos), delC.pos)
+    /**
+     * 删除之后不许再对那张图发请求 —— 它已经进回收站了, 任何一次请求都是一条 404。
+     *
+     * 这条为什么必须专门钉: 前面那条「位置指示收缩到 2 / 4」**抓不到**这个 bug ——
+     * 幽灵请求只活在几十毫秒的窗口里(视图先把刷新中的旧快照推回光箱、随后又推了新的一份),
+     * 等断言跑到时列表已经恢复正常。之前只能靠全局的「运行期无 JS 异常」兜住,
+     * 但那条的失败信息只有一句 404, 看不出是谁发的。
+     * 现在直接观测"请求真的发出去"这个动作, 并在详情里带上调用栈。
+     */
+    const delBase = path.basename(order[1])
+    const ghosts = (delC.imgReq || []).filter((r) => r.v.includes(delBase) && !/^patch-fail/.test(r.v))
+    check('光箱: 删除后没有再请求那张已进回收站的图', ghosts.length === 0,
+      ghosts.length ? `${ghosts.length} 条 · ${ghosts[0].stack.split('\n').slice(1, 4).join(' <- ')}` : '0 条')
     check('光箱: 被删的图同时从网格移除', delC.cards === 4, `${delC.cards} 张`)
     check('光箱: 磁盘上确实已删除(证明不是假事件)', !!order[1] && !fs.existsSync(order[1]), path.basename(order[1]))
 
@@ -1409,6 +1444,26 @@ async function main() {
      * (window.tv.invoke 可调用)。那比"控制台不报错"更硬: 控制台干净但 IPC 桥没注入
      * 才是真正危险的情况, 而这条断言能抓到。
      */
+    /**
+     * 幽灵请求总账 —— 删除之后, 还有谁在请求那张已经进回收站的图?
+     *
+     * 为什么单独记这一笔: 上面(光箱删除那一段)已经断言过一次"删除后不再请求",
+     * 但那只盯住删除那一刻的窗口。实测那条抓到的是 0 条, 而控制台里确实有 404 ——
+     * 说明请求来自**更晚的段落**(收藏页会给收藏过的那张渲染卡片, 而它已经被删)。
+     * 记录器从删除那一刻装好后一直活着, 所以这里能把真正的发起方连同调用栈抓出来,
+     * 红的时候不用再猜是谁发的。
+     */
+    const ghost = await cdp.eval(`
+      const base = window.__delBase || ''
+      const all = window.__imgReq || []
+      const hit = all.filter((r) => base && r.v.includes(base) && !/^patch-fail/.test(r.v))
+      return {
+        total: all.length, base, n: hit.length,
+        detail: hit.slice(-2).map((r) => r.v.slice(-70) + ' || ' + r.stack.split('\\n').slice(1, 5).join(' <- ')),
+      }
+    `)
+    check('幽灵请求总账: 删除后整轮都不再请求那张已进回收站的图', ghost.n === 0, JSON.stringify(ghost))
+
     const NOISE = /favicon|ERR_FILE_NOT_FOUND.*favicon|sandboxed_renderer\.bundle\.js|binding\.startupData/i
     const errs = cdp.errors.filter((e) => !NOISE.test(e))
     check('运行期无 JS 异常 / Vue 警告', errs.length === 0,

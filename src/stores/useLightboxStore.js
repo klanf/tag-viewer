@@ -57,6 +57,27 @@ export const useLightboxStore = defineStore('lightbox', () => {
   const index = ref(-1)
 
   /**
+   * 「已知消失」的路径 —— **只用于拦住 preheat 的预读**, 整个会话保留。
+   *
+   * 这道的必要性(2026-09-20 用「记录器 + 调用栈」定位到的真实链路):
+   *   扫描页删掉一张图 → 它在**收藏页**的记录是**刻意保留**的(卡片标灰"文件已不在",
+   *   这是产品决策)。从收藏页打开光箱时, 翻页列表里就有这张已进回收站的图,
+   *   于是 preheat 去预读相邻那张 → 请求一个不存在的文件 → 控制台一条 404,
+   *   把「运行期无 JS 异常」这条总闸顶红。
+   *
+   * 两条边界必须写清楚, 否则修法会跑偏:
+   *   · **只拦 preheat**(纯预读优化, 拦掉最多是首次翻页慢一点), 不用它过滤 list ——
+   *     收藏页那份列表本来就该包含"记录还在、文件没了"的条目, 滤掉会让
+   *     光箱的「第 n / 共 m 张」从 1/2 变成 1/1, 等于悄悄改了翻页语义。
+   *   · **不随 close() 清空** —— 一关一开就把知识擦了, 上面那条链路照样会复现
+   *     (实测就是这么漏过去的)。同名文件被重新放回来的话, 代价也只是少一次预读,
+   *     真正要看它时 TvImage 该请求还是会请求。
+   */
+  const gonePaths = new Set()
+  /** 这个路径是不是已经被删/移走了(光箱不该再为它做预读) */
+  const isGone = (p) => !!p && gonePaths.has(p)
+
+  /**
    * 最近一次在光箱里看过的图 —— close() 时不清空, 且**持久化到 localStorage**:
    * 重启应用后绿框还标在那张图上(2026-09-19 用户拍板做持久化)。
    * 光箱开着时它实时跟着翻页走, 网格上的高亮也随之移动。
@@ -186,6 +207,7 @@ export const useLightboxStore = defineStore('lightbox', () => {
    * 列表空了就直接关闭。返回 true 表示还停在光箱里, false 表示已关闭。
    */
   async function removeCurrent() {
+    if (path.value) gonePaths.add(path.value)      // 记账: 之后不给它做预读
     if (index.value >= 0 && index.value < list.value.length) {
       list.value.splice(index.value, 1)
     } else {
@@ -215,6 +237,9 @@ export const useLightboxStore = defineStore('lightbox', () => {
     if (!visible.value || !path.value) return
     const gone = e?.detail?.paths
     if (!Array.isArray(gone) || !gone.length) return
+    // 被删/被移走的一律记账 —— 哪怕动的不是当前这张(下面会 return),
+    // 之后 preheat 也不该再去预读它
+    for (const p of gone) if (p) gonePaths.add(p)
     if (!gone.includes(path.value)) return          // 动的是别的图, 光箱原地不动
     removeCurrent().catch((err) => console.error('[lightbox] 删除/移动后自动前进失败:', err))
   }
@@ -231,6 +256,7 @@ export const useLightboxStore = defineStore('lightbox', () => {
     path.value = ''
     list.value = []
     index.value = -1
+    // gonePaths 故意不清 —— 见它的注释: 清了会让"收藏页保留了已删记录"那条链路再撞 404
     // lastPath 故意不清(见上面的注释)。这里再帮一把:
     //   1) 广播 'tv:lb-closed' —— 有的视图是累加分页/无限滚动, 高亮那张可能还没
     //      渲染出来, 视图自己决定要不要把分页补齐(ScanView 就补);
@@ -329,7 +355,7 @@ export const useLightboxStore = defineStore('lightbox', () => {
     visible, loading, path, data, zhMap, error,
     sortedTags, needBg, bgAppend, isFav, bannedTags,
     list, index, count, pos, canPrev, canNext, inList, lastPath, scrollPending,
-    open, close, next, prev, go, jump, setList, removeCurrent,
+    open, close, next, prev, go, jump, setList, removeCurrent, isGone,
     copyPlain, copyNoBan, copyRaw, toggleBan, unbanAll, toggleFav, maybeAddBg,
   }
 })

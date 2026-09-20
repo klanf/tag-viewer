@@ -131,7 +131,9 @@ function preheat() {
   for (const d of [1, -1]) {
     const i = lb.index + d
     const p = lb.list[i]
-    if (p) { const img = new Image(); img.src = fileUrl(p) }
+    // 跳过"已知消失"的 —— 删/移之后, 视图可能还会把一份刷新中的旧快照推回来,
+    // 那时再预热就是在请求一个已经进回收站的文件(控制台留一条 404)
+    if (p && !lb.isGone(p)) { const img = new Image(); img.src = fileUrl(p) }
   }
 }
 </script>
