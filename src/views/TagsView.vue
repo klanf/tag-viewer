@@ -9,6 +9,7 @@
  * 「全部」选项 —— 想看全量依然可以, 但默认不再是"点开标签页先卡两秒"。
  */
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import TvTagList from '@/components/tag/TvTagList.vue'
 import TvTagSuggestInput from '@/components/tag/TvTagSuggestInput.vue'
 import TvImageGrid from '@/components/image/TvImageGrid.vue'
@@ -27,6 +28,8 @@ import { nfmt } from '@/utils/format.js'
 const lb = useLightboxStore()
 const fav = useFavStore()
 const ui = useUiStore()
+const route = useRoute()
+const router = useRouter()
 
 const view = ref('list')
 const kw = ref('')
@@ -99,9 +102,14 @@ watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
 const imgSort = ref('path')
 const imgPageSize = ref(60)
 
-async function showImages(tag) {
+/* ---------------- 标签名进 URL ----------------
+ * 两级视图是组件内状态, 但"现在看的是哪个标签"要写进 query(?tag=xxx) ——
+ * 光箱 / 详情页点标签就是**跳到这个地址**来的, 刷新与前进后退也才停得住。
+ * 两边都改 URL 就有回环风险, 所以约定: 谁主动改的, 谁把对方的 syncUrl 关掉。 */
+async function showImages(tag, { syncUrl = true } = {}) {
   curTag.value = tag
   view.value = 'images'
+  if (syncUrl && route.query.tag !== tag) router.replace({ query: { ...route.query, tag } })
   imgFeed.setPageSize(imgPageSize.value)
   await imgFeed.search(imgQuery())
 }
@@ -110,11 +118,29 @@ function imgQuery() {
   return { q: curTag.value, match: 'contains', sort: imgSort.value }
 }
 
-function backToList() {
+function backToList({ syncUrl = true } = {}) {
   curTag.value = ''
   view.value = 'list'
+  if (syncUrl && route.query.tag) {
+    const q = { ...route.query }
+    delete q.tag
+    router.replace({ query: q })
+  }
   loadTags(false)
 }
+
+/* URL 是"当前标签"的真源: 带 ?tag=xxx 进来就直接展开那组图。
+ * immediate 是必须的 —— TagsView 在 keep-alive 白名单里, onMounted 只跑一次,
+ * 后续从光箱跳进来(query 变、组件不重挂)全靠这个 watch。 */
+watch(() => route.query.tag, (v) => {
+  const tag = v ? String(v) : ''
+  if (!tag) {
+    if (view.value === 'images') backToList({ syncUrl: false })
+    return
+  }
+  if (view.value === 'images' && curTag.value === tag) return   // 自己刚写进去的, 别理
+  showImages(tag, { syncUrl: false })
+}, { immediate: true })
 
 function toggleFav(item) {
   const added = fav.toggle(item?.path || item, item?.tags)

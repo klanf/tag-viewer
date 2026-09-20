@@ -109,6 +109,17 @@ function back() {
   if (window.history.length > 1) router.back()
   else router.push('/')
 }
+
+/**
+ * 点标签 = 去标签页看这个标签的图片(与光箱、标签页同一个入口)。
+ * 复制单个标签改点 pill 上的 📋。
+ * 这里不用像光箱那样提示"库外图片": 本页的标签查自标签库
+ * (query.js 的 getTagsForPath 对库外图直接返回 not found), 跳过去必有结果。
+ */
+function gotoTag(tag) {
+  if (!tag) return
+  router.push({ path: '/tags', query: { tag } })
+}
 </script>
 
 <template>
@@ -150,22 +161,25 @@ function back() {
           <TvState v-else-if="error" state="error" size="sm" :text="error" inline />
 
           <template v-else>
-            <h2>标签(<span class="cnt">{{ tags.length }}</span>个, 点击单个标签可复制)</h2>
+            <h2>标签(<span class="cnt">{{ tags.length }}</span>个, 点标签看该标签的图 · 📋 复制)</h2>
             <TvTagList
               class="tag-list"
               :tags="tags"
               :zh-map="zhMap"
               :ban-map="data?.ban_map || {}"
               show-ban
+              copyable
+              action="filter"
               size="sm"
               max-height="60vh"
-              @click="({ tag }) => ui.copy(tag)"
+              @click="({ tag }) => gotoTag(tag)"
+              @copy="(tag) => ui.copy(tag)"
               @ban="toggleBan"
               @hover="({ zh, event }) => ui.showTip(zh, event)"
               @leave="ui.hideTip"
             />
             <div class="hint">
-              🟡 黄色 = 角色标签(含系列名), 复制时可选只复制普通标签 · 灰色删除线 = 已 ban
+              🟡 黄色 = 角色标签(含系列名) · 点标签跳去它的图片列表 · 悬停标签点 📋 可只复制这一个 · 灰色删除线 = 已 ban
             </div>
           </template>
         </div>

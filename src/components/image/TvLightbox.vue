@@ -8,8 +8,12 @@
  *
  * 现在数据与动作全在 useLightboxStore 里, 组件只负责渲染:
  *   lightbox.open(path, { list })  ->  本组件自动出现
- * 角色/系列标签的点击 = 复制单个标签; general 标签的点击 = 复制该标签;
- * 标签右侧 🚫 = 切换黑名单(通配规则命中的只能去规则里改, 不允许单条取消)。
+ *
+ * 标签的交互(2026-09-20 调整, 与标签页对齐):
+ *   点标签本体   = **跳去标签页看这个标签的图片**(/tags?tag=xxx)
+ *   点标签上 📋  = 复制这一个标签
+ *   点标签上 🚫  = 切换黑名单(通配规则命中的只能去规则里改, 不允许单条取消)
+ *   三个动作挤在一个 pill 上, 所以 📋/🚫 都是悬停才显形 —— 与旧版 🚫 的手感一致。
  *
  * 交互(2026-09-18 加):
  *   · 图片区滚轮           -> 上一张 / 下一张(累计阈值 + 冷却, 触控板不会连跳)
@@ -21,6 +25,7 @@
  *   · 底部居中显示 "第 n / 共 m 张", 可点箭头
  */
 import { computed, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import TvButton from '../base/TvButton.vue'
 import TvTagList from '../tag/TvTagList.vue'
 import TvTagPill from '../tag/TvTagPill.vue'
@@ -34,6 +39,7 @@ import { fileUrl } from '@/utils/api.js'
 
 const lb = useLightboxStore()
 const ui = useUiStore()
+const router = useRouter()
 
 /* tag 详情页(大图)同样支持右键菜单(复制/收藏/删除等);
    Del 键删除当前图: 走 useTrash 确认流程(可关提示)。
@@ -80,6 +86,24 @@ const seriesPills = computed(() => series.value.map((t) => ({ tag: t, zh: lb.zhM
 const noMeta = computed(() => !chars.value.length && !series.value.length)
 
 function copyTag(tag) { ui.copy(tag) }
+
+/**
+ * 点标签 = 去标签页看这个标签的图片(与标签页里点标签是同一个入口)。
+ *
+ * 两件必须做的事:
+ *   · 先 lb.close() —— 光箱是 Teleport 到 body 的, 不关就会盖在新路由的页面上
+ *   · 库外图片(扫描夹/收藏里那些没进过库的)要打个招呼: 它们自己不在结果里,
+ *     跳过去看到的是"标签库中含有这个名字的图", 不说一句会以为是跳错了
+ */
+function gotoTag(tag) {
+  if (!tag) return
+  const external = !!lb.data?.external
+  lb.close()
+  router.push({ path: '/tags', query: { tag } })
+  if (external) {
+    ui.toast(`「${tag}」· 这张图不在标签库中, 下面是库里含该标签的图`, 'info', 2800)
+  }
+}
 
 /* ---------------- 滚轮翻页 ----------------
    触控板一次滑动会连发几十个 wheel 事件(每个 deltaY 很小), 直接按事件切图会"飞"过去。
@@ -239,8 +263,10 @@ function preheat() {
                   :zh="c.zh"
                   variant="char"
                   size="sm"
-                  action="copy"
-                  @click="copyTag(c.tag)"
+                  action="filter"
+                  copyable
+                  @click="gotoTag(c.tag)"
+                  @copy="copyTag"
                   @mouseenter="ui.showTip(c.zh, $event)"
                   @mousemove="ui.moveTip($event)"
                   @mouseleave="ui.hideTip()"
@@ -256,8 +282,10 @@ function preheat() {
                   :zh="s.zh"
                   variant="series"
                   size="sm"
-                  action="copy"
-                  @click="copyTag(s.tag)"
+                  action="filter"
+                  copyable
+                  @click="gotoTag(s.tag)"
+                  @copy="copyTag"
                   @mouseenter="ui.showTip(s.zh, $event)"
                   @mousemove="ui.moveTip($event)"
                   @mouseleave="ui.hideTip()"
@@ -266,16 +294,19 @@ function preheat() {
             </div>
             <div v-else class="lb-nometa">(未识别出系列/角色)</div>
 
-            <!-- 全部标签: 角色在前; 🚫 切换黑名单; 点击复制 -->
+            <!-- 全部标签: 角色在前; 点标签=去看该标签的图, 📋=复制, 🚫=切换黑名单 -->
             <TvTagList
               class="lb-tags"
               :tags="lb.sortedTags"
               :zh-map="lb.zhMap"
               :ban-map="lb.data?.ban_map || {}"
               show-ban
+              copyable
               chars-first
+              action="filter"
               size="sm"
-              @click="({ tag }) => copyTag(tag)"
+              @click="({ tag }) => gotoTag(tag)"
+              @copy="copyTag"
               @ban="lb.toggleBan"
               @hover="({ zh, event }) => ui.showTip(zh, event)"
               @leave="ui.hideTip()"

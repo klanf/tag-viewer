@@ -24,6 +24,15 @@ const props = defineProps({
   history: { type: Boolean, default: false },
   /** 参与补全的来源过滤 */
   source: { type: String, default: '' },
+  /**
+   * 本地标签池 —— 传了(哪怕是空数组)就**完全不查库**, 只在这个数组里补全。
+   * 元素形如 `{ tag, count, zh? }`。
+   *
+   * 扫描页要用它: 那里的图是**库外图片**(标签从 PNG 元数据现场解析),
+   * 拿标签名去问标签库, 扫描夹特有的标签根本不在库里, 补不出东西来。
+   * 不传(null) = 老行为, 走 `suggest:get` 查库。
+   */
+  localTags: { type: Array, default: null },
   limit: { type: Number, default: 12 },
   disabled: { type: Boolean, default: false },
   size: { type: String, default: 'md' },
@@ -53,6 +62,30 @@ async function fetchSuggest() {
   if (!kw || !props.suggest) { mode.value = 'history'; return }
   mode.value = 'suggest'
   show()
+
+  // 本地标签池(扫描页): 同步过滤, 不往返主进程。
+  if (props.localTags !== null) {
+    const pool = props.localTags || []
+    const toks = kw.split(/\s+/).filter(Boolean)
+    const hits = []
+    for (const t of pool) {
+      if (!t || !t.tag) continue
+      const en = String(t.tag).toLowerCase()
+      // 标签名里的下划线/括号当空格再比一遍: 用户习惯按空格敲, 而库里存的是
+      // blue_archive —— 少了这一下, 输入「blue archive」筛选能出结果, 补全却说
+      // "没有匹配的标签", 两处自相矛盾。
+      const flat = en.replace(/[_()]/g, ' ')
+      const zh = String(t.zh || '')
+      // 与"筛选"同一套语义: 空格分隔的每个词都要命中(AND), 不是把整串当一个词
+      if (toks.every((w) => en.includes(w) || flat.includes(w) || zh.includes(w))) hits.push(t)
+    }
+    hits.sort((a, b) => (b.count || 0) - (a.count || 0))
+    items.value = hits.slice(0, props.limit)
+    cursor.value = 0
+    busy.value = false
+    return
+  }
+
   busy.value = true
   const my = ++seq
   try {
@@ -206,6 +239,9 @@ input:disabled { opacity: .55; }
 
 .drop {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 120;
+  /* 扫描页那个筛选框只有 300px 出头, 长标签(如 hoshino_(blue_archive))加上中文
+     会被挤成两行。给个下限, 下拉可以比输入框宽; 输入框本身更宽时 right:0 照旧生效。 */
+  min-width: 300px;
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--r-sm); box-shadow: var(--shadow-1);
   max-height: 290px; overflow-y: auto;

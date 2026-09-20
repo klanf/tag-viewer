@@ -995,6 +995,65 @@ async function main() {
     const bootHl = await cdp.eval(`return { n: document.querySelectorAll('.grid.imgs .card.last-viewed').length }`)
     check('高亮: 重启(重载)后绿框从 localStorage 恢复', bootHl.n === 1, `${bootHl.n} 张`)
 
+    /* ---------------- 9e. 扫描页的「按标签筛选」(2026-09-20) ----------------
+     * 扫描出来的图是**库外图片**(标签从 PNG 元数据现场解析), 所以:
+     *   · 筛选只能在前端做 —— 条件就是"这个夹里出现过的标签"
+     *   · 搜索框的补全也只在**本地标签池**里找(拿标签名去查标签库补不出扫描夹特有的标签)
+     * 夹具 test-fixtures/make_scan_test.py:
+     *   a1/a2 = hoshino_(blue_archive) · a3 = arona_(blue_archive) · a4 = shiroko_(blue_archive)
+     *   共用 halo / 1girl · a5 无元数据 -> 一个标签都没有, 永远筛不出来
+     * 于是: hoshino -> 2 张, halo -> 3 张, hoshino + arona -> 0 张(多个词是 AND)。 */
+    const filt = await cdp.eval(`
+      const inp = document.querySelector('.scan-view .pager-bar .tag-filter input')
+      if (!inp) return { err: '筛选框没渲染出来' }
+      const setV = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      const type = async (v) => {
+        setV.call(inp, v)
+        inp.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 800))
+      }
+      const read = () => ({
+        n: __t.count('.scan-view .grid.imgs .card'),
+        hint: __t.text('.scan-view .pager-bar .hint').replace(/\\s+/g, ' '),
+        empty: __t.count('.scan-view .tv-state.empty'),
+      })
+      await type('hosh')
+      const drop = [...document.querySelectorAll('.scan-view .pager-bar .tag-filter .drop .item')]
+        .map((e) => e.textContent)
+      await type('hoshino')
+      const one = read()
+      // 带空格的输入: 筛选能出 4 张, 补全**也必须**给出候选 —— 补全若把整串当一个词,
+      // 就会出现"一边筛出 4 张、一边说没有匹配的标签"(2026-09-20 截图里抓到的自相矛盾)
+      await type('blue archive')
+      const drop2 = [...document.querySelectorAll('.scan-view .pager-bar .tag-filter .drop .item')]
+        .map((e) => e.textContent)
+      const space = read()
+      await type('hoshino arona')
+      const and = read()
+      await type('halo')
+      const two = read()
+      await type('')
+      const cleared = read()
+      return { err: '', drop, drop2, one, space, and, two, cleared }
+    `)
+    check('扫描: 标签筛选框已渲染', !filt.err, filt.err || '')
+    check('扫描: 筛选 hoshino 只剩 2 张', filt.one?.n === 2, `${filt.one?.n} 张`)
+    check('扫描: 筛选后提示写明匹配数(不再是"已加载 n / 共 m")',
+      /筛选出\s*2\s*\/\s*共\s*5\s*张/.test(filt.one?.hint || ''), filt.one?.hint)
+    check('扫描: 补全项来自本夹标签池(不查标签库)',
+      (filt.drop || []).some((t) => t.includes('hoshino')), `${(filt.drop || []).length} 项: ${(filt.drop || [])[0] || ''}`)
+    check('扫描: 带空格的词补全也有候选(与筛选同一套语义, 否则一边有结果一边说没有)',
+      (filt.drop2 || []).length > 0, `${(filt.drop2 || []).length} 项: ${(filt.drop2 || [])[0] || ''}`)
+    // 顺带验证"筛选"本身也认带空格的写法(它的分词与补全一致, 都是 AND)
+    check('扫描: 用空格写法也能筛出 4 张(blue archive)',
+      /筛选出\s*4\s*\/\s*共\s*5\s*张/.test(filt.space?.hint || ''), filt.space?.hint)
+    check('扫描: 多词是 AND(没交集时给空态)',
+      filt.and?.n === 0 && filt.and?.empty === 1, `${filt.and?.n} 张 · ${filt.and?.empty} 个空态`)
+    check('扫描: 共用标签 halo 命中 3 张(含没元数据那张之外的a3)',
+      filt.two?.n === 3, `${filt.two?.n} 张`)
+    check('扫描: 清空筛选后恢复全量', filt.cleared?.n === 5, `${filt.cleared?.n} 张`)
+    await cdp.shot('13d-scan-filter')
+
     /* keep-alive(2026-09-19 反馈: 扫描页切走再切回, 只剩文件夹列表):
      * ScanView 已加入 App.vue 的 KeepAlive 白名单 —— 切到看板再切回来,
      * 图片网格要原样还在(不再是文件夹列表)。 */
@@ -1444,6 +1503,83 @@ async function main() {
     } catch { /* 没写出来 */ }
     check('来源管理: 导出备份把登记表写成了 json', exported.ok && exported.n >= 7,
       `${exportFile} · ${exported.n} 条`)
+
+    await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
+
+    /* ---------------- 11c. 点标签跳去该标签的图片列表(2026-09-20 需求) ----------------
+     * 光箱 / 详情页的标签: 点**标签本体** = 跳转, 点标签上的 📋 = 只复制那一个。
+     * 落点是 /tags?tag=xxx —— TagsView 把"当前标签"写进 URL, 所以顺带验证深链。
+     *
+     * 取标签名不能读 pill 的文本: 角色 pill 显示时会砍掉 _(系列) 尾巴; 也不能无脑读
+     * title —— 被 ban 的 pill 的 title 是"已 ban(导出时剔除)"。所以挑一个 title 以
+     * "点击查看该标签的图片"开头的 pill, 再从 title 里取完整标签名。 */
+    const tagJump = await cdp.eval(`
+      await new Promise(r => setTimeout(r, 700))
+      const card = document.querySelector('.grid .card')
+      if (!card) return { err: '首页没有卡片' }
+      card.click()
+      await new Promise(r => setTimeout(r, 2400))
+      if (!document.querySelector('.lightbox')) return { err: '光箱没打开' }
+      const pill = [...document.querySelectorAll('.lightbox .lb-tags .pill')]
+        .find((p) => (p.getAttribute('title') || '').startsWith('点击查看该标签的图片'))
+      if (!pill) return { err: '光箱里没有可用的标签 pill' }
+      const tag = (pill.getAttribute('title') || '').split(': ').pop()
+      const path = __t.text('.lightbox .lb-path')
+      const hasCopyIcon = !!pill.querySelector('.cp')
+      // ① 先点 📋: 应当**只复制、不跳转**(光箱还开着)
+      pill.querySelector('.cp').click()
+      await new Promise(r => setTimeout(r, 700))
+      const afterCopy = { open: !!document.querySelector('.lightbox'), hash: location.hash }
+      // ② 再点标签本体: 应当跳走, 光箱自己关掉
+      pill.click()
+      await new Promise(r => setTimeout(r, 2200))
+      return {
+        err: '', tag, path, hasCopyIcon, afterCopy,
+        closed: !document.querySelector('.lightbox'),
+        hash: decodeURIComponent(location.hash),
+        crumb: __t.text('.tags-view .crumb .now'),
+        total: __t.text('.tags-view .bar .cnt'),
+      }
+    `)
+    check('标签跳转: 光箱的标签上挂着 📋 复制图标', tagJump.hasCopyIcon === true,
+      tagJump.err || (tagJump.hasCopyIcon ? '在' : '不在'))
+    check('标签跳转: 点 📋 只复制不跳转(光箱还开着)',
+      tagJump.afterCopy?.open === true && !(tagJump.afterCopy?.hash || '').includes('tags?'),
+      tagJump.afterCopy?.hash)
+    check('标签跳转: 点标签本体跳到 /tags?tag=xxx 且光箱自动关闭',
+      tagJump.closed === true && (tagJump.hash || '').includes('/tags?tag='),
+      `${tagJump.hash} · 光箱关闭=${tagJump.closed}`)
+    check('标签跳转: 落页面包屑正是该标签', tagJump.crumb === tagJump.tag,
+      `${tagJump.crumb} · 期望 ${tagJump.tag}`)
+    check('标签跳转: 标签页确实查出了图(不是空列表)',
+      Number(String(tagJump.total).replace(/[^0-9]/g, '') || 0) > 0, `${tagJump.total} 条`)
+
+    // 深链: 从别处直接进 /tags?tag=xxx, 也要停在同一标签上(TagsView 认 query)
+    const deep = await cdp.eval(`
+      location.hash = '#/'
+      await new Promise(r => setTimeout(r, 900))
+      location.hash = '#/tags?tag=' + encodeURIComponent(${JSON.stringify(tagJump.tag || '')})
+      await new Promise(r => setTimeout(r, 2000))
+      return { crumb: __t.text('.tags-view .crumb .now'), cards: __t.count('.tags-view .grid .card') }
+    `)
+    check('标签跳转: 直接访问该地址(深链)也停在同一标签',
+      deep.crumb === tagJump.tag && deep.cards > 0, `${deep.crumb} · ${deep.cards} 张`)
+
+    // 详情页的标签是同一个入口(该页标签查自标签库, 库外图在本页直接是 not found)
+    const detJump = await cdp.eval(`
+      location.hash = '#/detail?path=' + encodeURIComponent(${JSON.stringify(tagJump.path || '')})
+      await new Promise(r => setTimeout(r, 2000))
+      const pill = [...document.querySelectorAll('.detail .tag-list .pill')]
+        .find((p) => (p.getAttribute('title') || '').startsWith('点击查看该标签的图片'))
+      if (!pill) return { err: '详情页没有可用的标签 pill' }
+      const tag = (pill.getAttribute('title') || '').split(': ').pop()
+      pill.click()
+      await new Promise(r => setTimeout(r, 2000))
+      return { err: '', tag, hash: decodeURIComponent(location.hash), crumb: __t.text('.tags-view .crumb .now') }
+    `)
+    check('标签跳转: 详情页点标签也是同一个入口',
+      detJump.err === '' && detJump.crumb === detJump.tag && (detJump.hash || '').includes('/tags?tag='),
+      detJump.err || `${detJump.crumb} · ${detJump.hash}`)
 
     await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
 

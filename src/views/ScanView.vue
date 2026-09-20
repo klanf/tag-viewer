@@ -23,6 +23,7 @@ import TvInput from '@/components/base/TvInput.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvCheckbox from '@/components/base/TvCheckbox.vue'
 import TvSelect from '@/components/base/TvSelect.vue'
+import TvTagSuggestInput from '@/components/tag/TvTagSuggestInput.vue'
 import TvImageCard from '@/components/image/TvImageCard.vue'
 import TvEntityCard from '@/components/series/TvEntityCard.vue'
 import TvState from '@/components/base/TvState.vue'
@@ -79,8 +80,37 @@ const shownFolders = computed(() => {
 
 const rawItems = computed(() => result.value?.items || [])
 
+/* ---------------- 标签筛选 ----------------
+ * 扫描页的图是**库外图片**(标签从 PNG 元数据现场解析), 所以筛选只能在前端做,
+ * 而且筛选条件本身也得来自这一批图 —— 搜索框的补全用当前文件夹的标签池,
+ * **不查标签库**(扫描夹特有的标签在库里可能根本不存在, 查了也补不出来)。
+ *
+ * 匹配规则: 空格分隔多个词 = AND(每个词都得命中)。
+ * 单个词用**子串**匹配而非精确 —— 扫描出的角色标签带括号后缀,
+ * 输入 hoshino 要能命中 hoshino_(blue_archive)。 */
+const tagKw = ref('')
+const tagTokens = computed(() => tagKw.value.trim().toLowerCase().split(/\s+/).filter(Boolean))
+
+/** 当前文件夹出现过的标签: 计数降序 + 中文(给补全用), 只在打开文件夹后才有内容 */
+const scanTagPool = computed(() => {
+  const cnt = new Map()
+  for (const it of rawItems.value) {
+    for (const t of it.tags || []) cnt.set(t, (cnt.get(t) || 0) + 1)
+  }
+  return [...cnt.entries()]
+    .map(([tag, count]) => ({ tag, count, zh: scanZh.value[tag] || '' }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
+})
+
 const sortedItems = computed(() => {
-  const arr = [...rawItems.value]
+  let arr = [...rawItems.value]
+  const tk = tagTokens.value
+  if (tk.length) {
+    arr = arr.filter((it) => {
+      const ts = it.tags || []
+      return tk.every((w) => ts.some((t) => t.toLowerCase().includes(w)))
+    })
+  }
   if (sortBy.value === 'name_desc') arr.sort((a, b) => b.name.localeCompare(a.name))
   else if (sortBy.value === 'folder') arr.sort((a, b) => (a.folder || '').localeCompare(b.folder || '') || a.name.localeCompare(b.name))
   else arr.sort((a, b) => a.name.localeCompare(b.name))
@@ -196,11 +226,16 @@ async function renameFolder(f) {
   }
 }
 
-/** 本批图片卡上的 key_tags/chars 汇总去重, 批量查中文 */
+/** 本批图片的标签汇总去重, 批量查中文 —— 卡片上的中文 + 筛选框的中文补全都吃这张表 */
 function fillScanZh(d) {
-  const uniq = [...new Set((d.items || []).flatMap((it) => [
-    ...(it.key_tags || []), ...(it.chars || []),
-  ])).add('')].filter(Boolean)
+  // 覆盖**全部** tags, 不只是卡片上展示的那几个 key_tags: 筛选框要支持输入中文
+  // (输「星野」补出 hoshino), 而中文映射只存在于这一张表里。
+  // 4000 是防大文件夹(几万张图)把一次 IPC 撑爆; 超出只影响中文补全, 英文筛选照常。
+  const cnt = new Map()
+  for (const it of d.items || []) {
+    for (const t of it.tags || []) cnt.set(t, (cnt.get(t) || 0) + 1)
+  }
+  const uniq = [...cnt.keys()].sort((a, b) => cnt.get(b) - cnt.get(a)).slice(0, 4000)
   if (!uniq.length) return
   api.translate(uniq)
     .then((m) => { scanZh.value = { ...scanZh.value, ...m } })
@@ -217,6 +252,7 @@ async function openFolder(f, { refresh = false } = {}) {  if (!f.exists) { ui.wa
   error.value = ''
   if (refresh) result.value = null
   page.value = 1
+  tagKw.value = ''      // 换了文件夹就是换了一批标签, 上一次的筛选词没有意义了
   try {
     const d = await api.openFolder({ path: f.path, refresh })
     if (d?.error) { error.value = d.error; result.value = null; return }
@@ -267,6 +303,11 @@ watch([sortBy, pageSize], () => {
   page.value = 1
   document.querySelector('.result')?.scrollTo({ top: 0 })
 })
+/* 改了筛选词也要回第一页并滚到顶 —— 否则会停在第 5 页对着一个空网格 */
+watch(tagKw, () => {
+  page.value = 1
+  document.querySelector('.scan-body')?.scrollTo({ top: 0 })
+})
 watch(sentinel, (el) => {
   gridOb?.disconnect()
   if (!el) return
@@ -311,6 +352,8 @@ function onLbClosed(e) {
    浮动导航的「返回」在这里优先回到文件夹列表 */
 useFloatBack(() => {
   if (level.value !== 'folder') return false
+  // 正在筛选时, 第一次按返回只清筛选(网格恢复全量), 再按一次才回文件夹列表
+  if (tagKw.value) { tagKw.value = ''; return true }
   backToList()
   return true
 })
@@ -467,7 +510,22 @@ onActivated(() => {
         <TvState v-else-if="!opening && !rawItems.length" state="empty" text="没有可显示的图片" />
         <template v-else>
           <div class="pager-bar">
-            <span class="hint">已加载 {{ nfmt(pagedItems.length) }} / 共 {{ nfmt(sortedItems.length) }} 张 · 滚到底自动加载</span>
+            <!-- 按标签筛选: 复用首页/标签页那个带补全的搜索框, 但补全走**本夹的标签池**
+                 (扫描图是库外的, 它们的标签在标签库里可能根本不存在) -->
+            <div class="tag-filter">
+              <TvTagSuggestInput
+                v-model="tagKw"
+                size="sm"
+                :local-tags="scanTagPool"
+                :limit="14"
+                placeholder="🔍 按标签筛选(空格分隔多个)"
+              />
+            </div>
+            <TvButton v-if="tagKw" size="sm" variant="ghost" title="清除筛选" @click="tagKw = ''">✕ 清除</TvButton>
+            <span class="hint">
+              <template v-if="tagTokens.length">筛选出 <b class="hit">{{ nfmt(sortedItems.length) }}</b> / 共 {{ nfmt(rawItems.length) }} 张</template>
+              <template v-else>已加载 {{ nfmt(pagedItems.length) }} / 共 {{ nfmt(sortedItems.length) }} 张 · 滚到底自动加载</template>
+            </span>
             <span class="spacer" />
             <TvSelect
               v-model="sortBy"
@@ -493,7 +551,13 @@ onActivated(() => {
             <TvButton size="sm" variant="ghost" :disabled="page >= totalPages" @click="gotoPage(totalPages)">⏭</TvButton>
           </div>
 
-          <div class="grid imgs">
+          <TvState
+            v-if="!sortedItems.length"
+            state="empty"
+            :text="`这个文件夹里没有图片匹配「${tagKw.trim()}」`"
+          />
+
+          <div v-else class="grid imgs">
             <TvImageCard
               v-for="it in pagedItems"
               :key="it.path"
@@ -562,6 +626,9 @@ onActivated(() => {
 
 .pager-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .pager-bar .hint { color: var(--muted); font-size: 12px; }
+/* 筛选框: 可伸缩但别把右边的排序/分页挤走 */
+.pager-bar .tag-filter { flex: 1 1 300px; max-width: 360px; margin-right: 4px; }
+.pager-bar .hit { color: var(--accent); font-size: 13px; }
 .load-sentinel { display: flex; justify-content: center; padding: 18px 0; }
 
 /* 扫描元数据进度条(opening 期间, worker 解析进度) */

@@ -32,12 +32,18 @@ const props = defineProps({
   variant: { type: String, default: 'auto' },   // auto | char | series | plain
   /** 点击动作, 只影响 title 文案: copy | filter | none */
   action: { type: String, default: 'copy' },
+  /**
+   * 显示一个悬停才显形的 📋 复制按钮。
+   * 用在"点 pill 本体干别的事、复制要另给个口子"的地方 —— 光箱 / 详情页点标签
+   * 是**跳去该标签的图片列表**, 复制单个标签就靠这个图标(与 🚫 同一套交互)。
+   */
+  copyable: { type: Boolean, default: false },
   size: { type: String, default: 'md' },        // sm | md
   active: { type: Boolean, default: false },
   /** 长标签: 超出宽度省略 */
   clip: { type: Boolean, default: false },
 })
-const emit = defineEmits(['click', 'ban'])
+const emit = defineEmits(['click', 'ban', 'copy'])
 
 const wild = computed(() => props.banned && props.banRule.includes('*'))
 
@@ -68,12 +74,18 @@ const banTitle = computed(() => {
   return '点击取消 ban'
 })
 
+const copyTitle = computed(() => `复制这个标签: ${props.tag}`)
+
 function onClick(e) {
   emit('click', { tag: props.tag, event: e })
 }
 function onBan(e) {
   e.stopPropagation()
   emit('ban', props.tag)
+}
+function onCopy(e) {
+  e.stopPropagation()
+  emit('copy', props.tag)
 }
 </script>
 
@@ -86,6 +98,7 @@ function onBan(e) {
     <span class="en">{{ shownTag }}</span>
     <span v-if="showZh && zh" class="zh" :title="zh">{{ zh }}</span>
     <b v-if="showCount && count !== null" class="cnt">{{ count }}</b>
+    <i v-if="copyable" class="cp" :title="copyTitle" @click="onCopy">📋</i>
     <i v-if="showBan" class="ban" :title="banTitle" @click="onBan">🚫</i>
   </span>
 </template>
@@ -131,6 +144,15 @@ function onBan(e) {
   color: var(--muted) !important;
   text-decoration: line-through;
 }
+
+/* 📋 复制按钮: 与下面的 🚫 同一套交互(平时藏起来, 悬停才显形),
+ * 只有"点 pill 本体是跳转"的地方才挂它, 免得和点击意图打架 */
+.cp {
+  font-style: normal; font-size: 10px; margin-left: 2px;
+  opacity: 0; cursor: pointer; transition: opacity var(--t-fast);
+}
+.pill:hover .cp { opacity: .5; }
+.cp:hover { opacity: 1 !important; }
 
 /* 🚫 按钮: 平时藏起来, 悬停才显形, 已 ban 时常驻 —— 和旧版手感一致 */
 .ban {
