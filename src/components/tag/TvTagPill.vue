@@ -59,6 +59,13 @@ const kind = computed(() => {
   return 'plain'
 })
 
+/** 悬停浮层里是否真有图标(决定浮层 DOM 是否渲染) */
+const hasHoverActs = computed(() =>
+  props.copyable ||
+  (props.cartable && kind.value === 'char' && !props.inCart) ||
+  (props.showBan && !props.banned)
+)
+
 /** 角色/系列标签常常太长, 显示时去掉 _(系列) 尾巴让 pill 短一点; 悬停看完整 */
 const shownTag = computed(() => {
   if (kind.value === 'char') return props.tag.replace(/_\(.+\)$/, '')
@@ -109,11 +116,16 @@ function onCart(e) {
     <span class="en">{{ shownTag }}</span>
     <span v-if="showZh && zh" class="zh" :title="zh">{{ zh }}</span>
     <b v-if="showCount && count !== null" class="cnt">{{ count }}</b>
-    <!-- 图标组: 平时整体收拢(max-width:0), 悬停时向右展开 —— 不再常驻占位留空档 -->
-    <span class="acts">
+    <!-- 常驻状态图标: 已 ban / 已入车。内联占位但**静态**(不随悬停伸缩),
+         静态宽度不会触发重排循环 —— 抽搐的根源是"悬停改变宽度"而非占位本身 -->
+    <i v-if="showBan && banned" class="st" :title="banTitle" @click="onBan">🚫</i>
+    <i v-if="cartable && kind === 'char' && inCart" class="st ct on" :title="cartTitle" @click="onCart">🛒</i>
+    <!-- 悬停动作浮层: 绝对定位盖在 pill 自身右段上方, 完全不占布局宽度。
+         pill 几何永不变化 -> flex-wrap 永不因悬停重排 -> 不再"掉行又弹回"抽搐 -->
+    <span v-if="hasHoverActs" class="acts">
       <i v-if="copyable" class="cp" :title="copyTitle" @click="onCopy">📋</i>
-      <i v-if="cartable && kind === 'char'" :class="['ct', { on: inCart }]" :title="cartTitle" @click="onCart">🛒</i>
-      <i v-if="showBan" class="ban" :title="banTitle" @click="onBan">🚫</i>
+      <i v-if="cartable && kind === 'char' && !inCart" class="ct" :title="cartTitle" @click="onCart">🛒</i>
+      <i v-if="showBan && !banned" class="ban" :title="banTitle" @click="onBan">🚫</i>
     </span>
   </span>
 </template>
@@ -121,6 +133,7 @@ function onCart(e) {
 <style scoped>
 .pill {
   display: inline-flex; align-items: center; gap: 6px;
+  position: relative;
   background: var(--panel2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -160,23 +173,32 @@ function onCart(e) {
   text-decoration: line-through;
 }
 
-/* ── 悬停动作组(📋 / 🛒 / 🚫) ─────────────────────────────
- * 2026-09-20 用户反馈: 原来图标只用 opacity 藏, **空间一直占着**, 没悬停的 pill
- * 右边一大截空白。改成整个图标组收拢(max-width: 0 + opacity: 0), 悬停时向右
- * 展开露出来 —— pill 视觉上"长"出一截, 没悬停时干干净净。
- * max-width 的展开上限给足 3 个图标的量: 过渡会先走 max-width, 到内容实际宽度
- * 就停住(inline-flex 收缩到内容), 不会出现过冲空档。 */
+/* ── 悬停动作浮层(📋 / 🛒 / 🚫) ─────────────────────────────
+ * 2026-09-20 二次反馈: 内联 max-width 展开会**改变 pill 宽度**, 行尾 pill 被
+ * flex-wrap 挤到下一行 -> hover 丢失 -> 收拢弹回 -> 又悬停, 画面抽搐死循环。
+ * 根治: 浮层绝对定位盖在 pill 自身右段上方, 完全不占布局宽度, pill 几何永不
+ * 变化。视觉上图标从右侧滑入"替换"文字尾部; 已 ban/已入车的常驻图标改走
+ * 内联静态 .st(静态宽度不随悬停变化, 同样不会抽搐)。 */
 .acts {
-  display: inline-flex; align-items: center; gap: 2px;
-  max-width: 0; opacity: 0; overflow: hidden;
-  transition: max-width .18s ease-out, opacity .18s ease-out, margin-left .18s ease-out;
-  /* margin-left 用负值抵掉 pill 自身 gap 在收拢态留下的 6px 空隙,
-   * 展开后回到 0 —— 否则没悬停时文字右边始终空一小块 */
-  margin-left: -6px;
+  position: absolute; top: 0; bottom: 0; right: 0;
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 0 6px 0 8px;
+  background: inherit;          /* 与 pill 同底色, 盖住文字尾部无接缝 */
+  border-radius: inherit;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateX(6px);   /* 从右侧轻滑入, 保留"右扩展"的动效感 */
+  transition: transform .18s ease-out, opacity .18s ease-out, visibility .18s;
 }
-.pill:hover .acts, .pill.banned .acts, .pill:focus-within .acts,
-.pill:has(.ct.on) .acts {
-  max-width: 72px; opacity: 1; margin-left: 0;
+.pill:hover .acts, .pill:focus-within .acts {
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transform: translateX(0);
+}
+.pill.s-sm .acts { padding: 0 4px 0 6px; gap: 2px; }
+
+/* 常驻状态图标(已 ban / 已入车): 内联静态, 不参与悬停动画 */
+.st {
+  font-style: normal; font-size: 10px;
+  cursor: pointer; transition: opacity var(--t-fast);
 }
 
 /* 📋 复制按钮: 与 🚫 同一套交互(悬停展开), 只有"点 pill 本体是跳转"的地方才挂 */

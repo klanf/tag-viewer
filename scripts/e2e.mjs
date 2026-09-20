@@ -444,13 +444,16 @@ async function main() {
         charPills: __t.count('.lightbox .lb-meta-row .pill.k-char'),
         cartIcons: __t.count('.lightbox .lb-meta-row .pill .ct'),
         banned: __t.count('.lightbox .lb-tags .pill.banned'),
-        actsMw: (() => {
+        actsOp: (() => {
           const el = document.querySelector('.lightbox .lb-tags .pill:not(.banned) .acts')
-          return el ? getComputedStyle(el).maxWidth : 'none'
+          if (!el) return 'none'
+          const cs = getComputedStyle(el)
+          return cs.opacity + '|' + cs.position
         })(),
-        bannedActsMw: (() => {
+        bannedSt: __t.count('.lightbox .lb-tags .pill.banned .st'),
+        bannedActsOp: (() => {
           const el = document.querySelector('.lightbox .lb-tags .pill.banned .acts')
-          return el ? getComputedStyle(el).maxWidth : 'none'
+          return el ? getComputedStyle(el).opacity : 'none'
         })(),
         navs: __t.count('.lightbox .lb-nav'),
       }
@@ -464,11 +467,11 @@ async function main() {
     check('大图预览: 角色 pill 上挂着 🛒 购物车图标(2026-09-20 需求)',
       lb.charPills > 0 && lb.cartIcons === lb.charPills,
       `角色 pill ${lb.charPills} 个 · 🛒 ${lb.cartIcons} 个`)
-    check('大图预览: 悬停动作组默认收拢(不悬停时不留空白, 2026-09-20 需求)',
-      lb.actsMw === '0px', `max-width=${lb.actsMw}`)
-    check('大图预览: 已 ban pill 的动作组常驻展开(🚫 不消失; 本图无 banned 则视为满足)',
-      lb.banned === 0 || (lb.bannedActsMw !== '0px' && lb.bannedActsMw !== 'none'),
-      `banned=${lb.banned} · max-width=${lb.bannedActsMw}`)
+    check('大图预览: 悬停动作浮层默认隐藏且绝对定位不占布局(2026-09-20 抽搐修复)',
+      lb.actsOp === '0|absolute', `opacity|position=${lb.actsOp}`)
+    check('大图预览: 已 ban pill 的 🚫 内联常驻(静态不随悬停伸缩; 本图无 banned 则视为满足)',
+      lb.banned === 0 || lb.bannedSt === lb.banned,
+      `banned=${lb.banned} · 内联🚫=${lb.bannedSt}`)
     await cdp.shot('02-lightbox')
 
     /* 复制下拉真的能切到"去ban"并复制(用 main 进程读剪贴板核对):
@@ -728,17 +731,26 @@ async function main() {
       backOne.isList && backOne.hash === '#/tags', backOne.hash)
     await sleep(400)
 
-    /* 标签页内 ban 切换(写在副本数据目录里) */
+    /* 标签页内 ban 切换(写在副本数据目录里)
+     * 注意: 浮层化之后 banned pill 的 🚫 是内联 .st、未 ban 的是浮层 .ban,
+     * 点一下 DOM 就会换节点 —— 所以每一步都按 tag 文本重新抓当前节点。 */
     const banToggle = await cdp.eval(`
-      const pill = document.querySelector('.tag-list .pill .ban')
-      if (!pill) return null
-      const wasBanned = pill.closest('.pill').classList.contains('banned')
-      pill.click()
+      const pick = () => [...document.querySelectorAll('.tag-list .pill')]
+        .find(p => p.querySelector('.ban, .st'))
+      const pill0 = pick()
+      if (!pill0) return null
+      const tagTxt = pill0.querySelector('.en').textContent
+      const byTag = () => [...document.querySelectorAll('.tag-list .pill')]
+        .find(p => p.querySelector('.en')?.textContent === tagTxt)
+      const wasBanned = pill0.classList.contains('banned')
+      ;(pill0.querySelector('.st') || pill0.querySelector('.ban')).click()
       await new Promise(r => setTimeout(r, 900))
-      const nowBanned = pill.closest('.pill').classList.contains('banned')
-      pill.click()
+      const p2 = byTag()
+      const nowBanned = p2.classList.contains('banned')
+      ;(p2.querySelector('.st') || p2.querySelector('.ban')).click()
       await new Promise(r => setTimeout(r, 900))
-      return { wasBanned, nowBanned, restored: pill.closest('.pill').classList.contains('banned') }
+      const p3 = byTag()
+      return { wasBanned, nowBanned, restored: p3.classList.contains('banned') }
     `)
     check('标签: 🚫 可切换 ban 且能还原',
       banToggle && banToggle.nowBanned !== banToggle.wasBanned && banToggle.restored === banToggle.wasBanned,
