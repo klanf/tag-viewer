@@ -345,7 +345,7 @@ async function main() {
     check('渲染进程挂载 + 顶栏渲染', true)
 
     const navCount = await cdp.eval(`return __t.count('.hdr .nv')`)
-    check('顶栏导航项 = 6(含新增的收藏页)', navCount === 6, `实际 ${navCount}`)
+    check('顶栏导航项 = 7(含新增的收藏页与来源页)', navCount === 7, `实际 ${navCount}`)
 
     const phase = await waitFor(cdp, `
       const s = await window.tv.invoke('app:status')
@@ -1279,6 +1279,117 @@ async function main() {
     await cdp.shot('16-home-light')
     await cdp.eval(`[...document.querySelectorAll('.hdr .tv-btn')].pop().click(); return true`)
     await sleep(500)
+
+    /* ---------------- 11b. 来源管理页(文件夹登记表) ----------------
+     * 这一页是"来源不再写死"的落点: 来源与扫描夹是同一张表上的两个开关。
+     * 守三件事:
+     *   ① 页面读的是**登记表(tags.db 的 folders 表)**, 而不是 tags_*.txt 的文件名 ——
+     *      断言直接 invoke folders:list 与界面上的行数对照;
+     *   ② 「移出」只是把用途开关归零, **登记行还在** —— 这是"误删可恢复"的前提,
+     *      也是它和「彻底清除」的区别;
+     *   ③ 导出备份真的落盘。
+     * 刻意**不点**「同步」: 那会去 stat 用户真实的 F 盘几万张图(沙箱配置里的
+     * data_files_dir 指向真实目录), 与 TV_INGEST=0 要防的是同一件事。
+     */
+    await cdp.eval(`location.hash = '#/sources'; return true`)
+    await waitFor(cdp, `!!document.querySelector('.source-view')`, { label: '来源管理页', timeout: 20000 })
+    await waitFor(cdp, `__t.count('.source-view .rows .row') > 0`, { label: '登记表行', timeout: 20000 })
+
+    const srcPage = await cdp.eval(`
+      const row = document.querySelector('.source-view .rows .row')
+      return {
+        rows: __t.count('.source-view .rows .row'),
+        cnt: __t.text('.source-view .cnt').replace(/\\s+/g, ' '),
+        switches: __t.count('.source-view .row:first-child .uses .tv-check'),
+        acts: __t.count('.source-view .row:first-child .acts .tv-btn'),
+        navLabel: __t.text('.hdr .nv.on'),
+        first: __t.text('.source-view .rows .row .nm'),
+      }
+    `)
+    check('来源管理: 顶栏里能进到「来源」页', srcPage.navLabel.includes('来源'), srcPage.navLabel)
+    check('来源管理: 列出的行数 = 登记表里的目录数', srcPage.rows >= 7, `${srcPage.rows} 行`)
+    check('来源管理: 计数文案报出「N 个来源」', /\d+ 个来源/.test(srcPage.cnt), srcPage.cnt)
+    check('来源管理: 每行两个独立用途开关(来源 / 扫描)', srcPage.switches === 2, `${srcPage.switches} 个`)
+    check('来源管理: 行上有同步/重扫/移出 等动作', srcPage.acts >= 3, `${srcPage.acts} 个`)
+    await cdp.shot('17-sources')
+
+    // ① 「移出」= 用途开关归零, 登记行必须还在(图片记录也不掉)
+    const firstName = srcPage.first
+    const beforeRm = await cdp.eval(`
+      const d = await window.tv.invoke('folders:list', { usage: 'all' })
+      const f = d.folders.find((x) => x.name === ${JSON.stringify(firstName)})
+      return { images: f?.images || 0, id: f?.id || 0 }
+    `)
+    await cdp.eval(`
+      const row = document.querySelector('.source-view .rows .row')
+      const b = [...row.querySelectorAll('.acts .tv-btn')].find((x) => x.textContent.includes('移出'))
+      b.click()
+      return true
+    `)
+    await sleep(1800)
+    const afterRm = await cdp.eval(`
+      const d = await window.tv.invoke('folders:list', { usage: 'all' })
+      const f = d.folders.find((x) => x.name === ${JSON.stringify(firstName)})
+      return {
+        found: !!f, asSource: f?.as_source, asScan: f?.as_scan, images: f?.images || 0,
+        visibleRows: __t.count('.source-view .rows .row'),
+      }
+    `)
+    check('来源管理: 「移出」把两个用途开关归零', afterRm.found && !afterRm.asSource && !afterRm.asScan,
+      `as_source=${afterRm.asSource} · as_scan=${afterRm.asScan}`)
+    check('来源管理: 移出后登记行仍在库里(这是可恢复的前提)', afterRm.found, afterRm.found ? '行在' : '行被删了')
+    check('来源管理: 移出不动库里的图片记录', afterRm.images === beforeRm.images,
+      `${beforeRm.images} -> ${afterRm.images}`)
+    check('来源管理: 移出的行默认从列表里隐藏', afterRm.visibleRows === srcPage.rows - 1,
+      `${srcPage.rows} -> ${afterRm.visibleRows}`)
+
+    // ② 勾「显示已移出的」-> 行回来 -> 「恢复」
+    await cdp.eval(`__t.clickText('.source-view .bar2 .tv-check', '显示已移出的'); return true`)
+    await sleep(700)
+    const shown = await cdp.eval(`
+      return { rows: __t.count('.source-view .rows .row'), off: __t.count('.source-view .rows .row.off') }
+    `)
+    check('来源管理: 勾上「显示已移出的」后行回来了', shown.rows >= srcPage.rows, `${shown.rows} 行 · ${shown.off} 行标为已移出`)
+
+    // 找不到行/按钮时**返回标志而不是抛错** —— 抛错会顺着外层那个大 try 一路
+    // 冲到 catch, 后面十几条断言(增量同步 / 反推 / diag)一条都跑不到, 现象是
+    // 「流程未中断」失败而真因被埋掉(2026-09-20 踩过一次: 选择器写错把元素当
+    // 选择器传给了 __t.text)。
+    const clicked = await cdp.eval(`
+      const row = [...document.querySelectorAll('.source-view .rows .row')]
+        .find((r) => (r.querySelector('.nm')?.textContent || '').trim() === ${JSON.stringify(firstName)})
+      if (!row) return { ok: false, reason: '找不到这一行' }
+      const btns = [...row.querySelectorAll('.acts .tv-btn')]
+      const b = btns.find((x) => x.textContent.trim() === '恢复')
+      if (!b) return { ok: false, reason: '这一行没有「恢复」按钮', btns: btns.map((x) => x.textContent.trim()) }
+      b.click()
+      return { ok: true }
+    `)
+    check('来源管理: 已移出的行上给出「恢复」按钮', clicked.ok,
+      clicked.ok ? '已点击' : `${clicked.reason}: ${(clicked.btns || []).join(' / ')}`)
+    await sleep(1800)
+    const restored = await cdp.eval(`
+      const d = await window.tv.invoke('folders:list', { usage: 'all' })
+      const f = d.folders.find((x) => x.name === ${JSON.stringify(firstName)})
+      return { asSource: !!f?.as_source, images: f?.images || 0 }
+    `)
+    check('来源管理: 打回开关即恢复(误删不再是事故)', restored.asSource === true, `as_source=${restored.asSource}`)
+    check('来源管理: 恢复后图片记录依旧完整', restored.images === beforeRm.images,
+      `${restored.images} 张`)
+
+    // ③ 导出备份真的落到磁盘
+    await cdp.eval(`__t.clickText('.source-view .bar2 .tv-btn', '导出备份'); return true`)
+    await sleep(900)
+    const exportFile = path.join(DATA_DIR, 'scan_folders.json')
+    let exported = { ok: false, n: 0 }
+    try {
+      const j = JSON.parse(fs.readFileSync(exportFile, 'utf8'))
+      exported = { ok: true, n: (j.folders || []).length }
+    } catch { /* 没写出来 */ }
+    check('来源管理: 导出备份把登记表写成了 json', exported.ok && exported.n >= 7,
+      `${exportFile} · ${exported.n} 条`)
+
+    await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
 
     /* ---------------- 12. 控制台健康度 ---------------- */
     /**

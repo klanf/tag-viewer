@@ -71,10 +71,12 @@ export function resolveFavorites(items = []) {
     }
   }
   try {
-    for (const f of listFolders().folders || []) {
+    // usage:'all' —— 找回是"尽力而为"的搜索, 登记过的目录(看板来源 + 扫描夹 +
+    // 已注销的)都算搜索根, 不能只认扫描夹那一档。
+    for (const f of listFolders({ usage: 'all' }).folders || []) {
       if (f?.path && fs.existsSync(f.path)) roots.add(f.path)
     }
-  } catch { /* 扫描夹列表读不到就算了 */ }
+  } catch { /* 登记表读不到就算了 */ }
   for (const q of quick) {
     if (q?.path && fs.existsSync(q.path)) roots.add(q.path)
   }

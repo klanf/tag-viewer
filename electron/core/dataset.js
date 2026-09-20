@@ -23,7 +23,7 @@
  */
 import fs from 'node:fs'
 import { streamTagFile } from './tagfile.js'
-import { syncSources, readRecords, dbReady } from './store.js'
+import { syncSources, readRecords, dbReady, sourceNameList } from './store.js'
 import { loadCharLib, libIsChar, libCharSeries, libIsCopyright, charLibDiag } from './charlib.js'
 
 /** Danbooru 分类组名: 出现在 xxx_(group) 里时不是真实作品系列 */
@@ -286,6 +286,20 @@ export async function loadDataset(dataFiles, onProgress = () => {}) {
     throw new Error('没有可用的标签数据: 标签库为空, 且配置里的 tags_*.txt 也读不到')
   }
 
+  /* ---- 来源清单: 以**登记表**为准, 不再看 tags_*.txt 的文件名 ----
+     阶段 4 之前这里是 `[...dataFiles.keys()]`, 于是"有哪些来源"取决于
+     data_files_dir 里躺着几个 txt —— txt 一归档, 来源筛选条立刻空掉,
+     而库里的记录一条没少。现在来源的定义回到登记表(folders.as_source=1),
+     txt 退化成一次性的导入介质。
+     必须在**同步之后**取: 全新库是靠导入 txt 才建出 folders 行的(见 store.js
+     的 importSource), 导入前查登记表会得到空列表。
+     取不到(比如完全没建库、走的 txt 解析路线)就退回 dataFiles 的名字 ——
+     这条兜底让"配置里有 txt 但 DB 不可用"的老路径仍然能用。 */
+  try {
+    const names = sourceNameList()
+    if (names.length) ds.sourceNames = names
+  } catch { /* 保持 dataFiles 的名字 */ }
+
   onProgress({ phase: 'stats', done: totalBytes, total: totalBytes, records: ds.records.length })
 
   // 角色库: 必须在 buildStats/buildSeriesIndex 之前就位(它们要查角色->系列)
@@ -309,7 +323,9 @@ export async function loadDataset(dataFiles, onProgress = () => {}) {
   ds.loaded = true
   ds.loadMs = Date.now() - t0
   ds.stats = {
-    files: files.length,
+    // 「来源数」= 登记表里 as_source=1 的目录数。原来这里是 tags_*.txt 的文件个数 ——
+    // txt 归档后它会变成 0, 而来源其实一个不少, 于是这个数字只是日志噪声。
+    files: ds.sourceNames.length,
     records: ds.records.length,
     tags: ds.tagCounter.size,
     series: ds.seriesCounter.size,

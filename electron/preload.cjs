@@ -40,9 +40,10 @@ const CHANNELS = new Set([
   'image:trash',
   // 收藏找回(按文件名搜已知目录)
   'fav:resolve',
-  // 扫描文件夹收藏夹
+  // 文件夹登记表(扫描夹 + 看板来源 共用一份, 真源是 tags.db 的 folders 表)
   'folders:list', 'folders:add', 'folders:remove', 'folders:update',
   'folders:rescan', 'folders:open', 'folders:prune',
+  'folders:purge', 'folders:export', 'folders:sync',
   // 剪贴板
   'clipboard:write',
   // 诊断

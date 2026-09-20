@@ -22,6 +22,7 @@ import { useUiStore } from './useUiStore.js'
 import { useFavStore } from './useFavStore.js'
 import { usePrefsStore } from './usePrefsStore.js'
 import { normTags, hasSeriesSuffix } from '@/utils/format.js'
+import { LS, readLS, writeLS, removeLS } from '@/utils/lskey.js'
 
 /**
  * 模块级单例标志 —— 'tv:trashed' / 'tv:moved' 的订阅只挂一次。
@@ -30,14 +31,13 @@ import { normTags, hasSeriesSuffix } from '@/utils/format.js'
  */
 let goneBound = false
 
-/** lastPath 的 localStorage key(命名跟随 tv_theme / tv_favs 一族) */
-const LAST_KEY = 'tv_lb_last'
-
+/** lastPath 的 localStorage key(全站键名见 utils/lskey.js) */
 function readLastPath() {
-  try { return localStorage.getItem(LAST_KEY) || '' } catch { return '' }
+  return readLS(LS.lightboxLast.key) || ''
 }
 function writeLastPath(p) {
-  try { p ? localStorage.setItem(LAST_KEY, p) : localStorage.removeItem(LAST_KEY) } catch { /* 忽略 */ }
+  if (p) writeLS(LS.lightboxLast.key, p)
+  else removeLS(LS.lightboxLast.key)
 }
 
 export const useLightboxStore = defineStore('lightbox', () => {

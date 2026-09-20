@@ -1,10 +1,12 @@
 /**
  * 应用启动编排: 读配置 -> 加载数据集 -> 载入翻译库
  * ================================================
- * 加载 88MB 标签文件 + 建系列索引是唯一一个「用户要等」的阶段, 所以拆出来单独管理,
+ * 「读本地标签库 + 建系列索引」是唯一一个「用户要等」的阶段, 所以拆出来单独管理,
  * 并且把进度通过回调抛给渲染进程显示。
+ *
+ * 历史注: 这里原本写的是"加载 88MB 标签文件" —— 那是还在解析 tags_*.txt 的年代。
+ * 现在真源是 tags.db(见 store.js), txt 只在首次导入时读一次。
  */
-import fs from 'node:fs'
 import { loadConfig, resolveDataFiles } from './config.js'
 import { loadDataset, ds } from './dataset.js'
 import { loadTranslations, translateInfo } from './translate.js'
@@ -12,6 +14,7 @@ import { invalidateRuleCaches } from './rules.js'
 import { clearSearchCache } from './search.js'
 import { invalidateSourceCounts } from './query.js'
 import { getWorkspace } from './workspace.js'
+import { openDb, folderRows } from './store.js'
 
 export const appState = {
   phase: 'idle',        // idle | loading | ready | error
@@ -102,6 +105,29 @@ export async function bootstrap({ onProgress } = {}) {
   }
 }
 
+/**
+ * 「看板来源」清单 —— 读登记表(folders.as_source=1), 不再看 tags_*.txt 的文件名。
+ *
+ * 旧实现是 `[...appState.dataFiles.entries()].map(...)`, 每个来源对应一个 txt 文件。
+ * txt 归档后那个列表会空掉, 而来源其实一个没少 —— 所以真源必须回到登记表。
+ * 返回结构保留 `{name, file, size}` 三个旧字段(file/size 现在恒为空/0 —— 没有
+ * 对应的 txt 文件了), 并补上 `path` 与 `images`, 给来源管理页用。
+ */
+function activeSources() {
+  try {
+    const db = openDb()
+    return folderRows(db, { usage: 'source' }).map((f) => ({
+      name: String(f.label || ''),
+      path: f.path,
+      images: Number(f.images || 0),
+      file: '',
+      size: 0,
+    }))
+  } catch {
+    return []
+  }
+}
+
 export function status() {
   return {
     phase: appState.phase,
@@ -117,10 +143,6 @@ export function status() {
       translate_dir: appState.config.translate_dir || '',
       port: appState.config.port ?? 8080,
     },
-    sources: [...appState.dataFiles.entries()].map(([name, fp]) => {
-      let size = 0
-      try { size = fs.statSync(fp).size } catch { /* 忽略 */ }
-      return { name, file: fp, size }
-    }),
+    sources: activeSources(),
   }
 }

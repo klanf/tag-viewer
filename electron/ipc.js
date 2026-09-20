@@ -35,6 +35,7 @@ import {
 } from './core/tagger.js'
 import {
   listFolders, addFolder, removeFolder, updateFolder, rescanFolder, openFolder, pruneMissing,
+  purgeFolder, exportFoldersJson,
 } from './core/folders.js'
 import { thumbStats, clearThumbs, thumbCacheSize } from './core/thumbs.js'
 import { searchStats, clearSearchCache } from './core/search.js'
@@ -391,15 +392,34 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     }),
     'tagger:pause': safe(() => pauseTagger()),
 
-    // ---------------- 扫描文件夹「收藏夹」----------------
-    // 扫过的目录记进 dataDir/scan_folders.json, 下次直接点开; 删除记录不动磁盘文件
-    'folders:list': safe(() => listFolders()),
+    // ---------------- 文件夹登记表(扫描夹 + 看板来源 共用一份) ----------------
+    // 真源是 tags.db 的 folders 表; scan_folders.json 降级为导出备份。
+    //   usage: 'scan'(默认) 只给扫描页的文件夹库 / 'source' 看板来源 / 'all' 全部登记过的
+    // 移出登记表只把用途开关归零, **不删库里的图片记录**(误删可恢复);
+    // 真要连记录一起清掉是 folders:purge(高危, 界面必须二次确认)。
+    'folders:list': safe((raw) => listFolders(raw || {})),
     'folders:add': safe((raw) => addFolder(raw, pushScanProgress)),
     'folders:remove': safe((raw) => removeFolder(raw)),
+    'folders:purge': safe((raw) => purgeFolder(raw)),
     'folders:update': safe((raw) => updateFolder(raw)),
     'folders:rescan': safe((raw) => rescanFolder(raw, pushScanProgress)),
     'folders:open': safe((raw) => openFolder(raw, pushScanProgress)),
     'folders:prune': safe(() => pruneMissing()),
+    'folders:export': safe(() => exportFoldersJson()),
+    // 单个来源"立即同步": 只跑登记表里的这一个目录(不传 only 时是全量)
+    'folders:sync': safe(async (raw = {}) => {
+      const only = raw.id ? Number(raw.id) : (raw.path || raw.name || '')
+      const st = await runIngest({
+        only,
+        onProgress: (p) => mainWindow()?.webContents.send('ingest:progress', p),
+      })
+      // 同步可能真的改了库(新增/消失), 内存里的数据集已经过期 —— 与
+      // 「立即同步」按钮同一条规矩: 跑完必须重载, 否则看板数字停在同步前。
+      const changed = st && !st.skipped && !st.error
+        && (st.inserted || st.metaUpdated || st.goneSet || st.goneCleared)
+      if (changed) onIngestDone?.()
+      return st
+    }),
 
     // ---------------- 图片删除(移入系统回收站, 可还原) ----------------
     // 渲染层先弹确认(可关提示), 真正的删除在这里走 shell.trashItem。

@@ -28,6 +28,8 @@
     "test:layout": "node scripts/test-data-layout.mjs",
     "test:ingest": "node scripts/test-ingest.mjs",
     "test:tagger": "node scripts/test-tagger.mjs",
+    "test:folders": "node scripts/test-folders.mjs",
+    "folders:export": "node scripts/folders-export.mjs",
     "data:backup": "node scripts/db-backup.mjs",
     "data:migrate": "node scripts/data-migrate.mjs",
     "data:audit": "node scripts/data-migrate.mjs --audit",

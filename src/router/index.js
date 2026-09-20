@@ -1,5 +1,5 @@
 /**
- * 路由 —— 六个视图
+ * 路由 —— 七个视图
  * =================
  * 生产环境是 file:// 加载 dist/index.html, 所以只能用 hash 模式
  * (history 模式在 file:// 下刷新会 404)。
@@ -13,6 +13,7 @@ const Home = () => import('@/views/HomeView.vue')
 const Series = () => import('@/views/SeriesView.vue')
 const Tags = () => import('@/views/TagsView.vue')
 const Scan = () => import('@/views/ScanView.vue')
+const Sources = () => import('@/views/SourceView.vue')
 const Cart = () => import('@/views/CartView.vue')
 const Detail = () => import('@/views/DetailView.vue')
 const Favs = () => import('@/views/FavView.vue')
@@ -22,6 +23,7 @@ export const routes = [
   { path: '/series', name: 'series', component: Series, meta: { title: '系列浏览' } },
   { path: '/tags', name: 'tags', component: Tags, meta: { title: '标签浏览' } },
   { path: '/scan', name: 'scan', component: Scan, meta: { title: '扫描文件夹' } },
+  { path: '/sources', name: 'sources', component: Sources, meta: { title: '来源管理' } },
   { path: '/cart', name: 'cart', component: Cart, meta: { title: '角色购物车' } },
   { path: '/favs', name: 'favs', component: Favs, meta: { title: '收藏' } },
   { path: '/detail', name: 'detail', component: Detail, meta: { title: '图片详情' } },

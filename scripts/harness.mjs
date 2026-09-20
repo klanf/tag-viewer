@@ -17,6 +17,7 @@
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { localDataDir } from './local-config.mjs'
 
@@ -190,6 +191,37 @@ export function ensureWorkDir({ quiet = false } = {}) {
   const scanFolders = path.join(dataDir, 'scan_folders.json')
   fs.writeFileSync(scanFolders, JSON.stringify({ version: 1, folders: [] }, null, 2), 'utf8')
   reset.push('scan_folders.json')
+
+  // 登记表(folders)现在住在 tags.db 里, 而沙箱库是**跨轮复用**的
+  //   (首轮导入 7 万条之后就靠指纹跳过, 所以第二轮起启动快得多)。
+  //   测试会在扫描页加/删文件夹 —— 那些行留在库里, 下一轮的
+  //   「文件夹库: 首次进入是空列表」会直接失败, 和当年 scan_folders.json
+  //   一模一样的坑, 只是换了个地方。
+  //   复位方式: 还原成"由配置推导出来的状态" —— 沙箱配置里的
+  //   data_files_dir 只有 tags_*.txt(没有 scan_folders.json 的登记),
+  //   于是正确的初始态就是"每个有记录的 src 一行 as_source=1 / as_scan 全 0"。
+  //   顺序很重要: **先按 src 把 as_source 打回来, 再删剩下的**
+  //   —— 来源页/扫描页的子测试会因为中途失败而留下"已移出(as_source=0)"的行,
+  //   若先删就把这条登记整行删掉了, 下一轮沙箱会少一整个来源。
+  //   库不存在(第一次跑, 还没建) 时跳过。
+  const sandboxDb = path.join(dataDir, 'tags.db')
+  if (fs.existsSync(sandboxDb)) {
+    try {
+      const db = new DatabaseSync(sandboxDb)
+      db.exec('PRAGMA busy_timeout = 5000')
+      const off = db.prepare('UPDATE folders SET as_scan = 0 WHERE as_scan <> 0').run()
+      const back = db.prepare(`UPDATE folders SET as_source = 1
+                                WHERE as_source = 0
+                                  AND label IN (SELECT name FROM src WHERE records > 0)`).run()
+      const del = db.prepare('DELETE FROM folders WHERE as_source = 0').run()
+      db.close()
+      reset.push(`tags.db:folders(复位扫描 ${off.changes} 行, 找回来源 ${back.changes} 行, 删除测试夹 ${del.changes} 行)`)
+    } catch (e) {
+      // 复位失败不该让整轮测试挂掉 —— 但要吭声, 否则下一轮的空列表断言失败
+      // 会变成"莫名其妙"(实测过这类: 现象在断言, 原因在准备阶段)。
+      console.warn(`[harness] 复位沙箱登记表失败: ${e.message}`)
+    }
+  }
 
   if (!quiet) {
     console.log(`[harness] 工作目录 ${WORK}`)

@@ -81,19 +81,57 @@ npm start          :: 启动（等价于双击启动脚本）
 | 类别 | 文件 | 会不会随仓库分发 |
 |---|---|---|
 | **知识** | `local_translations.json`、`character_library.json`、`weilin_data*/` | 设计上可分发（不含图片），但**来源与授权需先核实**，当前一律不进仓库 |
-| **用户数据** | `export_blacklist.txt`、`export_replace.txt`、`export_bg.txt`、`user_meta.json`、`cart_history.json`、`scan_folders.json`、`.thumb_cache/` | **绝不出机器** |
+| **用户数据** | `export_blacklist.txt`、`export_replace.txt`、`export_bg.txt`、`user_meta.json`、`cart_history.json`、`folders.json`、`.thumb_cache/` | **绝不出机器** |
 | **可再生派生物** | `tags.db`、`scan_cache.json` | 不进仓库。都内嵌本机文件路径，将来若要随包分发必须先从里面**提炼**出纯标签/系列/角色子集 |
 
 数据目录不存在时会自动创建。里面没有任何标签数据时，应用不会崩，而是显示
 「还没有配置标签数据源」并告诉你把 `tag_viewer_config.json` 放哪（见 `TvBootOverlay`）。
 
-### 标签数据源配置
+### 数据源：真源是 `tags.db`，不是 txt
+
+**一句话**：`tags.db` 的 `folders` 表是「有哪些目录、它们各自的用途」的唯一真源；
+`tags_*.txt` 与 `scan_folders.json` 都已降级为**一次性的导入介质 / 可导出的备份**。
+
+```
+磁盘目录 ──(登记)──> folders 表 ──(增量同步)──> images 表 ──> 界面
+                        ▲                          ▲
+              「来源管理」页可增删改          tags_*.txt 只是首次导入的来源
+```
+
+`folders` 表里两个独立开关决定一个目录的用途：
+
+| 开关 | 含义 | 图片去哪 |
+|---|---|---|
+| `as_source=1` | **看板来源** | 进 `images`、进统计、可被搜索 |
+| `as_scan=1` | **扫描夹** | 只在扫描页浏览，**不进库** |
+| 两个都是 0 | 已移出登记表 | 行还留着，开关打回来即可恢复（库里的记录一条不掉） |
+
+同一个目录可以两个都开（如既是来源又是扫描夹）。「只看 AI 新生成图」这类目录应当
+**只开扫描夹** —— 它不该被追平进标签库。
+
+**怎么加/删来源**：顶栏 →「🗄️ 来源」。添加即登记 + 扫描；「移出」只注销用途（可恢复）；
+「彻底清除」才会连库里的图片记录一起删（高危，需二次确认，磁盘文件始终不动）。
+
+#### `tag_viewer_config.json` 现在是什么
 
 数据目录下的 `tag_viewer_config.json`，模板见 `data/tag_viewer_config.example.json`。
-这个文件允许 `//` 整行注释。三种写法（优先级从高到低）：
-`data_files_dir` 扫目录下所有 `tags_*.txt` > `data_files` 显式列表 > `data_file` 单个文件。
-**都配不出来时会得到一个空数据源** —— 此时应用会继续从 `tags.db` 读（配置丢了但索引还在，
-照样能用），并且在同步阶段**不会**把库里已有的来源删掉。
+这个文件允许 `//` 整行注释。三个来源字段（`data_files_dir` / `data_files` / `data_file`）
+现在只用于**首次灌库**：库里已经有数据之后，它们不再决定「有哪些来源」。
+
+- 配置里的 `tags_*.txt` 若指纹（size + mtime）没变，启动时是**空转**，一行都不读；
+- 配置读不出来（文件丢失/损坏）时得到一个空数据源 —— 此时应用继续从 `tags.db` 读，
+  **并且不会把库里已有的来源和图片删掉**（这条有专门测试守着，见 `test:db-safety`）；
+- 把 `tags_*.txt` 全部移走也是安全的：来源集合为空时同步直接早退，一个字节都不动，
+  而来源列表读的是 `folders` 表，所以界面上的来源一个不少。
+
+> ⚠️ **要移走 `tags_*.txt` 就必须 9 个一起移**，不能挑着移。原因见
+> `docs/数据源合并与增量入库方案.md` §5.4：旧的 `syncSources` 会把「配置里已拿掉的
+> 来源」从库里 DELETE，只移一部分会让剩下那些 txt 对应的来源被清理掉。
+> （归档方式：同目录改名移进 `_legacy_归档_<日期>/`，可一键还原。）
+
+`folders.json`（旧名 `scan_folders.json`，由 `paths.js` 路由到 `data/user/`）
+只是登记表的**导出备份**，用 `npm run folders:export` 生成，随时可以重新导出；
+真源丢了也不会因此丢来源。
 
 翻译库（`translate_dir`）是另一条独立的解析规则，**默认留空就行**：
 
@@ -184,10 +222,13 @@ tag-viewer-electron/
 │     ├─ png.js                  PNG tEXt/iTXt 元数据解析（ComfyUI/A1111/NAI/InvokeAI）
 │     ├─ prompt.js               提示词 → 标签
 │     ├─ scan.js                 扫描文件夹（带内存缓存）+ 共用标签分析
-│     ├─ folders.js              扫描文件夹「收藏夹」（scan_folders.json）
+│     ├─ folders.js              文件夹登记表（folders 表 = 来源 + 扫描夹）
+│     ├─ ingest.js               增量入库：磁盘 <-> tags.db 对齐（六条判定规则）
+│     ├─ tagger.js               WD14 反推管道（消费 tag_queue，可降级）
 │     ├─ exporter.js             导出（纯标签 / 带路径 / 购物车）
 │     ├─ meta.js · cart.js       用户元数据 / 购物车历史
 │     └─ app-state.js            启动编排 + whenReady() 门禁
+├─ tools/tagger_serve.py         WD14 反推常驻服务（JSON-lines over stdio）
 ├─ src/                          渲染进程（Vue 3 + Pinia + vue-router）
 │  ├─ components/base/           11 个基础件（TvButton/TvInput/TvSelect/TvModal/TvImage/...）
 │  ├─ components/tag/            4 个标签件（TagPill/TagList/TagBars/TagSuggestInput）
@@ -196,11 +237,11 @@ tag-viewer-electron/
 │  ├─ components/cart/           4 个购物车件（Drawer/Item/Checkout/History）
 │  ├─ components/rules/          规则编辑器 + 分类管理
 │  ├─ components/filter/         来源筛选条
-│  ├─ components/layout/         顶栏 / 启动遮罩 / toast
-│  ├─ views/                     6 个视图，与旧版页面一一对应
+│  ├─ components/layout/         顶栏 / 启动遮罩 / toast / 后台任务胶囊
+│  ├─ views/                     8 个视图，与旧版页面一一对应（+ 来源管理）
 │  ├─ stores/                    7 个 Pinia store
 │  ├─ composables/               图片流 / 搜索历史
-│  ├─ utils/                     IPC 封装 / 格式化
+│  ├─ utils/                     IPC 封装 / 格式化 / localStorage 键名登记表
 │  └─ styles/tokens.css          设计变量（唯一一处颜色/间距/字号来源）
 ├─ test-fixtures/scan-test/      扫描页测试图 5 张（纯色 PNG + 内嵌生成参数）
 ├─ scripts/                      构建、启动与验证脚本

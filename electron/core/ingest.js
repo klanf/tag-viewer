@@ -129,7 +129,13 @@ function emit(onProgress, patch) {
  * @param {{onProgress?: (s:object)=>void, force?: boolean}} opts
  * @returns {Promise<object>} stats(失败时带 error)
  */
-export async function runIngest({ onProgress, force = false, dryRun = false } = {}) {
+/**
+ * @param {{onProgress?:Function, force?:boolean, dryRun?:boolean,
+ *          only?: number|string}} opts
+ *   `only` 限定只同步一个目录: 传 folders.id(推荐) 或 label 名。
+ *   来源管理页的「单目录同步」用它 —— 否则点一个目录要把 8 个目录全扫一遍。
+ */
+export async function runIngest({ onProgress, force = false, dryRun = false, only = null } = {}) {
   if (ingestState.running) return { skipped: true, reason: 'busy' }
   ingestState.running = true
   ingestState.paused = false
@@ -140,7 +146,21 @@ export async function runIngest({ onProgress, force = false, dryRun = false } = 
     const db = openDb()
     ensureQueueTable(db)
 
-    const folders = db.prepare('SELECT id, path, label, recursive FROM folders WHERE as_source = 1 ORDER BY id').all()
+    let folders = db.prepare('SELECT id, path, label, recursive FROM folders WHERE as_source = 1 ORDER BY id').all()
+    if (only !== null && only !== undefined && only !== '') {
+      const key = typeof only === 'number' ? Number(only) : String(only).toLowerCase()
+      folders = folders.filter((f) => (typeof only === 'number'
+        ? Number(f.id) === key
+        : String(f.label).toLowerCase() === key || String(f.path).toLowerCase() === key))
+      if (!folders.length) {
+        const note = `没有匹配的看板来源: ${only}`
+        emit(onProgress, { phase: 'done', note, stats, done: 0, total: 0 })
+        ingestState.lastRunMs = Date.now() - t0
+        ingestState.lastRunAt = Date.now()
+        stats.note = note
+        return stats
+      }
+    }
     stats.folders = folders.length
     if (!folders.length) {
       // 登记表里没有"看板来源" -> 没有可同步的东西。**不是错误**, 新装机器就是这状态。

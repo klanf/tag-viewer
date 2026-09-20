@@ -12,12 +12,11 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { api } from '@/utils/api.js'
-
-const KEY = 'tv_cart'
+import { LS, readLS, writeLS } from '@/utils/lskey.js'
 
 function load() {
   try {
-    const o = JSON.parse(localStorage.getItem(KEY) || '{}')
+    const o = JSON.parse(readLS(LS.cart.key) || '{}')
     return o && typeof o === 'object' && !Array.isArray(o) ? o : {}
   } catch { return {} }
 }
@@ -32,7 +31,7 @@ export const useCartStore = defineStore('cart', () => {
   const ordered = computed(() => [...list.value].sort((a, b) => (b.t || 0) - (a.t || 0)))
 
   watch(items, () => {
-    try { localStorage.setItem(KEY, JSON.stringify(items.value)) } catch { /* 忽略 */ }
+    writeLS(LS.cart.key, JSON.stringify(items.value))
   }, { deep: true })
 
   function has(tag) { return !!items.value[tag] }

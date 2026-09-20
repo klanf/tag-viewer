@@ -95,6 +95,29 @@ CREATE TABLE IF NOT EXISTS folders (
 CREATE INDEX IF NOT EXISTS idx_folders_use ON folders(as_source, as_scan);
 `
 
+/**
+ * v2 之后**追加**的列: [表名, 列名, 定义]。
+ *
+ * 为什么不把它们塞进 SCHEMA_V2 就完事: 真实库早就跑完 v1→v2 迁移了,
+ * 而 `runMigrations` 在 `cur >= SCHEMA_VERSION` 时**直接早退** ——
+ * 早退之后 `applyV2Shape` 一次都不会再执行, 于是"往建表语句里补一列"
+ * 对已经迁过的库完全无效(这正是加列最容易踩的坑)。
+ *
+ * 也不用"把 SCHEMA_VERSION 升到 3"来做: 版本号一动, 迁移路径会重跑
+ * `backfillV2`, 而它里面的 `buildFoldersFromSources` 用的是
+ * `as_scan = MAX(旧值, 新值)` —— 用户已经"移出登记表"的目录会被
+ * scan_folders.json 里的旧记录**复活**。为了加一列付出这个代价不值得。
+ *
+ * 所以走"每次 openDb 幂等补列": 纯加列(带 DEFAULT), 老库原地补齐,
+ * 不需要备份、不需要回填、也不会碰到任何既有数据。
+ */
+const ADDITIVE_COLS = [
+  // folders 表: 上次扫描的汇总(卡片上的「N 种提示词 / 含提示词 M」)。
+  // 真源是 DB 之后, 这份统计必须跟着登记表一起存 —— 否则卡片要么显示不出来,
+  // 要么得为了几个数字把每个目录重新扫一遍。
+  ['folders', 'stats_json', "TEXT NOT NULL DEFAULT ''"],
+]
+
 /** v2 给 images 补的列: [列名, 定义]。缺哪个补哪个, 已有则跳过(幂等) */
 const IMAGES_V2_COLS = [
   ['folder_id', 'INTEGER'],
@@ -298,6 +321,124 @@ export function buildFoldersFromSources(db, onProgress = () => {}) {
   return made
 }
 
+/* ------------------------------------------------------- 登记表(folders) */
+
+/**
+ * 建/更新一条 folders 行 —— 登记表的**唯一写入口**。
+ *
+ * `path` 用 normalizeImagePath 规范化, 与 images.path / 磁盘枚举共用同一个实现,
+ * 所以"同一个目录"在任何入口都落到同一行(NOCASE 唯一索引兜底盘符大小写差异)。
+ *
+ * 语义上刻意区分"这次要写什么"与"不要动什么":
+ *   · label/cover/note: 非空才覆盖(空值通常意味着"这次没提供", 不是"清空")
+ *   · as_source/as_scan: 显式传布尔才动 —— 否则会把用户刚关掉的开关又打开
+ *   · recursive/auto_tag: 同上
+ *   · last_scan_ms/stats_json: 只在显式传值时更新
+ *
+ * @param {object} db
+ * @param {{path:string, label?:string, as_source?:boolean, as_scan?:boolean,
+ *          recursive?:boolean, auto_tag?:boolean, last_scan_ms?:number,
+ *          stats?:object|null, cover?:string, note?:string, added_at?:number}} f
+ * @returns {{id:number, path:string, created:boolean}}
+ */
+export function upsertFolder(db, f) {
+  const p = normalizeImagePath(f.path)
+  if (!p) return { id: 0, path: '', created: false }
+  const now = Date.now()
+  const cur = db.prepare('SELECT * FROM folders WHERE path = ?').get(p)
+
+  if (!cur) {
+    const r = db.prepare(`
+      INSERT INTO folders (path, label, as_source, as_scan, recursive, auto_tag,
+                           added_at, last_scan_ms, cover, note, stats_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      p,
+      String(f.label || ''),
+      f.as_source ? 1 : 0,
+      f.as_scan ? 1 : 0,
+      f.recursive === false ? 0 : 1,
+      f.auto_tag === false ? 0 : 1,
+      Number(f.added_at) || now,
+      Number(f.last_scan_ms) || 0,
+      String(f.cover || ''),
+      String(f.note || ''),
+      f.stats ? JSON.stringify(f.stats) : '',
+    )
+    return { id: Number(r.lastInsertRowid), path: p, created: true }
+  }
+
+  const sets = []
+  const args = []
+  const put = (col, val) => { sets.push(`${col} = ?`); args.push(val) }
+  if (f.label !== undefined && String(f.label) !== '') put('label', String(f.label).slice(0, 120))
+  if (f.as_source !== undefined) put('as_source', f.as_source ? 1 : 0)
+  if (f.as_scan !== undefined) put('as_scan', f.as_scan ? 1 : 0)
+  if (f.recursive !== undefined) put('recursive', f.recursive ? 1 : 0)
+  if (f.auto_tag !== undefined) put('auto_tag', f.auto_tag ? 1 : 0)
+  if (f.last_scan_ms !== undefined) put('last_scan_ms', Number(f.last_scan_ms) || 0)
+  if (f.stats !== undefined) put('stats_json', f.stats ? JSON.stringify(f.stats) : '')
+  if (f.cover !== undefined && String(f.cover) !== '') put('cover', String(f.cover))
+  if (f.note !== undefined) put('note', String(f.note).slice(0, 300))
+  if (sets.length) {
+    args.push(Number(cur.id))
+    db.prepare(`UPDATE folders SET ${sets.join(', ')} WHERE id = ?`).run(...args)
+  }
+  return { id: Number(cur.id), path: p, created: false }
+}
+
+/**
+ * 登记表查询。usage:
+ *   'source' = 看板来源(as_source=1) / 'scan' = 扫描夹(as_scan=1)
+ *   'all'    = 全部(含"已移出登记表"的, 它们两个开关都是 0 —— 界面上可恢复)
+ *
+ * `hasImages` 顺带把"入库图数"算出来(来源管理页要显示), 用一次 GROUP BY 拿到,
+ * 不要每行再单查一次(9 个文件夹 × 80k 行的库, 逐个查会明显卡)。
+ */
+export function folderRows(db, { usage = 'all' } = {}) {
+  const where = usage === 'source' ? 'WHERE f.as_source = 1'
+    : usage === 'scan' ? 'WHERE f.as_scan = 1'
+      : ''
+  return db.prepare(`
+    SELECT f.*,
+           COALESCE(c.n, 0) AS images
+      FROM folders f
+      LEFT JOIN (SELECT folder_id, COUNT(*) AS n FROM images GROUP BY folder_id) c
+             ON c.folder_id = f.id
+      ${where}
+     ORDER BY f.id
+  `).all()
+}
+
+/**
+ * 「看板来源」的名字清单 —— 侧栏来源筛选条 / 统计接口都用它。
+ *
+ * 阶段 4 之前这里读的是 `[...dataFiles.keys()]`(即 tags_*.txt 的文件名), 于是
+ * **来源列表和真源绑死在 txt 上**: txt 一归档, 来源列表立刻空掉、来源筛选全废,
+ * 而库里的记录其实一条没少。改成读登记表之后, 来源的定义回到"我登记了哪些目录",
+ * txt 退化成一次性的导入介质。
+ *
+ * 兜底: 登记表里一条 as_source 都没有时(全新库还没导入过), 退回 src 表的名字 ——
+ * 保证"刚导入完 txt、还没建 folders 行"的中间态也能正确显示来源。
+ *
+ * 另有一类"有 src 行但没有 folders 行"的遗留来源: 该 txt 导入时读到了 0 条
+ * (实测过一次: 那个文件当时正被 Syncthing 半途写入), 指纹却记下了, 于是
+ * 之后再也不会重导 —— `folderRootOfSrc` 从 0 张图反查不出目录, 登记行自然没建。
+ * 这类来源按名字并进来(哪怕它是空的), 免得用户"明明有个来源却从列表里凭空消失"。
+ */
+export function sourceNameList(db = null) {
+  const d = db || openDb()
+  const names = d.prepare("SELECT label FROM folders WHERE as_source = 1 AND label <> '' ORDER BY id")
+    .all().map((r) => String(r.label))
+  if (names.length) {
+    for (const r of d.prepare('SELECT name, records FROM src ORDER BY id').all()) {
+      if (Number(r.records || 0) > 0 && !names.includes(String(r.name))) names.push(String(r.name))
+    }
+    return [...new Set(names)]
+  }
+  return d.prepare('SELECT name FROM src ORDER BY id').all().map((r) => String(r.name))
+}
+
 /** v1 -> v2 的数据搬运(在事务里跑) */
 function backfillV2(db, onProgress) {
   // 老记录一律 legacy: 它们是从 tags_*.txt 导入的, 不是从图里读的、也不是反推的
@@ -412,10 +553,25 @@ function openRaw() {
   return db
 }
 
+/**
+ * 幂等补齐"追加列"。表还不存在时静默跳过(全新库的建表在 SCHEMA/SCHEMA_V2 里,
+ * 而且 openDb 的调用顺序保证了这里跑之前迁移已经执行完)。
+ */
+function applyAdditiveCols(db) {
+  for (const [table, name, def] of ADDITIVE_COLS) {
+    let cols
+    try { cols = db.prepare(`PRAGMA table_info(${table})`).all() } catch { continue }
+    if (!cols.length) continue
+    if (cols.some((c) => c.name === name)) continue
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`) } catch { /* 并发下别人加过了 */ }
+  }
+}
+
 /** 打开(必要时创建)数据库并保证 schema 已是最新; 同一进程内复用同一个句柄 */
 export function openDb() {
   const db = openRaw()
   runMigrations(db)
+  applyAdditiveCols(db)
   return db
 }
 
@@ -547,6 +703,16 @@ async function importSource(db, name, fp, st, onProgress) {
   }
 
   db.prepare('UPDATE src SET records = ? WHERE id = ?').run(n, srcId)
+
+  // txt 导入顺带把目录登记进 folders 表 —— 这一步是「来源列表改读 DB」的必要条件:
+  // 全新库里 folders 表是空的(建表短路不走 backfillV2), 来源清单如果只认登记表,
+  // 就只剩"先跑过 v1→v2 迁移的老库"能显示出源来。导入时顺手登记, 新旧库行为一致。
+  // 已存在的行**不重设 as_source** —— 用户主动"移出登记表"过的目录不该被 txt 复活。
+  const root = folderRootOfSrc(db, srcId)
+  if (root) {
+    const had = db.prepare('SELECT id FROM folders WHERE path = ?').get(normalizeImagePath(root))
+    upsertFolder(db, { path: root, label: srcName || '', ...(had ? {} : { as_source: true }) })
+  }
   return n
 }
 

@@ -20,8 +20,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { call } from '@/utils/api.js'
-
-const KEY = 'tv_favs'
+import { LS, readLS, writeLS } from '@/utils/lskey.js'
 
 const baseName = (p) => String(p || '').split(/[\\/]/).pop() || ''
 
@@ -46,7 +45,7 @@ function migrate(a) {
 
 function load() {
   try {
-    return migrate(JSON.parse(localStorage.getItem(KEY) || '[]'))
+    return migrate(JSON.parse(readLS(LS.favs.key) || '[]'))
   } catch { return [] }
 }
 
@@ -62,7 +61,7 @@ export const useFavStore = defineStore('fav', () => {
   const basenames = computed(() => new Set(list.value.map((r) => r.name)))
 
   function persist() {
-    try { localStorage.setItem(KEY, JSON.stringify(list.value)) } catch { /* 忽略 */ }
+    writeLS(LS.favs.key, JSON.stringify(list.value))
   }
 
   /** 精确优先; 找不到就用文件名兜底(兼容数据源路径变化)。返回记录下标 */

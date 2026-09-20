@@ -31,6 +31,7 @@ const NAV = [
   { to: '/series', label: '系列', icon: '🗂️' },
   { to: '/tags', label: '标签', icon: '🏷️' },
   { to: '/scan', label: '扫描', icon: '📂' },
+  { to: '/sources', label: '来源', icon: '🗄️' },
   { to: '/favs', label: '收藏', icon: '⭐' },
   { to: '/cart', label: '购物车', icon: '🛒' },
 ]

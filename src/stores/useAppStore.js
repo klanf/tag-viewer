@@ -6,8 +6,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api, onPush } from '@/utils/api.js'
-
-const THEME_KEY = 'tv_theme'
+import { LS, readLS, writeLS } from '@/utils/lskey.js'
 
 export const useAppStore = defineStore('app', () => {
   const phase = ref('idle')          // idle | loading | ready | error
@@ -43,7 +42,7 @@ export const useAppStore = defineStore('app', () => {
   const epoch = ref(0)
 
   // 主题: 默认深色(与旧版一致, 也利于看图), 可切浅色
-  const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(THEME_KEY) : ''
+  const stored = typeof localStorage !== 'undefined' ? readLS(LS.theme.key) : ''
   const theme = ref(stored === 'light' ? 'light' : 'dark')
 
   function applyTheme() {
@@ -52,7 +51,7 @@ export const useAppStore = defineStore('app', () => {
   }
   function toggleTheme() {
     theme.value = theme.value === 'dark' ? 'light' : 'dark'
-    localStorage.setItem(THEME_KEY, theme.value)
+    writeLS(LS.theme.key, theme.value)
     applyTheme()
   }
   applyTheme()

@@ -119,14 +119,21 @@ export const api = {
   // 图片删除(移入系统回收站)
   trashImages: (paths) => call('image:trash', { paths }),
 
-  // 扫描文件夹「收藏夹」(扫过的目录会记下来, 下次直接点开)
-  folders: () => call('folders:list'),
+  // 文件夹登记表 —— 扫描夹与看板来源**共用一份**(真源是 tags.db 的 folders 表)。
+  // folders(opts) 的 usage: 'scan'(默认, 扫描页) / 'source'(看板来源) / 'all'(全部登记过的)
+  folders: (opts) => call('folders:list', opts),
   addFolder: (q) => call('folders:add', q),
+  // 移出登记表: 只把用途开关归零, 不删库里的图片记录(误删可恢复)
   removeFolder: (path) => call('folders:remove', { path }),
+  // 彻底清除: 连库里的图片记录一起删(高危, 调用方必须先二次确认)
+  purgeFolder: (path) => call('folders:purge', { path }),
   updateFolder: (q) => call('folders:update', q),
   rescanFolder: (q) => call('folders:rescan', q),
   openFolder: (q) => call('folders:open', q),
   pruneFolders: () => call('folders:prune'),
+  exportFolders: () => call('folders:export'),
+  // 单个来源立即同步(只跑这一个目录)
+  syncFolder: (q) => call('folders:sync', q),
 
   // 剪贴板
   copy: (text) => call('clipboard:write', { text }),

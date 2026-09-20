@@ -75,8 +75,7 @@ async function reload() {
             <span v-if="app.progress.source" class="faint">{{ app.progress.source }}</span>
           </div>
           <div class="hint">
-            首次启动要解析 {{ app.sourcesInfo.length || 7 }} 个标签文件(约 88 MB),
-            之后同一进程内搜索是毫秒级的。
+            正在从本地标签库(tags.db)读入全部记录 —— 之后同一进程内搜索是毫秒级的。
           </div>
         </template>
 
