@@ -62,8 +62,8 @@ const kind = computed(() => {
 /** 悬停浮层里是否真有图标(决定浮层 DOM 是否渲染) */
 const hasHoverActs = computed(() =>
   props.copyable ||
-  (props.cartable && kind.value === 'char' && !props.inCart) ||
-  (props.showBan && !props.banned)
+  (props.cartable && kind.value === 'char') ||
+  props.showBan
 )
 
 /** 角色/系列标签常常太长, 显示时去掉 _(系列) 尾巴让 pill 短一点; 悬停看完整 */
@@ -121,11 +121,14 @@ function onCart(e) {
     <i v-if="showBan && banned" class="st" :title="banTitle" @click="onBan">🚫</i>
     <i v-if="cartable && kind === 'char' && inCart" class="st ct on" :title="cartTitle" @click="onCart">🛒</i>
     <!-- 悬停动作浮层: 绝对定位盖在 pill 自身右段上方, 完全不占布局宽度。
-         pill 几何永不变化 -> flex-wrap 永不因悬停重排 -> 不再"掉行又弹回"抽搐 -->
+         pill 几何永不变化 -> flex-wrap 永不因悬停重排 -> 不再"掉行又弹回"抽搐。
+         ⚠️ 浮层必须带全套动作(含 🚫/🛒, 不论 banned/inCart): 浮层会盖住内联
+         状态图标, 若把状态图标从浮层排除, 悬停时就只剩 📋、"取消 ban"入口
+         被自己盖掉(2026-09-20 用户实测踩中) -->
     <span v-if="hasHoverActs" class="acts">
       <i v-if="copyable" class="cp" :title="copyTitle" @click="onCopy">📋</i>
-      <i v-if="cartable && kind === 'char' && !inCart" class="ct" :title="cartTitle" @click="onCart">🛒</i>
-      <i v-if="showBan && !banned" class="ban" :title="banTitle" @click="onBan">🚫</i>
+      <i v-if="cartable && kind === 'char'" :class="['ct', { on: inCart }]" :title="cartTitle" @click="onCart">🛒</i>
+      <i v-if="showBan" class="ban" :title="banTitle" @click="onBan">🚫</i>
     </span>
   </span>
 </template>

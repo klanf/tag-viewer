@@ -451,6 +451,7 @@ async function main() {
           return cs.opacity + '|' + cs.position
         })(),
         bannedSt: __t.count('.lightbox .lb-tags .pill.banned .st'),
+        bannedBan: __t.count('.lightbox .lb-tags .pill.banned .acts .ban'),
         bannedActsOp: (() => {
           const el = document.querySelector('.lightbox .lb-tags .pill.banned .acts')
           return el ? getComputedStyle(el).opacity : 'none'
@@ -465,13 +466,16 @@ async function main() {
     check('大图预览: 角色/系列区渲染数 == 数据里的项数', lb.want > 0 && lb.chars >= 1,
       `数据 ${lb.want} 项 / 渲染 ${lb.chars} 行 · 翻了 ${lb.hops} 张 · ${lb.tags} 个标签`)
     check('大图预览: 角色 pill 上挂着 🛒 购物车图标(2026-09-20 需求)',
-      lb.charPills > 0 && lb.cartIcons === lb.charPills,
-      `角色 pill ${lb.charPills} 个 · 🛒 ${lb.cartIcons} 个`)
+      lb.charPills > 0 && lb.cartIcons >= lb.charPills,
+      `角色 pill ${lb.charPills} 个 · 🛒 ${lb.cartIcons} 个(已入车会有浮层+内联两个)`)
     check('大图预览: 悬停动作浮层默认隐藏且绝对定位不占布局(2026-09-20 抽搐修复)',
       lb.actsOp === '0|absolute', `opacity|position=${lb.actsOp}`)
     check('大图预览: 已 ban pill 的 🚫 内联常驻(静态不随悬停伸缩; 本图无 banned 则视为满足)',
       lb.banned === 0 || lb.bannedSt === lb.banned,
       `banned=${lb.banned} · 内联🚫=${lb.bannedSt}`)
+    check('大图预览: 已 ban pill 悬停浮层里仍有 🚫(取消入口不被浮层盖掉, 2026-09-20 回归)',
+      lb.banned === 0 || lb.bannedBan === lb.banned,
+      `banned=${lb.banned} · 浮层🚫=${lb.bannedBan}`)
     await cdp.shot('02-lightbox')
 
     /* 复制下拉真的能切到"去ban"并复制(用 main 进程读剪贴板核对):
