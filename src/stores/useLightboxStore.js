@@ -79,14 +79,14 @@ export const useLightboxStore = defineStore('lightbox', () => {
 
   /**
    * 最近一次在光箱里看过的图 —— close() 时不清空, 且**持久化到 localStorage**:
-   * 重启应用后绿框还标在那张图上(2026-09-19 用户拍板做持久化)。
+   * 重启应用后红框还标在那张图上(2026-09-19 用户拍板做持久化)。
    * 光箱开着时它实时跟着翻页走, 网格上的高亮也随之移动。
    */
   const lastPath = ref(readLastPath())
 
   /**
    * "还没为 lastPath 滚动过" 标志 —— 应用启动时为 true(刚从 localStorage 恢复,
-   * 还没帮用户滚到那张)。带绿框的卡片第一次被渲染出来时(TvImageCard onMounted)
+   * 还没帮用户滚到那张)。带红框的卡片第一次被渲染出来时(TvImageCard onMounted)
    * 自动滚到它并把标志清掉; 光箱 close() 里的滚动也会清掉它。
    * 不持久化: 它只描述"本次运行内滚没滚过"。
    */
@@ -146,8 +146,8 @@ export const useLightboxStore = defineStore('lightbox', () => {
   /** 加载一张图的标签数据。切图很快时, 慢请求回来会覆盖新图 —— 用 path 比对丢弃过期结果 */
   async function load(p) {
     path.value = p
-    lastPath.value = p        // 高亮跟着走: 开着光箱翻页, 网格上的绿框实时移动
-    writeLastPath(p)          // 持久化: 重启后绿框还在, 并在卡片首次渲染时自动滚过去
+    lastPath.value = p        // 高亮跟着走: 开着光箱翻页, 网格上的红框实时移动
+    writeLastPath(p)          // 持久化: 重启后红框还在, 并在卡片首次渲染时自动滚过去
     visible.value = true
     loading.value = true
     error.value = ''
@@ -260,7 +260,7 @@ export const useLightboxStore = defineStore('lightbox', () => {
     // lastPath 故意不清(见上面的注释)。这里再帮一把:
     //   1) 广播 'tv:lb-closed' —— 有的视图是累加分页/无限滚动, 高亮那张可能还没
     //      渲染出来, 视图自己决定要不要把分页补齐(ScanView 就补);
-    //   2) nextTick 后把绿框卡滚进可视区(block:'nearest' = 已可见就不动, 不会跳屏)。
+    //   2) nextTick 后把高亮那张卡滚进可视区(block:'nearest' = 已可见就不动, 不会跳屏)。
     // 事件是同步广播的, 视图补页的渲染会排在同一次 flush 里, 所以这里的
     // nextTick 回调一定能看到补齐后的 DOM。
     if (lastPath.value && typeof window !== 'undefined') {

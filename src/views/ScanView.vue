@@ -18,7 +18,7 @@
  * 那不是"读取失败", 而是这批图本来就是同一提示词换种子刷出来的。
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, nextTick } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import TvInput from '@/components/base/TvInput.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvCheckbox from '@/components/base/TvCheckbox.vue'
@@ -32,9 +32,14 @@ import { useUiStore } from '@/stores/useUiStore.js'
 import { useFloatBack } from '@/composables/useFloatBack.js'
 import { api, onPush } from '@/utils/api.js'
 import { nfmt } from '@/utils/format.js'
+import { LS } from '@/utils/lskey.js'
+
+/** 扫描页筛选历史的键 —— 与首页那份公用历史分开存(见 utils/lskey.js 的 searchHistoryScan) */
+const SCAN_HIST_KEY = LS.searchHistoryScan.key
 
 const lb = useLightboxStore()
 const ui = useUiStore()
+const route = useRoute()
 
 /* ---------------- 一级: 文件夹库 ---------------- */
 const level = ref('list')            // list | folder
@@ -258,7 +263,7 @@ async function openFolder(f, { refresh = false } = {}) {  if (!f.exists) { ui.wa
     if (d?.error) { error.value = d.error; result.value = null; return }
     result.value = d
     fillScanZh(d)
-    // 绿框持久化的场景: 重启后第一次打开这个文件夹, 高亮那张可能落在第 2+ 页,
+    // 高亮框持久化的场景: 重启后第一次打开这个文件夹, 高亮那张可能落在第 2+ 页,
     // 不补页的话它根本不会被渲染, TvImageCard 里的"自动滚过去"就永远等不到。
     if (lb.scrollPending && lb.lastPath) expandPageForPath(lb.lastPath)
     if (d.folder_record) {
@@ -330,7 +335,7 @@ function onGone(e) {
 }
 
 /* ---------------- 光箱关掉后回到上次那张 ----------------
- * 绿色描边本身由 TvImageCard 读 lb.lastPath 自己画; 这里只解决扫描页特有的
+ * 红色描边本身由 TvImageCard 读 lb.lastPath 自己画; 这里只解决扫描页特有的
  * 一个问题: 网格是**累加分页**, 用户在光箱里向后翻了很多张时, 高亮那张可能
  * 还没被 slice(0, page*pageSize) 渲染出来 —— 滚动就会扑空。
  * 收到 'tv:lb-closed' 后按下标一次性把 page 补齐到能包含它
@@ -349,8 +354,12 @@ function onLbClosed(e) {
 }
 
 /* 二级(图片网格)是组件内部状态, 路由回退感知不到 ——
-   浮动导航的「返回」在这里优先回到文件夹列表 */
+   浮动导航的「返回」在这里优先回到文件夹列表。
+   必须先判"当前就在扫描页": 本视图在 keep-alive 白名单里, 处理器在切走之后
+   还留在栈上(useFloatBack 只在真正卸载时注销), 不判的话在**别的页面**按返回
+   会被它抢走 —— 表现为"在首页按返回, 结果扫描页的层级被清了一层"。 */
 useFloatBack(() => {
+  if (route.name !== 'scan') return false
   if (level.value !== 'folder') return false
   // 正在筛选时, 第一次按返回只清筛选(网格恢复全量), 再按一次才回文件夹列表
   if (tagKw.value) { tagKw.value = ''; return true }
@@ -511,13 +520,19 @@ onActivated(() => {
         <template v-else>
           <div class="pager-bar">
             <!-- 按标签筛选: 复用首页/标签页那个带补全的搜索框, 但补全走**本夹的标签池**
-                 (扫描图是库外的, 它们的标签在标签库里可能根本不存在) -->
+                 (扫描图是库外的, 它们的标签在标签库里可能根本不存在)。
+                 历史也走**自己那份键**: 这里是"筛过的标签", 首页那边是"敲过的查询",
+                 混着存两边都会变脏(见 utils/lskey.js 的 searchHistoryScan)。 -->
             <div class="tag-filter">
               <TvTagSuggestInput
                 v-model="tagKw"
                 size="sm"
                 :local-tags="scanTagPool"
                 :limit="14"
+                history
+                remember
+                :history-key="SCAN_HIST_KEY"
+                history-label="扫描页筛选历史"
                 placeholder="🔍 按标签筛选(空格分隔多个)"
               />
             </div>

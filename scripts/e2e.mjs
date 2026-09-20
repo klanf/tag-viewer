@@ -670,14 +670,37 @@ async function main() {
     check('标签: 已 ban 状态可见', tags.banned > 0, `${tags.banned} 个已 ban`)
     await cdp.shot('09-tags')
 
-    /* 点标签 -> 图片 */
+    /* 点标签 -> 图片。2026-09-20 起这是**下一级子页面** /tags/xxx(独立路由),
+       不是挂在标签列表上的 ?tag= —— 顺带把层级(H1 面包屑 / 后退一步 / 顶栏选中)钉住。 */
     await cdp.eval(`__t.click('.tag-list .pill'); return true`)
     await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '标签图片', timeout: 60000 })
-    const tagImgs = await cdp.eval(`return { cards: __t.count('.grid .card'), total: __t.text('.cnt') }`)
+    const tagImgs = await cdp.eval(`
+      return {
+        cards: __t.count('.grid .card'),
+        total: __t.text('.cnt'),
+        hash: decodeURIComponent(location.hash),
+        isSub: !!document.querySelector('.tag-images-view'),
+        parent: __t.text('.tag-images-view .crumb .link'),
+        crumb: __t.text('.tag-images-view .crumb .now'),
+        navOn: __t.text('.hdr .nv.on'),
+      }
+    `)
     check('标签: 点击进入该标签图片', tagImgs.cards > 0, `${tagImgs.total} 条 · ${tagImgs.cards} 张`)
+    check('标签: 是独立子页面(路径形式 /tags/xxx, 不是 ?tag= 挂在列表上)',
+      tagImgs.isSub && /#\/tags\/.+/.test(tagImgs.hash) && !tagImgs.hash.includes('?'),
+      tagImgs.hash)
+    check('标签: 子页面面包屑读作「全部标签 > 该标签」',
+      tagImgs.parent === '全部标签' && !!tagImgs.crumb, `${tagImgs.parent} > ${tagImgs.crumb}`)
+    check('标签: 子页面里顶栏「标签」保持选中(继承父导航)',
+      (tagImgs.navOn || '').includes('标签'), tagImgs.navOn)
     await cdp.shot('10-tags-images')
-    await cdp.eval(`__t.clickText('.bar .tv-btn', '返回标签列表'); return true`)
-    await sleep(600)
+    // 层级是真的: 浏览器后退一步就回标签列表(以前 ?tag= 是同一个页面, 得退两次)
+    await cdp.eval(`history.back(); return true`)
+    await waitFor(cdp, `__t.count('.tag-list .pill') > 0`, { label: '后退回标签列表', timeout: 20000 })
+    const backOne = await cdp.eval(`return { hash: location.hash, isList: !!document.querySelector('.tags-view') }`)
+    check('标签: 从子页面后退一步即回到标签列表(层级是真的)',
+      backOne.isList && backOne.hash === '#/tags', backOne.hash)
+    await sleep(400)
 
     /* 标签页内 ban 切换(写在副本数据目录里) */
     const banToggle = await cdp.eval(`
@@ -913,7 +936,7 @@ async function main() {
     `)
     check('光箱: 点图片本体不会关闭(与侧栏一致)', imgRes.open === true, '')
 
-    /* 绿色高亮(2026-09-19 反馈: 关掉光箱后记不住看到哪张了):
+    /* 高亮框(2026-09-19 反馈: 关掉光箱后记不住看到哪张了):
      * 高亮要跟随光箱翻页实时移动, 此时光箱停在第 2 张, 网格里应恰好一张带
      * .last-viewed, 且就是当前这张(扫描卡片的 .foot 是文件名)。 */
     const curBase = path.basename(await cdp.eval(`return __t.text('.lightbox .lb-path')`))
@@ -921,27 +944,42 @@ async function main() {
       const cards = [...document.querySelectorAll('.grid.imgs .card.last-viewed')]
       return { n: cards.length, foot: cards[0]?.querySelector('.foot')?.textContent || '' }
     `)
-    check('光箱: 网格绿色高亮恰好一张(跟随翻页实时移动)', hl.n === 1, `${hl.n} 张`)
+    check('光箱: 网格高亮恰好一张(跟随翻页实时移动)', hl.n === 1, `${hl.n} 张`)
     check('光箱: 高亮的就是当前这张', hl.foot === curBase, `${hl.foot} · 期望 ${curBase}`)
 
-    /* 呼吸(2026-09-20 用户反馈: "只有浅浅一层绿色边框, 不够显眼, 加点呼吸特效"):
-     * 这条钉的不是"好不好看", 而是**动画真的挂上了** —— 绿框的样式一旦被写回
-     * 静态 box-shadow, 上面两条照旧全绿(绿框还在, 位置也对), 只有这条会红。
+    /* 颜色 + 呼吸(2026-09-20 用户反馈两轮: "只有浅浅一层边框不显眼, 加点呼吸特效",
+     * 再"绿色还是有点不明显" -> 最终改红色)。
+     * 这两条钉的都不是"好不好看":
+     *   · 颜色 —— 抠 computed style 里的 rgb 三元组, 要求红通道压倒性领先。
+     *     这条能抓住"又被改回绿/蓝"(那时 r < g, 直接红), 是颜色这件事的硬约束。
+     *   · 呼吸 —— 钉"动画真的挂上了": 样式一旦被写回静态 box-shadow, 上面两条
+     *     照旧全过(框还在, 位置也对), 只有这条会红。
      * 系统开了"减少动态效果"时 CSS 会主动关掉动画(见 TvImageCard 的 media query),
      * 那种情况放行, 否则这个套件会在开了该选项的机器上假红。
      * 注意动画名带 Vue scoped 的哈希后缀(tv-lastviewed-breathe-xxxxxxxx), 所以用 includes。 */
     const breathe = await cdp.eval(`
       const el = document.querySelector('.grid.imgs .card.last-viewed')
+      const cs = el ? getComputedStyle(el) : null
       const anims = (el && el.getAnimations ? el.getAnimations() : [])
         .map((a) => a.animationName || '')
         .filter((n) => n.includes('lastviewed'))
+      // 从 computed 的 border-color / box-shadow 里抠出所有 rgb 三元组
+      const rgb = (s) => (String(s).match(/rgba?\\([^)]+\\)/g) || [])
+        .map((c) => (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number))
       return {
         n: anims.length,
         name: anims[0] || '',
         reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        border: cs ? cs.borderTopColor : '',
+        shadow: cs ? cs.boxShadow : '',
+        colors: cs ? [...rgb(cs.borderTopColor), ...rgb(cs.boxShadow)] : [],
       }
     `)
-    check('光箱: 绿框挂了呼吸动画(不是一圈静态绿边)',
+    const isRed = (c) => Array.isArray(c) && c.length >= 3 && c[0] > c[1] + 30 && c[0] > c[2] + 30
+    check('光箱: 高亮是红色(描边与光晕都不是绿框)',
+      breathe.colors.length > 0 && breathe.colors.every(isRed),
+      `${breathe.border} · ${String(breathe.shadow).slice(0, 70)}`)
+    check('光箱: 高亮框挂了呼吸动画(不是一圈静态描边)',
       breathe.n > 0 || breathe.reduced,
       breathe.reduced ? '(系统要求减少动态效果, 放行)' : `${breathe.n} 个 · ${breathe.name}`)
 
@@ -958,15 +996,15 @@ async function main() {
     `)
     check('光箱: 点图片黑边(letterbox)关闭', letterRes.open === false, '')
 
-    // 关掉后绿框仍在; 点绿框那张应能直接回到它
+    // 关掉后红框仍在; 点红框那张应能直接回到它
     const re = await cdp.eval(`
       const n = document.querySelectorAll('.grid.imgs .card.last-viewed').length
       document.querySelector('.grid.imgs .card.last-viewed').click()
       await new Promise(r => setTimeout(r, 1200))
       return { n, open: !!document.querySelector('.lightbox'), path: __t.text('.lightbox .lb-path') }
     `)
-    check('光箱: 关掉后绿色高亮仍在网格上(找回位置用)', re.n === 1, `${re.n} 张`)
-    check('光箱: 点绿框那张直接回到它', re.open && path.basename(re.path) === curBase,
+    check('光箱: 关掉后高亮仍在网格上(找回位置用)', re.n === 1, `${re.n} 张`)
+    check('光箱: 点高亮那张直接回到它', re.open && path.basename(re.path) === curBase,
       `→ ${path.basename(re.path)} · 期望 ${curBase}`)
 
     // 暗色空白(遮罩本体)也是关闭区
@@ -1053,6 +1091,67 @@ async function main() {
       filt.two?.n === 3, `${filt.two?.n} 张`)
     check('扫描: 清空筛选后恢复全量', filt.cleared?.n === 5, `${filt.cleared?.n} 张`)
     await cdp.shot('13d-scan-filter')
+
+    /* ---------------- 9f. 筛选框的搜索历史(2026-09-20 需求) ----------------
+     * "筛选框还是记住历史吧, 不过要和公用的区分开":
+     *   · 扫描页筛选是**即时**的, 没有搜索按钮 —— 所以只能认"输入停稳了"
+     *     (TvTagSuggestInput 的 remember: 停 1.2s 自动记一条)
+     *   · 历史存**独立的键** tv_search_hist_scan, 首页那份 tv_search_hist 不能被打脏
+     * 两条都要钉: 只测"记得住"会漏掉"串了键"(两边共用一个 key 时前者照样通过),
+     * 只测"键不同"会漏掉"根本没记"(空数组也不相等)。
+     * 夹具 5 张图: hoshino -> 2 张。 */
+    const scanHist = await cdp.eval(`
+      const inp = document.querySelector('.scan-view .pager-bar .tag-filter input')
+      if (!inp) return { err: '筛选框没渲染出来' }
+      const setV = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      setV.call(inp, 'hoshino')
+      inp.dispatchEvent(new Event('input', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 1700))   // > remember 的 1.2s
+      const scanRaw = localStorage.getItem('tv_search_hist_scan')
+      const sharedRaw = localStorage.getItem('tv_search_hist')
+      const n = __t.count('.scan-view .grid.imgs .card')
+      // 清空 -> 聚焦: 空输入时下拉应该切到历史(这正是"记住历史"的可见效果)
+      setV.call(inp, '')
+      inp.dispatchEvent(new Event('input', { bubbles: true }))
+      inp.focus()
+      await new Promise(r => setTimeout(r, 400))
+      const head = __t.text('.scan-view .pager-bar .tag-filter .drop .h-head')
+      const items = [...document.querySelectorAll('.scan-view .pager-bar .tag-filter .drop .item.h')]
+        .map((e) => e.textContent.replace(/[🔍✕]/g, '').trim())
+      // 点第一条历史 -> 应该直接把筛选条件填回去(2 张)
+      const first = document.querySelector('.scan-view .pager-bar .tag-filter .drop .item.h')
+      if (first) first.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      await new Promise(r => setTimeout(r, 700))
+      return {
+        err: '', n, head, items,
+        scan: scanRaw ? JSON.parse(scanRaw) : null,
+        shared: sharedRaw ? JSON.parse(sharedRaw) : null,
+        value: inp.value,
+        applied: __t.count('.scan-view .grid.imgs .card'),
+      }
+    `)
+    check('扫描筛选历史: 停稳后自动记进独立键(tv_search_hist_scan)',
+      Array.isArray(scanHist.scan) && scanHist.scan.includes('hoshino'),
+      scanHist.err || JSON.stringify(scanHist.scan))
+    check('扫描筛选历史: 没有写进首页那份公用历史(tv_search_hist)',
+      Array.isArray(scanHist.shared) && !scanHist.shared.includes('hoshino'),
+      JSON.stringify(scanHist.shared))
+    check('扫描筛选历史: 空输入聚焦时下拉列出历史(并标明是扫描页那一份)',
+      (scanHist.items || []).includes('hoshino') && /扫描页/.test(scanHist.head || ''),
+      `${scanHist.head} · ${JSON.stringify(scanHist.items)}`)
+    check('扫描筛选历史: 点历史条目直接填回筛选条件',
+      scanHist.value === 'hoshino' && scanHist.applied === 2, `值=${scanHist.value} · ${scanHist.applied} 张`)
+
+    // 复原: 清掉筛选(后面 keep-alive 那段要看的是"切走再切回网格还在")
+    await cdp.eval(`
+      const inp = document.querySelector('.scan-view .pager-bar .tag-filter input')
+      const setV = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      setV.call(inp, '')
+      inp.dispatchEvent(new Event('input', { bubbles: true }))
+      inp.blur()
+      await new Promise(r => setTimeout(r, 400))
+      return true
+    `)
 
     /* keep-alive(2026-09-19 反馈: 扫描页切走再切回, 只剩文件夹列表):
      * ScanView 已加入 App.vue 的 KeepAlive 白名单 —— 切到看板再切回来,
@@ -1508,7 +1607,14 @@ async function main() {
 
     /* ---------------- 11c. 点标签跳去该标签的图片列表(2026-09-20 需求) ----------------
      * 光箱 / 详情页的标签: 点**标签本体** = 跳转, 点标签上的 📋 = 只复制那一个。
-     * 落点是 /tags?tag=xxx —— TagsView 把"当前标签"写进 URL, 所以顺带验证深链。
+     *
+     * 落点是**下一级子页面** /tags/xxx(2026-09-20 第二轮需求: "拆出来作为更深的子页面,
+     * 就像标签页点 tag 跳转那样")。除了"跳对了", 还要钉住这几件与层级有关的事:
+     *   · 地址栏是路径形式(不是 ?tag= 挂在标签列表上)
+     *   · 面包屑「全部标签 > 该标签」, 页面根是 .tag-images-view
+     *   · 标签名里的 `/` 不会被拆成两段路径(`bb_(fate/extra)` 这类真标签存在)
+     *   · 旧的 ?tag= 地址仍能打开(重定向到子页面)
+     * 点一下能"回到列表"不在这里测 —— 标签列表进子页面那条路在段 7 已测过(history.back)。
      *
      * 取标签名不能读 pill 的文本: 角色 pill 显示时会砍掉 _(系列) 尾巴; 也不能无脑读
      * title —— 被 ban 的 pill 的 title 是"已 ban(导出时剔除)"。所以挑一个 title 以
@@ -1537,49 +1643,93 @@ async function main() {
         err: '', tag, path, hasCopyIcon, afterCopy,
         closed: !document.querySelector('.lightbox'),
         hash: decodeURIComponent(location.hash),
-        crumb: __t.text('.tags-view .crumb .now'),
-        total: __t.text('.tags-view .bar .cnt'),
+        isSub: !!document.querySelector('.tag-images-view'),
+        crumb: __t.text('.tag-images-view .crumb .now'),
+        parent: __t.text('.tag-images-view .crumb .link'),
+        total: __t.text('.tag-images-view .bar .cnt'),
       }
     `)
     check('标签跳转: 光箱的标签上挂着 📋 复制图标', tagJump.hasCopyIcon === true,
       tagJump.err || (tagJump.hasCopyIcon ? '在' : '不在'))
     check('标签跳转: 点 📋 只复制不跳转(光箱还开着)',
-      tagJump.afterCopy?.open === true && !(tagJump.afterCopy?.hash || '').includes('tags?'),
+      tagJump.afterCopy?.open === true && !(tagJump.afterCopy?.hash || '').includes('/tags/'),
       tagJump.afterCopy?.hash)
-    check('标签跳转: 点标签本体跳到 /tags?tag=xxx 且光箱自动关闭',
-      tagJump.closed === true && (tagJump.hash || '').includes('/tags?tag='),
-      `${tagJump.hash} · 光箱关闭=${tagJump.closed}`)
-    check('标签跳转: 落页面包屑正是该标签', tagJump.crumb === tagJump.tag,
-      `${tagJump.crumb} · 期望 ${tagJump.tag}`)
-    check('标签跳转: 标签页确实查出了图(不是空列表)',
+    check('标签跳转: 点标签本体跳到子页面 /tags/xxx 且光箱自动关闭',
+      tagJump.closed === true && tagJump.isSub === true && /#\/tags\/.+/.test(tagJump.hash || ''),
+      `${tagJump.hash} · 光箱关闭=${tagJump.closed} · 子页面=${tagJump.isSub}`)
+    check('标签跳转: 子页面面包屑是「全部标签 > 该标签」',
+      tagJump.parent === '全部标签' && tagJump.crumb === tagJump.tag,
+      `${tagJump.parent} > ${tagJump.crumb} · 期望 ${tagJump.tag}`)
+    check('标签跳转: 子页面确实查出了图(不是空列表)',
       Number(String(tagJump.total).replace(/[^0-9]/g, '') || 0) > 0, `${tagJump.total} 条`)
 
-    // 深链: 从别处直接进 /tags?tag=xxx, 也要停在同一标签上(TagsView 认 query)
+    // 深链: 直接进子页面地址, 也要停在同一标签上(路由参数是唯一真源)
     const deep = await cdp.eval(`
       location.hash = '#/'
       await new Promise(r => setTimeout(r, 900))
+      location.hash = '#/tags/' + encodeURIComponent(${JSON.stringify(tagJump.tag || '')})
+      await new Promise(r => setTimeout(r, 2000))
+      return {
+        crumb: __t.text('.tag-images-view .crumb .now'),
+        cards: __t.count('.tag-images-view .grid .card'),
+      }
+    `)
+    check('标签跳转: 直接访问子页面地址(深链)也停在同一标签',
+      deep.crumb === tagJump.tag && deep.cards > 0, `${deep.crumb} · ${deep.cards} 张`)
+
+    /* 标签名进的是**路径参数**, 里面可能有 `/` —— 库里真有 `bb_(fate/extra)`、
+       `k/da_(league_of_legends)` 这类标签, 编码/还原一旦不对, 它们会被拆成两段路径
+       (crash 或跳错页)。这里用人造标签验证这一层本身, 不依赖库里恰好有没有这样的图:
+       面包屑能对上就说明 %2F 原样解回来了。 */
+    const slash = await cdp.eval(`
+      location.hash = '#/tags/' + encodeURIComponent('foo/bar_(baz)')
+      await new Promise(r => setTimeout(r, 1500))
+      return { crumb: __t.text('.tag-images-view .crumb .now'), hash: decodeURIComponent(location.hash) }
+    `)
+    check('标签子页面: 标签名里的 / 原样还原(不会被拆成两段路径)',
+      slash.crumb === 'foo/bar_(baz)', `${slash.crumb} · ${slash.hash}`)
+
+    /* 旧地址兼容: 2026-09-20 之前"点标签"的落点是 /tags?tag=xxx。老书签/老深链
+       进来必须还能打开(路由上做了重定向), 而不是停在标签列表或白屏。 */
+    const oldAddr = await cdp.eval(`
       location.hash = '#/tags?tag=' + encodeURIComponent(${JSON.stringify(tagJump.tag || '')})
       await new Promise(r => setTimeout(r, 2000))
-      return { crumb: __t.text('.tags-view .crumb .now'), cards: __t.count('.tags-view .grid .card') }
+      return {
+        hash: decodeURIComponent(location.hash),
+        crumb: __t.text('.tag-images-view .crumb .now'),
+        cards: __t.count('.tag-images-view .grid .card'),
+      }
     `)
-    check('标签跳转: 直接访问该地址(深链)也停在同一标签',
-      deep.crumb === tagJump.tag && deep.cards > 0, `${deep.crumb} · ${deep.cards} 张`)
+    check('标签跳转: 旧地址 /tags?tag=xxx 仍能打开(重定向到子页面)',
+      oldAddr.crumb === tagJump.tag && oldAddr.cards > 0
+        && /#\/tags\/.+/.test(oldAddr.hash) && !oldAddr.hash.includes('?'),
+      `${oldAddr.hash} · ${oldAddr.crumb} · ${oldAddr.cards} 张`)
 
     // 详情页的标签是同一个入口(该页标签查自标签库, 库外图在本页直接是 not found)
     const detJump = await cdp.eval(`
       location.hash = '#/detail?path=' + encodeURIComponent(${JSON.stringify(tagJump.path || '')})
-      await new Promise(r => setTimeout(r, 2000))
+      /* 轮询而不是死等 2s: 详情页的标签是进页后现查的, 前一步刚从"305 条结果的标签页"
+         切过来, 主进程那一下不一定 2s 内回。等不到时把现场一起带回去(路径 + 页面文字
+         前 200 字 + pill 数), 免得只看到一句"没有 pill"没法判断是慢还是跳错页。 */
+      for (let i = 0; i < 40 && !document.querySelector('.detail .tag-list .pill'); i++) {
+        await new Promise(r => setTimeout(r, 300))
+      }
       const pill = [...document.querySelectorAll('.detail .tag-list .pill')]
         .find((p) => (p.getAttribute('title') || '').startsWith('点击查看该标签的图片'))
-      if (!pill) return { err: '详情页没有可用的标签 pill' }
+      if (!pill) return {
+        err: '详情页没有可用的标签 pill',
+        path: ${JSON.stringify(tagJump.path || '')},
+        txt: ((document.querySelector('.detail') || {}).innerText || '(连 .detail 都没有)').slice(0, 200),
+        pills: document.querySelectorAll('.detail .pill').length,
+      }
       const tag = (pill.getAttribute('title') || '').split(': ').pop()
       pill.click()
       await new Promise(r => setTimeout(r, 2000))
-      return { err: '', tag, hash: decodeURIComponent(location.hash), crumb: __t.text('.tags-view .crumb .now') }
+      return { err: '', tag, hash: decodeURIComponent(location.hash), crumb: __t.text('.tag-images-view .crumb .now') }
     `)
     check('标签跳转: 详情页点标签也是同一个入口',
-      detJump.err === '' && detJump.crumb === detJump.tag && (detJump.hash || '').includes('/tags?tag='),
-      detJump.err || `${detJump.crumb} · ${detJump.hash}`)
+      detJump.err === '' && detJump.crumb === detJump.tag && /#\/tags\/.+/.test(detJump.hash || ''),
+      detJump.err ? `${detJump.err} · path=${detJump.path} · pill=${detJump.pills} · ${detJump.txt}` : `${detJump.crumb} · ${detJump.hash}`)
 
     await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
 

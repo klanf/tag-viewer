@@ -10,7 +10,7 @@
  *   lightbox.open(path, { list })  ->  本组件自动出现
  *
  * 标签的交互(2026-09-20 调整, 与标签页对齐):
- *   点标签本体   = **跳去标签页看这个标签的图片**(/tags?tag=xxx)
+ *   点标签本体   = **跳去该标签的图片子页面**(/tags/xxx, 见 TagImagesView)
  *   点标签上 📋  = 复制这一个标签
  *   点标签上 🚫  = 切换黑名单(通配规则命中的只能去规则里改, 不允许单条取消)
  *   三个动作挤在一个 pill 上, 所以 📋/🚫 都是悬停才显形 —— 与旧版 🚫 的手感一致。
@@ -88,7 +88,7 @@ const noMeta = computed(() => !chars.value.length && !series.value.length)
 function copyTag(tag) { ui.copy(tag) }
 
 /**
- * 点标签 = 去标签页看这个标签的图片(与标签页里点标签是同一个入口)。
+ * 点标签 = 去该标签的图片**子页面**(与标签页里点标签是同一个入口)。
  *
  * 两件必须做的事:
  *   · 先 lb.close() —— 光箱是 Teleport 到 body 的, 不关就会盖在新路由的页面上
@@ -99,7 +99,7 @@ function gotoTag(tag) {
   if (!tag) return
   const external = !!lb.data?.external
   lb.close()
-  router.push({ path: '/tags', query: { tag } })
+  router.push({ name: 'tag-images', params: { tag } })
   if (external) {
     ui.toast(`「${tag}」· 这张图不在标签库中, 下面是库里含该标签的图`, 'info', 2800)
   }

@@ -46,4 +46,11 @@ export const LS = Object.freeze({
   bgAuto: { key: 'tv_bg_auto', old: 'tagviewer_bg_auto' },
   trashAsk: { key: 'tv_trash_ask', old: 'tagviewer_trash_ask' },
   searchHistory: { key: 'tv_search_hist', old: 'tagviewer_hist' },
+  /**
+   * 扫描页筛选框的历史 —— **故意和上面那条分开存**。
+   * 首页搜的是一条条完整查询(可能带 mode/exclude 那套语法), 扫描页筛的是
+   * "这个夹里出现过的标签", 两者的词表根本不是一回事: 混在一起的话,
+   * 在首页搜过的词会跑到扫描页的下拉里, 而在扫描页筛过的标签名又会污染首页历史。
+   */
+  searchHistoryScan: { key: 'tv_search_hist_scan' },
 })

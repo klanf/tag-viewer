@@ -36,6 +36,13 @@ const NAV = [
   { to: '/cart', label: '购物车', icon: '🛒' },
 ]
 
+/* 子页面也要点亮父导航: 在 /tags/xxx(某个标签的图片)时「标签」应保持选中 ——
+   它就是标签页的下一级。根路径要单独判, 否则 '/' 会把所有路径都前缀匹配上。 */
+function isOn(to) {
+  if (to === '/') return route.path === '/'
+  return route.path === to || route.path.startsWith(to + '/')
+}
+
 const totals = computed(() => {
   const s = app.stats || {}
   return { images: s.records ?? 0, tags: s.tags ?? 0, series: s.series ?? 0 }
@@ -67,7 +74,7 @@ async function openDataDir() {
         v-for="n in NAV"
         :key="n.to"
         :to="n.to"
-        :class="['nv', { on: route.path === n.to }]"
+        :class="['nv', { on: isOn(n.to) }]"
       >
         <span class="ico">{{ n.icon }}</span>{{ n.label }}
         <span v-if="n.to === '/cart' && cart.count" class="badge">{{ cart.count }}</span>

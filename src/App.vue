@@ -32,7 +32,7 @@ onMounted(() => app.init())
 
     <main class="stage">
       <RouterView v-slot="{ Component }">
-        <KeepAlive :include="['HomeView', 'SeriesView', 'TagsView', 'CartView', 'ScanView', 'FavView']">
+        <KeepAlive :include="['HomeView', 'SeriesView', 'TagsView', 'TagImagesView', 'CartView', 'ScanView', 'FavView']">
           <component :is="Component" />
         </KeepAlive>
       </RouterView>

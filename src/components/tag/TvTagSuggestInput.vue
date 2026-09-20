@@ -14,6 +14,10 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { api } from '@/utils/api.js'
 import { useSearchHistory } from '@/composables/useSearchHistory.js'
+import { LS } from '@/utils/lskey.js'
+
+/** 输入停稳多久算"用户筛的就是这个词" —— 扫描页筛选框的即时筛选没有搜索按钮, 只能这么认 */
+const REMEMBER_MS = 1200
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
@@ -22,6 +26,24 @@ const props = defineProps({
   suggest: { type: Boolean, default: true },
   /** 是否在空输入时显示搜索历史(只有首页搜索框需要) */
   history: { type: Boolean, default: false },
+  /**
+   * 这套历史存到哪个键(取自 utils/lskey.js 的 LS 表里某一项的 `.key`)。
+   * 不传 = 用首页那份公用历史(`tv_search_hist`)。
+   * 扫描页筛选框传自己那份(`tv_search_hist_scan`) —— 两边词表不是一回事, 混着存
+   * 会互相污染(首页搜过的查询跑进筛选框的下拉里, 反之亦然)。
+   */
+  historyKey: { type: String, default: '' },
+  /**
+   * 历史下拉里那行小标题 —— 两套历史各自标明自己是哪一份,
+   * 用户才看得出"扫描页筛过的词不会跑到首页搜索框里"。
+   */
+  historyLabel: { type: String, default: '搜索历史' },
+  /**
+   * 输入停稳后**自动记入历史**。
+   * 首页那种"输入 + 明确点搜索"的框不需要(父组件在 submit 时自己 push);
+   * 扫描页的筛选是即时的, 没有提交动作, 不自动记就永远是空历史。
+   */
+  remember: { type: Boolean, default: false },
   /** 参与补全的来源过滤 */
   source: { type: String, default: '' },
   /**
@@ -39,7 +61,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:modelValue', 'submit', 'pick', 'input'])
 
-const hist = useSearchHistory()
+const hist = useSearchHistory(props.historyKey ? { key: props.historyKey } : LS.searchHistory)
 const root = ref(null)
 const input = ref(null)
 const open = ref(false)
@@ -49,6 +71,7 @@ const cursor = ref(0)
 const busy = ref(false)
 
 let timer = null
+let rememberTimer = null
 let seq = 0
 
 const showHistory = computed(() => props.history && mode.value === 'history' && !props.modelValue.trim())
@@ -101,8 +124,16 @@ async function fetchSuggest() {
   cursor.value = 0
 }
 
-function onFocus() {
-  if (props.modelValue.trim()) fetchSuggest()
+/**
+ * 聚焦时看 **DOM 里的值**, 不能看 props.modelValue:
+ * 清空输入框后立刻聚焦(同一 tick)时, Vue 还没把新值刷回 prop, props 里仍是上一个词,
+ * 于是跑去跑补全、把下拉顶成 suggest 模式 —— 结果"空输入应该出历史"这件最该看到的
+ * 事反而看不到(e2e 就是这么抓出来的: 历史确实存了, 下拉却只有补全项)。
+ */
+function onFocus(e) {
+  const el = e && e.target
+  const v = String(el && 'value' in el ? el.value : props.modelValue || '').trim()
+  if (v) fetchSuggest()
   else if (props.history) { mode.value = 'history'; show() }
 }
 
@@ -121,11 +152,13 @@ function onInput(e) {
 function pick(tag) {
   emit('update:modelValue', tag)
   emit('pick', tag)
+  if (props.remember) { clearTimeout(rememberTimer); hist.push(tag) }
   hide()
 }
 
 function submit() {
   hide()
+  if (props.remember) { clearTimeout(rememberTimer); hist.push(props.modelValue) }
   emit('submit', props.modelValue)
 }
 
@@ -158,10 +191,22 @@ document.addEventListener('click', onDocClick)
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocClick)
   clearTimeout(timer)
+  clearTimeout(rememberTimer)
 })
 
 watch(() => props.modelValue, (v) => {
   if (!v) { items.value = []; cursor.value = 0 }
+  /* 自动记历史: 输入停稳就把当前值记下 —— 即时筛选没有"提交"这个动作,
+     只能认"停住不动了"。清空会取消待记的那一条(用户在框里留下的才是他筛的)。 */
+  if (!props.remember) return
+  clearTimeout(rememberTimer)
+  if (!v || !v.trim()) return
+  rememberTimer = setTimeout(() => hist.push(v), REMEMBER_MS)
+})
+
+/* 键名是可换的(见 historyKey 注释) —— 换了就换一套历史, 不能把上一条键的内容留在内存里 */
+watch(() => props.historyKey, (k) => {
+  hist.load(k ? { key: k } : LS.searchHistory)
 })
 
 defineExpose({ focus: () => input.value?.focus(), hide })
@@ -186,6 +231,7 @@ defineExpose({ focus: () => input.value?.focus(), hide })
     <div v-if="open" class="drop">
       <!-- 历史 -->
       <template v-if="showHistory">
+        <div class="h-head">{{ historyLabel }}</div>
         <template v-if="histItems.length">
           <div
             v-for="h in histItems"
@@ -199,7 +245,7 @@ defineExpose({ focus: () => input.value?.focus(), hide })
           </div>
           <div class="h-clear" @mousedown.prevent="hist.clear()">🗑 清空全部历史</div>
         </template>
-        <div v-else class="msg">暂无搜索历史</div>
+        <div v-else class="msg">暂无{{ historyLabel }}</div>
       </template>
 
       <!-- 补全 -->
@@ -261,6 +307,10 @@ input:disabled { opacity: .55; }
 
 .item.h .h-ico { font-size: 11px; opacity: .7; }
 .item.h .h-txt { flex: 1; color: var(--text); }
+.h-head {
+  padding: 6px 12px 4px; font-size: 11px; color: var(--faint);
+  border-bottom: 1px solid var(--border); margin-bottom: 2px;
+}
 .h-rm { color: var(--muted); font-size: 11px; padding: 0 4px; border-radius: 3px; }
 .h-rm:hover { color: #f66; background: rgba(255, 60, 60, .14); }
 .h-clear {

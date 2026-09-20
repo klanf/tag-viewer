@@ -1,0 +1,171 @@
+<script setup>
+/**
+ * 某个标签的图片列表 —— `/tags/:tag`
+ * ==================================
+ * 从 TagsView 里**拆出来的独立子页面**(2026-09-20 用户要求):
+ * 原来"点标签看它的图"是 TagsView 内部的第二级状态(view='images'),
+ * 地址栏只有个 `?tag=xxx`, 对 history 来说和标签列表是同一个页面 ——
+ * 从标签列表点进去再按浏览器后退, 得按两次才退得出去。
+ * 现在它是真正的下一级路由: /tags -> /tags/xxx, 后退一步就是列表,
+ * 面包屑也真的读作「全部标签 > koharu_(blue_archive)」。
+ *
+ * 标签名进的是**路径参数**而不是 query, 所以标签里的 `/` 由 vue-router 编码成 %2F
+ * (`bb_(fate/extra)` 这类真的存在), 解析回来仍是原标签名 —— 这一点实测验证过,
+ * 别改成自己拼字符串。
+ */
+import { ref, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import TvImageGrid from '@/components/image/TvImageGrid.vue'
+import TvButton from '@/components/base/TvButton.vue'
+import TvSelect from '@/components/base/TvSelect.vue'
+import { useImageFeed } from '@/composables/useImageFeed.js'
+import { useFloatBack } from '@/composables/useFloatBack.js'
+import { useLightboxStore } from '@/stores/useLightboxStore.js'
+import { useFavStore } from '@/stores/useFavStore.js'
+import { useUiStore } from '@/stores/useUiStore.js'
+import { nfmt } from '@/utils/format.js'
+
+const route = useRoute()
+const router = useRouter()
+const lb = useLightboxStore()
+const fav = useFavStore()
+const ui = useUiStore()
+
+const tag = ref('')
+const imgSort = ref('path')
+const imgPageSize = ref(60)
+const feed = useImageFeed({ infinite: true, pageSize: 60 })
+
+/** 当前图片流顺序 —— 传给大图预览做「上一张 / 下一张」 */
+const imgPaths = computed(() => feed.results.value.map((i) => i.path).filter(Boolean))
+watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
+
+function imgQuery() {
+  return { q: tag.value, match: 'contains', sort: imgSort.value }
+}
+
+async function load() {
+  feed.setPageSize(imgPageSize.value)
+  await feed.search(imgQuery())
+}
+
+/* URL 是"当前标签"的真源: 路由参数变了就重查。
+ * immediate 是必须的 —— 本视图在 keep-alive 白名单里, 从一个标签跳到另一个标签时
+ * 组件不会重挂(onMounted 只跑一次), 只有参数在变。 */
+watch(() => route.params.tag, (v) => {
+  /* **必须先看"当前是不是本页"**: 本视图在 keep-alive 白名单里, 切走之后组件不卸载、
+     这个 watch 还在跑; 而任何一次离开都会让 params.tag 变成 undefined —— 不判就会
+     走下面的 replace('/tags'), 把"从标签子页面跳去别处"的导航硬拉回标签列表
+     (实测: 子页面 -> 详情页, 地址栏一闪又被拽回 #/tags, 详情页根本没机会渲染)。 */
+  if (route.name !== 'tag-images') return
+  const t = v ? String(v) : ''
+  if (!t) { router.replace('/tags'); return }
+  tag.value = t
+  load()
+}, { immediate: true })
+
+/** 回上一级: 标签列表。用 push 而不是 back —— 深链直接进来时 history 里没有"上一页" */
+function backToTags() { router.push('/tags') }
+
+/* 子页面 -> 父页面: 浮动导航的「返回」固定回标签列表。
+ * 不接管的话它会 router.back() 到"上一个路由" —— 从首页光箱点进来就是回首页,
+ * 深链进来甚至没得退, 与"这是标签列表的下一级"这个直觉不符。
+ *
+ * **必须判当前路由**: 本视图在 keep-alive 白名单里, 注册的处理器在切走之后
+ * 依然留在栈上(useFloatBack 只在真正卸载时注销)。无条件返回 true 就会把别的
+ * 页面(如扫描页的二级)的返回抢过来, 表现是"在别的页面按返回, 结果跳去标签列表"。 */
+useFloatBack(() => {
+  if (route.name !== 'tag-images') return false
+  backToTags()
+  return true
+})
+
+function toggleFav(item) {
+  const added = fav.toggle(item?.path || item, item?.tags)
+  ui.ok(added ? '★ 已收藏' : '已取消收藏', 'info', 1200)
+}
+</script>
+
+<template>
+  <div class="tag-images-view">
+    <div class="head">
+      <div class="crumb">
+        <span class="link" @click="backToTags">全部标签</span>
+        <span class="sep">&gt;</span>
+        <span class="now">{{ tag }}</span>
+      </div>
+      <span class="spacer" />
+    </div>
+
+    <div class="panel body">
+      <div class="bar">
+        <b class="cnt">{{ nfmt(feed.total.value) }}</b>
+        <span class="hint">条匹配</span>
+        <span class="hint faint">点大图里的标签可以继续往下跳 · 悬停标签点 📋 只复制这一个</span>
+        <span class="spacer" />
+        <TvSelect
+          v-model="imgSort"
+          size="sm"
+          inline
+          label="排序"
+          :options="[
+            { value: 'path', label: '默认(路径)' },
+            { value: 'time', label: '最新优先' },
+            { value: 'random', label: '随机' },
+          ]"
+          @change="load()"
+        />
+        <TvSelect
+          v-model="imgPageSize"
+          size="sm"
+          inline
+          label="每页"
+          :options="[60, 120, 240].map((n) => ({ value: n, label: String(n) }))"
+          @change="load()"
+        />
+        <TvButton size="sm" variant="secondary" @click="backToTags">← 返回标签列表</TvButton>
+      </div>
+
+      <div class="scroll">
+        <TvImageGrid
+          :results="feed.results.value"
+          :loading="feed.loading.value"
+          :error="feed.error.value"
+          :loaded-once="feed.loadedOnce.value"
+          :infinite="true"
+          :has-more="feed.hasMore.value"
+          favable
+          :is-fav="fav.isFav"
+          @open="(it) => lb.open(it.path, { list: imgPaths })"
+          @toggle-fav="toggleFav"
+          @load-more="feed.loadMore"
+          @hover="({ text, event }) => ui.showTip(text, event)"
+          @move="ui.moveTip"
+          @leave="ui.hideTip"
+        />
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.tag-images-view {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px;
+  overflow: hidden;
+}
+.head { display: flex; align-items: center; flex: 0 0 auto; }
+.crumb { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+.crumb .link { color: var(--accent); cursor: pointer; }
+.crumb .link:hover { text-decoration: underline; }
+.crumb .now { color: var(--text); word-break: break-all; }
+.crumb .sep { color: var(--faint); }
+
+.body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px; }
+.bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; flex: 0 0 auto; }
+.hint { color: var(--muted); font-size: 12px; }
+.cnt { color: var(--accent); font-size: 16px; }
+.faint { color: var(--faint); }
+.scroll { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 4px; }
+</style>

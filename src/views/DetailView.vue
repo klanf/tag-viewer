@@ -118,7 +118,7 @@ function back() {
  */
 function gotoTag(tag) {
   if (!tag) return
-  router.push({ path: '/tags', query: { tag } })
+  router.push({ name: 'tag-images', params: { tag } })
 }
 </script>
 
