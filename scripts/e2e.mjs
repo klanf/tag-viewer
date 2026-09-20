@@ -924,6 +924,27 @@ async function main() {
     check('光箱: 网格绿色高亮恰好一张(跟随翻页实时移动)', hl.n === 1, `${hl.n} 张`)
     check('光箱: 高亮的就是当前这张', hl.foot === curBase, `${hl.foot} · 期望 ${curBase}`)
 
+    /* 呼吸(2026-09-20 用户反馈: "只有浅浅一层绿色边框, 不够显眼, 加点呼吸特效"):
+     * 这条钉的不是"好不好看", 而是**动画真的挂上了** —— 绿框的样式一旦被写回
+     * 静态 box-shadow, 上面两条照旧全绿(绿框还在, 位置也对), 只有这条会红。
+     * 系统开了"减少动态效果"时 CSS 会主动关掉动画(见 TvImageCard 的 media query),
+     * 那种情况放行, 否则这个套件会在开了该选项的机器上假红。
+     * 注意动画名带 Vue scoped 的哈希后缀(tv-lastviewed-breathe-xxxxxxxx), 所以用 includes。 */
+    const breathe = await cdp.eval(`
+      const el = document.querySelector('.grid.imgs .card.last-viewed')
+      const anims = (el && el.getAnimations ? el.getAnimations() : [])
+        .map((a) => a.animationName || '')
+        .filter((n) => n.includes('lastviewed'))
+      return {
+        n: anims.length,
+        name: anims[0] || '',
+        reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
+      }
+    `)
+    check('光箱: 绿框挂了呼吸动画(不是一圈静态绿边)',
+      breathe.n > 0 || breathe.reduced,
+      breathe.reduced ? '(系统要求减少动态效果, 放行)' : `${breathe.n} 个 · ${breathe.name}`)
+
     // 黑边(letterbox)也算关闭区(2026-09-19 追加: 可关区域太小, 翻页按钮一带都要能关)。
     // 点 img 元素盒子的左上角 —— contain 的可见内容居中, 角落必然是黑边。
     const letterRes = await cdp.eval(`

@@ -45,7 +45,7 @@ const path = computed(() => props.item.path || '')
 /** 失效收藏: prop 显式传, 或数据里带 _missing 标记(网格不用加新的透传 prop) */
 const isMissing = computed(() => props.missing || !!props.item._missing)
 
-/* 上次在光箱里看过的那张 -> 绿色描边(跟随光箱翻页实时移动, 关掉后保留)。
+/* 上次在光箱里看过的那张 -> 绿色呼吸框(跟随光箱翻页实时移动, 关掉后保留)。
  * 直接读光箱 store 而不是加 prop: 首页/系列/标签/扫描四个网格一行都不用改,
  * 以后新视图只要用这张卡片就自动带上这个行为。 */
 const lb = useLightboxStore()
@@ -104,7 +104,7 @@ function onCtx(e) {
   <div
     ref="rootEl"
     :class="['card', { selected, 'has-sel': selectable, 'last-viewed': isLastViewed, 'is-missing': isMissing }]"
-    :title="isMissing ? '文件已不在原位置 —— 可能把图移走了; 收藏已保留, 打开收藏页时会按文件名自动找回' : (selectable ? '点击勾选/取消' : (isLastViewed ? '上次看到这张(绿色描边) · 点击预览大图与标签' : '点击预览大图与标签'))"
+    :title="isMissing ? '文件已不在原位置 —— 可能把图移走了; 收藏已保留, 打开收藏页时会按文件名自动找回' : (selectable ? '点击勾选/取消' : (isLastViewed ? '上次看到这张(绿色呼吸框) · 点击预览大图与标签' : '点击预览大图与标签'))"
     @click="emit('open', item)"
     @contextmenu="onCtx"
     @mouseenter="emit('hover', { text: tipText, event: $event })"
@@ -166,14 +166,42 @@ function onCtx(e) {
 .card:hover { border-color: var(--accent); }
 .card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft) inset; }
 
-/* 上次看过的图(光箱关掉后靠它找回位置): 绿色描边 + 淡淡的绿色光晕,
+/* 上次看过的图(光箱关掉后靠它找回位置): 绿色描边 + 会呼吸的绿色光晕,
  * 颜色用 --accent2(本主题的"成功/OK"绿), 与悬停/选中的蓝色区分开。
- * 放在 :hover 规则之后 —— 悬停变蓝是瞬时反馈, 绿框是持久标记, 绿框优先。 */
+ * 放在 :hover 规则之后 —— 悬停变蓝是瞬时反馈, 绿框是持久标记, 绿框优先。
+ *
+ * 呼吸(2026-09-20 用户反馈): 原来只是"一圈浅浅的绿描边 + 淡淡光晕", 在 150px 的
+ * 卡片网格里不够抓眼, 关掉光箱后常常一眼扫不到刚才那张。改成光晕强弱循环 ——
+ * 会动的东西才拉得住视线。静态的绿描边(border-color)不参与动画 —— 它保证
+ * 任何一帧都认得出"就是这张"。另外**谷底那一档必须也够亮**: 第一版把谷底设成
+ * 跟原来差不多淡的光晕, 定格截图一看, 等于有一半时间是"没加效果"的样子,
+ * 所以两档只在"明显 / 更明显"之间起伏, 不再是"看不见 → 明显"。
+ *
+ * 两端 box-shadow 的**层数与顺序必须一致**(都是"内描边 + 外发光"两层),
+ * 否则列表长度不同, 浏览器不做插值, 呼吸会退化成硬跳。
+ */
+@keyframes tv-lastviewed-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 2px var(--accent2-glow-dim) inset, 0 0 10px var(--accent2-glow-dim);
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--accent2-glow) inset, 0 0 18px var(--accent2-glow);
+  }
+}
 .card.last-viewed {
   border-color: var(--accent2);
-  box-shadow: 0 0 0 2px var(--accent2-soft) inset, 0 0 10px rgba(126, 231, 135, .22);
+  /* 这一行的 box-shadow 是**兜底**: 动画一旦不生效(旧内核 / 被下面的 media query
+   * 关掉)也还有静态光晕, 不至于退回"只有一圈细边"。给的是谷底那一档 */
+  box-shadow: 0 0 0 2px var(--accent2-glow-dim) inset, 0 0 10px var(--accent2-glow-dim);
+  animation: tv-lastviewed-breathe 1.8s ease-in-out infinite;
 }
 .card.last-viewed:hover { border-color: var(--accent2); }
+
+/* 系统开了"减少动态效果"就别呼吸了 —— 只留静态绿框。
+ * 定位能力一点不丢(靠 border-color + 兜底光晕), 只是不动。 */
+@media (prefers-reduced-motion: reduce) {
+  .card.last-viewed { animation: none; }
+}
 
 /* 失效收藏: 整卡去色 + 角标, 记录保留(找回/还原后自动恢复正常显示) */
 .card.is-missing { opacity: .45; }

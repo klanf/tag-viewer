@@ -27,6 +27,13 @@
   --accent-soft: rgba(77, 163, 255, .14);
   --accent2: #7ee787;
   --accent2-soft: rgba(126, 231, 135, .14);
+  /* 「上次看过的那张」绿框的呼吸光晕, 两档:
+   * glow = 峰值, glow-dim = 谷底。
+   * 谷底**不能太淡** —— 呼吸的谷底要是掉回"只有一圈细边", 那就等于有一半时间
+   * 停在不显眼的状态(实测截图确认过)。所以两档都明显, 只在"明显/更明显"之间起伏。
+   * 深色底上可以直接用亮绿, 越亮越抓眼 */
+  --accent2-glow: rgba(126, 231, 135, .6);
+  --accent2-glow-dim: rgba(126, 231, 135, .3);
   --danger: #ff7b72;
   --danger-soft: rgba(255, 123, 114, .14);
   --warn: #ffb454;
@@ -84,6 +91,10 @@ html[data-theme="light"] {
   --accent-soft: rgba(31, 111, 208, .12);
   --accent2: #1f9d55;
   --accent2-soft: rgba(31, 157, 85, .12);
+  /* 同上: 浅色底上必须换成本主题的暗绿 ——
+   * 深色那支亮绿(#7ee787)铺在白底上几乎看不见 */
+  --accent2-glow: rgba(31, 157, 85, .45);
+  --accent2-glow-dim: rgba(31, 157, 85, .26);
   --danger: #d9483b;
   --danger-soft: rgba(217, 72, 59, .12);
   --warn: #b87514;

@@ -4,10 +4,16 @@
  * 完整断言在 scripts/e2e.mjs; 这个脚本用于改完代码后快速回看, 免得跑几分钟的全量。
  *
  * 用法: node scripts/smoke.mjs [--keep] [--route=/sources] [--sel=.source-view]
+ *                               [--eval="<js>"] [--name=<截图名>]
  *
  * `--route` 定点截某个视图(默认截首页)。这是 e2e 之外的补充手段:
  * e2e 的截图对**图片网格这类重页面**会卡满 60s 超时(本机实测),
  * 而冒烟只起一个实例、只截一张, 拿来给单个视图留档更稳。
+ *
+ * `--eval` 在截图前跑一段 JS(里面可以 await) —— 有些效果得先"制造状态"才截得到,
+ * 例如网格上的绿框(.card.last-viewed): 得先开一张图、再关掉光箱它才会出现。
+ * 用法上注意 shell 转义: 整段用双引号包住, JS 内部的字符串统一用单引号。
+ *   npm run smoke -- --eval="document.querySelector('.grid .card').click(); await new Promise(r=>setTimeout(r,1200)); document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await new Promise(r=>setTimeout(r,900)); return document.querySelectorAll('.card.last-viewed').length" --name=hl
  */
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -19,6 +25,8 @@ const KEEP = process.argv.includes('--keep')
 const arg = (name) => (process.argv.find((a) => a.startsWith(`--${name}=`)) || '').slice(name.length + 3)
 const ROUTE = arg('route')          // 例如 /sources; 空 = 首页
 const SEL = arg('sel')              // 等这个选择器出现再截, 例如 .source-view
+const PRE_EVAL = arg('eval')        // 截图前跑的自定义 JS(见文件头说明)
+const NAME = arg('name')            // 截图文件名(不带 .png); 空则按 route 派生
 
 async function main() {
   const work = ensureWorkDir()
@@ -143,6 +151,13 @@ async function main() {
         return !!btn
       `)
     }
+
+    if (PRE_EVAL) {
+      // 截图前先把状态摆好 —— 见文件头对 --eval 的说明
+      const r = await evalJs(PRE_EVAL)
+      console.log('[smoke] --eval 返回:', JSON.stringify(r))
+    }
+
     const info = await evalJs(`
       const out = {
         hash: location.hash,
@@ -183,9 +198,11 @@ async function main() {
     } else {
       console.log('[smoke] 页面无错误/警告')
     }
-    const shotName = ROUTE
-      ? `rt-${ROUTE.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.png`
-      : '00-smoke.png'
+    const shotName = NAME
+      ? `${NAME}.png`
+      : (ROUTE
+        ? `rt-${ROUTE.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.png`
+        : '00-smoke.png')
     const shot = await send('Page.captureScreenshot', { format: 'png' })
     fs.mkdirSync(SHOTS, { recursive: true })
     fs.writeFileSync(path.join(SHOTS, shotName), Buffer.from(shot.data, 'base64'))
