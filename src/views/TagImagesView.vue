@@ -67,16 +67,33 @@ watch(() => route.params.tag, (v) => {
 /** 回上一级: 标签列表。用 push 而不是 back —— 深链直接进来时 history 里没有"上一页" */
 function backToTags() { router.push('/tags') }
 
-/* 子页面 -> 父页面: 浮动导航的「返回」固定回标签列表。
- * 不接管的话它会 router.back() 到"上一个路由" —— 从首页光箱点进来就是回首页,
- * 深链进来甚至没得退, 与"这是标签列表的下一级"这个直觉不符。
+/**
+ * 智能返回(2026-09-20 用户需求): 从哪来回哪去, 不再固定回标签列表。
+ *   · 正常跳进来  -> router.back() 回来源页; 若是从**光箱**点标签跳过来的
+ *     (takeJump 有记忆), 回去之后把光箱恢复出来, 定位到刚才那张图(翻页列表也在)
+ *   · 深链直接进来 -> history 里没有上一页, 退回标签列表
+ * 面包屑「全部标签」和「← 返回标签列表」按钮保持字面行为不变 ——
+ * 它们明说了去哪; 这里只改"返回"这个动作的语义。
+ */
+function smartBack() {
+  const j = lb.takeJump(tag.value)
+  if (window.history.state?.back != null) {
+    router.back()
+    // 等来源页渲染回来再把光箱拉起 —— 立即开会被路由切换的渲染覆盖
+    if (j) setTimeout(() => { lb.open(j.imgPath, { list: j.list || [j.imgPath] }) }, 180)
+  } else {
+    backToTags()
+  }
+}
+
+/* 子页面 -> 返回: 交给 smartBack(见上)。
  *
  * **必须判当前路由**: 本视图在 keep-alive 白名单里, 注册的处理器在切走之后
  * 依然留在栈上(useFloatBack 只在真正卸载时注销)。无条件返回 true 就会把别的
  * 页面(如扫描页的二级)的返回抢过来, 表现是"在别的页面按返回, 结果跳去标签列表"。 */
 useFloatBack(() => {
   if (route.name !== 'tag-images') return false
-  backToTags()
+  smartBack()
   return true
 })
 

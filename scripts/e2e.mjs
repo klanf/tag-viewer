@@ -440,26 +440,52 @@ async function main() {
         chars: rows,
         want,
         hops,
-        copyBtns: __t.count('.lightbox .lb-copy-row .tv-btn'),
+        copyBtns: __t.count('.lightbox .lb-copy-row button'),
+        charPills: __t.count('.lightbox .lb-meta-row .pill.k-char'),
+        cartIcons: __t.count('.lightbox .lb-meta-row .pill .ct'),
         banned: __t.count('.lightbox .lb-tags .pill.banned'),
+        actsMw: (() => {
+          const el = document.querySelector('.lightbox .lb-tags .pill:not(.banned) .acts')
+          return el ? getComputedStyle(el).maxWidth : 'none'
+        })(),
+        bannedActsMw: (() => {
+          const el = document.querySelector('.lightbox .lb-tags .pill.banned .acts')
+          return el ? getComputedStyle(el).maxWidth : 'none'
+        })(),
         navs: __t.count('.lightbox .lb-nav'),
       }
     `
     const lb = await waitFor(cdp, LB_PROBE, { label: 'lightbox 标签', timeout: 45000 })
     check('大图预览: 标签 pill 已渲染', lb.tags > 0, `${lb.tags} 个`)
-    check('大图预览: 4 个复制/收藏按钮', lb.copyBtns === 4, `实际 ${lb.copyBtns}`)
+    check('大图预览: 复制拆成 主按钮+箭头, 加收藏共 3 个按钮', lb.copyBtns === 3, `实际 ${lb.copyBtns}`)
     check('大图预览: 列表里可翻页(随机序也能定位)', lb.navs === 2, `${lb.navs} 个箭头`)
     check('大图预览: 角色/系列区渲染数 == 数据里的项数', lb.want > 0 && lb.chars >= 1,
       `数据 ${lb.want} 项 / 渲染 ${lb.chars} 行 · 翻了 ${lb.hops} 张 · ${lb.tags} 个标签`)
+    check('大图预览: 角色 pill 上挂着 🛒 购物车图标(2026-09-20 需求)',
+      lb.charPills > 0 && lb.cartIcons === lb.charPills,
+      `角色 pill ${lb.charPills} 个 · 🛒 ${lb.cartIcons} 个`)
+    check('大图预览: 悬停动作组默认收拢(不悬停时不留空白, 2026-09-20 需求)',
+      lb.actsMw === '0px', `max-width=${lb.actsMw}`)
+    check('大图预览: 已 ban pill 的动作组常驻展开(🚫 不消失; 本图无 banned 则视为满足)',
+      lb.banned === 0 || (lb.bannedActsMw !== '0px' && lb.bannedActsMw !== 'none'),
+      `banned=${lb.banned} · max-width=${lb.bannedActsMw}`)
     await cdp.shot('02-lightbox')
 
-    /* 复制按钮真的写进剪贴板(用 main 进程读回来核对) */
+    /* 复制下拉真的能切到"去ban"并复制(用 main 进程读剪贴板核对):
+     * 2026-09-20 起三个复制按钮收成 主按钮+箭头菜单, 点菜单项 = 切模式并立即复制。 */
     const clip = await cdp.eval(`
-      __t.click('.lightbox .lb-copy-row .tv-btn', 1)   // 去ban
-      await new Promise(r => setTimeout(r, 400))
+      __t.click('.lightbox .lb-copy-row .cs-arrow')
+      await new Promise(r => setTimeout(r, 350))
+      const mi = [...document.querySelectorAll('.lightbox .cs-menu .mi')]
+        .find((e) => /去ban/.test(e.textContent))
+      if (!mi) return { err: '菜单里没有去ban项', items: [...document.querySelectorAll('.lightbox .cs-menu .mi')].map((e) => e.textContent.trim()) }
+      mi.click()
+      await new Promise(r => setTimeout(r, 500))
       return await window.tv.invoke('clipboard:write', { text: '' })
     `)
-    check('复制动作无异常', !!clip?.ok, JSON.stringify(clip))
+    check('复制下拉: 菜单切到去ban并复制成功', !!clip?.ok && !clip?.err, JSON.stringify(clip).slice(0, 160))
+    check('复制下拉: 菜单项选中后成为主按钮的当前模式',
+      (await cdp.eval(`return __t.text('.lightbox .cs-main')`)).includes('去ban'), '')
 
     await cdp.eval(`document.querySelector('.lightbox .lb-close').click(); return true`)
     check('大图预览可关闭', !(await cdp.eval(`return !!document.querySelector('.lightbox')`)))
@@ -1663,6 +1689,30 @@ async function main() {
     check('标签跳转: 子页面确实查出了图(不是空列表)',
       Number(String(tagJump.total).replace(/[^0-9]/g, '') || 0) > 0, `${tagJump.total} 条`)
 
+    /* 浮动返回 = 回来源页 + **把光箱恢复出来**(2026-09-20 用户需求):
+     * 这一段就是从首页光箱点标签跳过来的, 所以按浮动导航的「←」应该回到首页,
+     * 且光箱重新打开、停在当时那张图上。 */
+    const lbRestore = await cdp.eval(`
+      const fbtn = document.querySelector('.float-nav .fbtn')
+      if (!fbtn) return { err: '浮动返回键没渲染' }
+      fbtn.click()
+      await new Promise(r => setTimeout(r, 1400))
+      return {
+        err: '',
+        hash: location.hash,
+        lbOpen: !!document.querySelector('.lightbox'),
+        lbPath: __t.text('.lightbox .lb-path'),
+      }
+    `)
+    check('标签跳转: 浮动返回回到来源页', !lbRestore.err && lbRestore.hash === '#/',
+      lbRestore.err || lbRestore.hash)
+    check('标签跳转: 返回后光箱恢复且停在当时那张图',
+      lbRestore.lbOpen === true && lbRestore.lbPath === tagJump.path,
+      `光箱=${lbRestore.lbOpen} · ${lbRestore.lbPath}`)
+    // 光箱还开着 —— 关掉再继续后面的深链测试
+    await cdp.eval(`document.querySelector('.lightbox .lb-close')?.click(); return true`)
+    await new Promise(r => setTimeout(r, 700))
+
     // 深链: 直接进子页面地址, 也要停在同一标签上(路由参数是唯一真源)
     const deep = await cdp.eval(`
       location.hash = '#/'
@@ -1730,6 +1780,17 @@ async function main() {
     check('标签跳转: 详情页点标签也是同一个入口',
       detJump.err === '' && detJump.crumb === detJump.tag && /#\/tags\/.+/.test(detJump.hash || ''),
       detJump.err ? `${detJump.err} · path=${detJump.path} · pill=${detJump.pills} · ${detJump.txt}` : `${detJump.crumb} · ${detJump.hash}`)
+
+    /* 详情页跳过来的返回: 回详情页, 且**不会**错误地拉起光箱
+     * (详情页不是光箱入口, 没有 jump 记忆可消费)。 */
+    const detBack = await cdp.eval(`
+      document.querySelector('.float-nav .fbtn')?.click()
+      await new Promise(r => setTimeout(r, 1400))
+      return { hash: decodeURIComponent(location.hash), onDetail: !!document.querySelector('.detail'), lbOpen: !!document.querySelector('.lightbox') }
+    `)
+    check('标签跳转: 详情页跳来的子页面按返回回到详情页(不拉起光箱)',
+      detBack.onDetail === true && detBack.lbOpen === false && detBack.hash.includes('/detail'),
+      `${detBack.hash} · 详情页=${detBack.onDetail} · 光箱=${detBack.lbOpen}`)
 
     await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
 

@@ -27,6 +27,8 @@ export const useCartStore = defineStore('cart', () => {
 
   const list = computed(() => Object.values(items.value))
   const count = computed(() => list.value.length)
+  /** 已入车的标签名集合(角色 pill 点 🛒 状态用) */
+  const keys = computed(() => Object.keys(items.value))
   /** 按加入时间倒序(旧数据没有 t 字段的排最后) */
   const ordered = computed(() => [...list.value].sort((a, b) => (b.t || 0) - (a.t || 0)))
 
@@ -96,7 +98,7 @@ export const useCartStore = defineStore('cart', () => {
   }
 
   return {
-    items, list, ordered, count, drawerOpen,
+    items, list, ordered, count, keys, drawerOpen,
     has, add, remove, toggle, replaceAll, clear, addMany,
     exportFile, checkout,
   }

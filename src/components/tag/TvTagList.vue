@@ -23,6 +23,12 @@ const props = defineProps({
   showBan: { type: Boolean, default: false },
   /** 每个 pill 上挂一个悬停显形的 📋 复制图标(点 pill 本体干别的时用) */
   copyable: { type: Boolean, default: false },
+  /**
+   * 角色 pill 上挂 🛒 购物车按钮(TvTagPill 内部只对角色 pill 生效)。
+   * cartTags = 当前已在购物车里的标签名数组, 用来点亮"已入车"状态。
+   */
+  cartable: { type: Boolean, default: false },
+  cartTags: { type: Array, default: () => [] },
   showCount: { type: Boolean, default: false },
   showZh: { type: Boolean, default: true },
   action: { type: String, default: 'copy' },
@@ -35,7 +41,7 @@ const props = defineProps({
   /** 每行高度上限, 超出滚动 */
   maxHeight: { type: String, default: '' },
 })
-const emit = defineEmits(['click', 'ban', 'copy', 'hover', 'leave'])
+const emit = defineEmits(['click', 'ban', 'copy', 'cart', 'hover', 'leave'])
 
 /** 归一化成统一对象 */
 const items = computed(() => {
@@ -87,6 +93,8 @@ const items = computed(() => {
       :ban-rule="it.banRule"
       :show-ban="showBan"
       :copyable="copyable"
+      :cartable="cartable"
+      :in-cart="cartTags.includes(it.tag)"
       :show-count="showCount && it.count !== null"
       :show-zh="showZh"
       :action="action"
@@ -94,6 +102,7 @@ const items = computed(() => {
       @click="(p) => emit('click', p)"
       @ban="(t) => emit('ban', t)"
       @copy="(t) => emit('copy', t)"
+      @cart="(t) => emit('cart', t)"
       @mouseenter="emit('hover', { tag: it.tag, zh: it.zh, event: $event })"
     />
     <div v-if="!items.length && emptyText" class="empty-inline">{{ emptyText }}</div>

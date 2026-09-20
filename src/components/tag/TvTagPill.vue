@@ -38,12 +38,18 @@ const props = defineProps({
    * 是**跳去该标签的图片列表**, 复制单个标签就靠这个图标(与 🚫 同一套交互)。
    */
   copyable: { type: Boolean, default: false },
+  /**
+   * 显示 🛒 购物车按钮(角色 pill 专用, 光箱/详情页)。
+   * inCart = 已在购物车里: 图标常驻高亮(与 banned 的常驻 🚫 同一套逻辑)。
+   */
+  cartable: { type: Boolean, default: false },
+  inCart: { type: Boolean, default: false },
   size: { type: String, default: 'md' },        // sm | md
   active: { type: Boolean, default: false },
   /** 长标签: 超出宽度省略 */
   clip: { type: Boolean, default: false },
 })
-const emit = defineEmits(['click', 'ban', 'copy'])
+const emit = defineEmits(['click', 'ban', 'copy', 'cart'])
 
 const wild = computed(() => props.banned && props.banRule.includes('*'))
 
@@ -75,6 +81,7 @@ const banTitle = computed(() => {
 })
 
 const copyTitle = computed(() => `复制这个标签: ${props.tag}`)
+const cartTitle = computed(() => props.inCart ? `移出购物车: ${props.tag}` : `加入购物车: ${props.tag}`)
 
 function onClick(e) {
   emit('click', { tag: props.tag, event: e })
@@ -87,6 +94,10 @@ function onCopy(e) {
   e.stopPropagation()
   emit('copy', props.tag)
 }
+function onCart(e) {
+  e.stopPropagation()
+  emit('cart', props.tag)
+}
 </script>
 
 <template>
@@ -98,8 +109,12 @@ function onCopy(e) {
     <span class="en">{{ shownTag }}</span>
     <span v-if="showZh && zh" class="zh" :title="zh">{{ zh }}</span>
     <b v-if="showCount && count !== null" class="cnt">{{ count }}</b>
-    <i v-if="copyable" class="cp" :title="copyTitle" @click="onCopy">📋</i>
-    <i v-if="showBan" class="ban" :title="banTitle" @click="onBan">🚫</i>
+    <!-- 图标组: 平时整体收拢(max-width:0), 悬停时向右展开 —— 不再常驻占位留空档 -->
+    <span class="acts">
+      <i v-if="copyable" class="cp" :title="copyTitle" @click="onCopy">📋</i>
+      <i v-if="cartable && kind === 'char'" :class="['ct', { on: inCart }]" :title="cartTitle" @click="onCart">🛒</i>
+      <i v-if="showBan" class="ban" :title="banTitle" @click="onBan">🚫</i>
+    </span>
   </span>
 </template>
 
@@ -145,21 +160,44 @@ function onCopy(e) {
   text-decoration: line-through;
 }
 
-/* 📋 复制按钮: 与下面的 🚫 同一套交互(平时藏起来, 悬停才显形),
- * 只有"点 pill 本体是跳转"的地方才挂它, 免得和点击意图打架 */
-.cp {
-  font-style: normal; font-size: 10px; margin-left: 2px;
-  opacity: 0; cursor: pointer; transition: opacity var(--t-fast);
+/* ── 悬停动作组(📋 / 🛒 / 🚫) ─────────────────────────────
+ * 2026-09-20 用户反馈: 原来图标只用 opacity 藏, **空间一直占着**, 没悬停的 pill
+ * 右边一大截空白。改成整个图标组收拢(max-width: 0 + opacity: 0), 悬停时向右
+ * 展开露出来 —— pill 视觉上"长"出一截, 没悬停时干干净净。
+ * max-width 的展开上限给足 3 个图标的量: 过渡会先走 max-width, 到内容实际宽度
+ * 就停住(inline-flex 收缩到内容), 不会出现过冲空档。 */
+.acts {
+  display: inline-flex; align-items: center; gap: 2px;
+  max-width: 0; opacity: 0; overflow: hidden;
+  transition: max-width .18s ease-out, opacity .18s ease-out, margin-left .18s ease-out;
+  /* margin-left 用负值抵掉 pill 自身 gap 在收拢态留下的 6px 空隙,
+   * 展开后回到 0 —— 否则没悬停时文字右边始终空一小块 */
+  margin-left: -6px;
 }
-.pill:hover .cp { opacity: .5; }
+.pill:hover .acts, .pill.banned .acts, .pill:focus-within .acts,
+.pill:has(.ct.on) .acts {
+  max-width: 72px; opacity: 1; margin-left: 0;
+}
+
+/* 📋 复制按钮: 与 🚫 同一套交互(悬停展开), 只有"点 pill 本体是跳转"的地方才挂 */
+.cp {
+  font-style: normal; font-size: 10px;
+  opacity: .5; cursor: pointer; transition: opacity var(--t-fast);
+}
 .cp:hover { opacity: 1 !important; }
 
-/* 🚫 按钮: 平时藏起来, 悬停才显形, 已 ban 时常驻 —— 和旧版手感一致 */
-.ban {
-  font-style: normal; font-size: 10px; margin-left: 2px;
-  opacity: 0; cursor: pointer; transition: opacity var(--t-fast);
+/* 🛒 购物车(角色 pill): 已入车时常驻高亮, 和 banned 的常驻 🚫 同一套逻辑 */
+.ct {
+  font-style: normal; font-size: 10px;
+  opacity: .5; cursor: pointer; transition: opacity var(--t-fast);
 }
-.pill:hover .ban { opacity: .5; }
-.pill.banned .ban { opacity: 1; }
+.ct.on { opacity: 1; }
+.ct:hover { opacity: 1 !important; }
+
+/* 🚫 按钮: 悬停展开才显形, 已 ban 时常驻(整组随 .pill.banned 展开) */
+.ban {
+  font-style: normal; font-size: 10px;
+  opacity: .5; cursor: pointer; transition: opacity var(--t-fast);
+}
 .ban:hover { opacity: 1 !important; }
 </style>

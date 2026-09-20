@@ -14,9 +14,11 @@ import TvButton from '@/components/base/TvButton.vue'
 import TvCheckbox from '@/components/base/TvCheckbox.vue'
 import TvState from '@/components/base/TvState.vue'
 import TvTagList from '@/components/tag/TvTagList.vue'
+import TvCopySplit from '@/components/tag/TvCopySplit.vue'
 import TvImage from '@/components/base/TvImage.vue'
 import { usePrefsStore } from '@/stores/usePrefsStore.js'
 import { useFavStore } from '@/stores/useFavStore.js'
+import { useCharCart } from '@/composables/useCharCart.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { api } from '@/utils/api.js'
 import { normTags } from '@/utils/format.js'
@@ -26,6 +28,7 @@ const router = useRouter()
 const prefs = usePrefsStore()
 const fav = useFavStore()
 const ui = useUiStore()
+const charCart = useCharCart()
 
 const path = computed(() => String(route.query.path || ''))
 const data = ref(null)
@@ -120,6 +123,17 @@ function gotoTag(tag) {
   if (!tag) return
   router.push({ name: 'tag-images', params: { tag } })
 }
+
+/* 复制模式下拉(2026-09-20, 与光箱同一组件): 菜单项点击 = 切模式并立即复制 */
+const copyModes = [
+  { key: 'all', label: '全部标签', menu: '复制全部标签', title: '复制这张图的全部标签' },
+  { key: 'noban', label: '去ban复制', menu: '去ban 复制(剔除被 ban 的, 与导出一致)', title: '复制标签, 剔除被 ban 的(与导出一致)' },
+]
+const copyMode = ref('all')
+function runCopy(key) {
+  if (key === 'noban') copyNoBan()
+  else copyAll()
+}
 </script>
 
 <template>
@@ -146,10 +160,11 @@ function gotoTag(tag) {
       <div class="side">
         <div class="panel">
           <div class="btns">
-            <TvButton variant="primary" @click="copyAll">📋 复制全部标签</TvButton>
-            <TvButton variant="secondary" title="复制标签, 剔除被 ban 的(与导出一致)" @click="copyNoBan">
-              🚫 去ban复制
-            </TvButton>
+            <TvCopySplit
+              v-model="copyMode"
+              :modes="copyModes"
+              @run="runCopy"
+            />
           </div>
 
           <div class="checks">
@@ -169,11 +184,14 @@ function gotoTag(tag) {
               :ban-map="data?.ban_map || {}"
               show-ban
               copyable
+              cartable
+              :cart-tags="charCart.cart.keys"
               action="filter"
               size="sm"
               max-height="60vh"
               @click="({ tag }) => gotoTag(tag)"
               @copy="(tag) => ui.copy(tag)"
+              @cart="(tag) => charCart.toggle(tag, zhMap[tag] || '')"
               @ban="toggleBan"
               @hover="({ zh, event }) => ui.showTip(zh, event)"
               @leave="ui.hideTip"

@@ -24,7 +24,7 @@
  *   · ← / → / Esc          -> 翻页 / 关闭
  *   · 底部居中显示 "第 n / 共 m 张", 可点箭头
  */
-import { computed, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import TvButton from '../base/TvButton.vue'
 import TvTagList from '../tag/TvTagList.vue'
@@ -35,11 +35,14 @@ import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useImageCtxMenu } from '@/composables/useImageCtxMenu.js'
 import { useTrash } from '@/composables/useTrash.js'
+import { useCharCart } from '@/composables/useCharCart.js'
+import TvCopySplit from '../tag/TvCopySplit.vue'
 import { fileUrl } from '@/utils/api.js'
 
 const lb = useLightboxStore()
 const ui = useUiStore()
 const router = useRouter()
+const charCart = useCharCart()
 
 /* tag 详情页(大图)同样支持右键菜单(复制/收藏/删除等);
    Del 键删除当前图: 走 useTrash 确认流程(可关提示)。
@@ -87,6 +90,20 @@ const noMeta = computed(() => !chars.value.length && !series.value.length)
 
 function copyTag(tag) { ui.copy(tag) }
 
+/* 复制模式下拉(2026-09-20 用户需求): 三个复制按钮收成一个"主按钮+箭头菜单",
+ * 菜单里选哪个就立即按那个模式复制, 并把它设为主按钮的当前模式。 */
+const copyModes = [
+  { key: 'plain', label: '全部标签', menu: '复制全部标签(剔角色/系列)', title: '只复制普通标签(剔除角色/系列)' },
+  { key: 'noban', label: '去ban', menu: '去ban 复制(与导出一致)', title: '复制普通标签, 剔除被 ban 的(与导出一致)' },
+  { key: 'raw', label: '含角色', menu: '复制完整标签(含角色/系列)', title: '复制完整标签(含角色/系列)' },
+]
+const copyMode = ref('plain')
+function runCopy(key) {
+  if (key === 'plain') lb.copyPlain()
+  else if (key === 'noban') lb.copyNoBan()
+  else lb.copyRaw()
+}
+
 /**
  * 点标签 = 去该标签的图片**子页面**(与标签页里点标签是同一个入口)。
  *
@@ -98,6 +115,7 @@ function copyTag(tag) { ui.copy(tag) }
 function gotoTag(tag) {
   if (!tag) return
   const external = !!lb.data?.external
+  lb.rememberJump(tag)   // 返回键要恢复光箱(定位到这张图 + 翻页列表), 先记下
   lb.close()
   router.push({ name: 'tag-images', params: { tag } })
   if (external) {
@@ -204,15 +222,11 @@ function preheat() {
 
         <div class="lb-side" @click.stop>
           <div class="lb-copy-row">
-            <TvButton size="sm" variant="primary" title="只复制普通标签(剔除角色/系列)" @click="lb.copyPlain()">
-              📋 复制全部标签
-            </TvButton>
-            <TvButton size="sm" variant="secondary" title="复制普通标签, 剔除被 ban 的(与导出一致)" @click="lb.copyNoBan()">
-              🚫 去ban
-            </TvButton>
-            <TvButton size="sm" variant="secondary" title="复制完整标签(含角色/系列)" @click="lb.copyRaw()">
-              含角色
-            </TvButton>
+            <TvCopySplit
+              v-model="copyMode"
+              :modes="copyModes"
+              @run="runCopy"
+            />
             <TvButton
               size="sm"
               variant="fav"
@@ -265,8 +279,11 @@ function preheat() {
                   size="sm"
                   action="filter"
                   copyable
+                  cartable
+                  :in-cart="charCart.cart.has(c.tag)"
                   @click="gotoTag(c.tag)"
                   @copy="copyTag"
+                  @cart="(t) => charCart.toggle(t, c.zh)"
                   @mouseenter="ui.showTip(c.zh, $event)"
                   @mousemove="ui.moveTip($event)"
                   @mouseleave="ui.hideTip()"

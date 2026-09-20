@@ -250,13 +250,39 @@ export const useLightboxStore = defineStore('lightbox', () => {
     window.addEventListener('tv:moved', onGone)
   }
 
+  /* ---------------- 「点标签跳子页面」的记忆 ----------------
+   * 2026-09-20 用户需求: 在光箱里点标签跳去 /tags/:tag 后, 按浮动返回键要
+   * **回到刚才的页面并把光箱恢复出来**(定位到刚才那张图, 翻页列表也在)。
+   * 光箱跳走时必须先 close()(不然 Teleport 的遮罩盖在新页面上), 状态就没了 ——
+   * 所以跳走前把"当前图 + 翻页列表"记在这里, 子页面的返回键回来时取走恢复。
+   * 记忆带 tag 名: 子页面只消费"自己这个标签"的跳转记忆, 手动导航到别的
+   * 标签子页面按返回不会错误地拉起光箱。模块级变量, 不进 localStorage ——
+   * 刷新后丢了就退化为"只回页面不恢复", 无害。 */
+  let lastJump = null
+
+  /** 光箱点标签跳走之前调: 记住当前图和翻页列表 */
+  function rememberJump(tag) {
+    lastJump = {
+      tag,
+      imgPath: path.value,
+      list: list.value.length > 1 ? [...list.value] : null,
+    }
+  }
+
+  /** 子页面返回时调: 是从这个标签跳过来的才给, 并清掉(一次性) */
+  function takeJump(tag) {
+    if (!lastJump || lastJump.tag !== tag) return null
+    const j = lastJump
+    lastJump = null
+    return j
+  }
+
   function close() {
     visible.value = false
     data.value = null
     path.value = ''
     list.value = []
-    index.value = -1
-    // gonePaths 故意不清 —— 见它的注释: 清了会让"收藏页保留了已删记录"那条链路再撞 404
+    index.value = -1    // gonePaths 故意不清 —— 见它的注释: 清了会让"收藏页保留了已删记录"那条链路再撞 404
     // lastPath 故意不清(见上面的注释)。这里再帮一把:
     //   1) 广播 'tv:lb-closed' —— 有的视图是累加分页/无限滚动, 高亮那张可能还没
     //      渲染出来, 视图自己决定要不要把分页补齐(ScanView 就补);
@@ -356,6 +382,7 @@ export const useLightboxStore = defineStore('lightbox', () => {
     sortedTags, needBg, bgAppend, isFav, bannedTags,
     list, index, count, pos, canPrev, canNext, inList, lastPath, scrollPending,
     open, close, next, prev, go, jump, setList, removeCurrent, isGone,
+    rememberJump, takeJump,
     copyPlain, copyNoBan, copyRaw, toggleBan, unbanAll, toggleFav, maybeAddBg,
   }
 })
