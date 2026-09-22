@@ -1021,6 +1021,115 @@ async function main() {
       presetDel?.removed === 1 && afterDel.n === cleaned.left,
       `删 ${presetDel?.removed} · 剩 ${afterDel.n}`)
 
+    /* ---------------- 7.6 导出预设: 走**真实界面**存一次 (2026-09-22) ----------------
+     * 为什么单开一节: 上面那些断言全是拿**纯对象**直接打 window.tv.invoke,
+     * 压根不经过 Vue 的响应式状态 —— 于是"在界面里点保存"这条路坏了整整一轮也没被测出来。
+     *
+     * 实测症状(用户报障「导出预设的时候报错的」): 点「💾 创建预设」弹
+     *   `An object could not be cloned.`, 一条也存不进去。
+     * 根因: `editing.value.params` / `presets.value[i].params` 都是 reactive **嵌套代理**,
+     *   而 Proxy 过不了结构化克隆 —— 且是在 contextBridge 那层就抛(拿未授权 channel 传纯对象
+     *   能拿到我们自己的报错, 传 Proxy 则只有克隆失败), 所以 preload 里补救已经太晚。
+     *   修法在 src/utils/api.js 的 `toPlain()`(出口处统一拆代理)。
+     * 这一节就是它的回归防线, 同时覆盖列表上那个 auto 开关(另一条同类路径)。
+     */
+    const uiPresetName = 'e2e-ui-预设'
+    const uiSave = await cdp.eval(`
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      const pick = (txt) => [...document.querySelectorAll('.mask .box input.tv-input')]
+        .find(i => (i.placeholder || '').includes(txt))
+      const setV = (el, v) => {   // Vue 的 v-model 认 input 事件, 直接改 value 不触发
+        const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        s.call(el, v)
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+      }
+      const out = { opened: false, form: false }
+      const open = [...document.querySelectorAll('.btns .tv-btn')].find(b => b.textContent.includes('预设导出'))
+      if (!open) return out
+      open.click(); await sleep(800); out.opened = !!document.querySelector('.mask .box')
+      const add = [...document.querySelectorAll('.mask .box .tv-btn')].find(b => b.textContent.includes('新建预设'))
+      if (!add) return out
+      add.click(); await sleep(500); out.form = !!document.querySelector('.mask .box .frow')
+      const nameEl = pick('ComfyUI')
+      const dirEl = pick('目标目录')
+      out.foundName = !!nameEl; out.foundDir = !!dirEl
+      if (!nameEl || !dirEl) return out
+      setV(nameEl, ${JSON.stringify(uiPresetName)})
+      setV(dirEl, ${JSON.stringify(EXPORT_DIR)})
+      await sleep(200)
+      const save = [...document.querySelectorAll('.mask .box .foot .tv-btn')]
+        .find(b => b.textContent.includes('创建预设'))
+      out.saveBtn = save ? save.textContent.trim() : ''
+      if (!save) return out
+      save.click(); await sleep(1600)
+      const errEl = document.querySelector('.mask .box .err')
+      out.formErr = errEl ? errEl.textContent.trim() : ''
+      out.backToList = !document.querySelector('.mask .box .frow')
+      out.rowNames = [...document.querySelectorAll('.mask .pname')].map(e => e.textContent.trim())
+      return out
+    `)
+    check('导出预设(界面): 前置条件 —— 弹窗打开、表单可填、找得到保存按钮',
+      uiSave.opened && uiSave.form && uiSave.foundName && uiSave.foundDir && !!uiSave.saveBtn,
+      `弹窗=${uiSave.opened} 表单=${uiSave.form} 名称框=${uiSave.foundName} 目录框=${uiSave.foundDir} 按钮=${uiSave.saveBtn || '无'}`)
+    /*
+     * 核心回归点: 这条以前会挂 —— 页面上会挂出红字
+     * `An object could not be cloned.` 且停在表单里(backToList=false)。
+     */
+    check('导出预设(界面): 点「创建预设」不报克隆错, 且回到列表',
+      uiSave.formErr === '' && uiSave.backToList === true,
+      uiSave.formErr ? `表单报错: ${uiSave.formErr}` : '表单无报错')
+    check('导出预设(界面): 新建的预设出现在列表里',
+      (uiSave.rowNames || []).includes(uiPresetName),
+      `列表=${(uiSave.rowNames || []).join('、') || '空'}`)
+
+    const uiSaved = await cdp.eval(`
+      const r = await window.tv.invoke('export:preset:list')
+      const p = r.presets.find(x => x.name === ${JSON.stringify(uiPresetName)})
+      if (!p) return null
+      const q = p.params || {}
+      return { id: p.id, auto: p.auto, dir: p.dir, file: p.file,
+        srcIsArr: Array.isArray(q.source), spaces: q.spaces, match: q.match, q: q.q }
+    `)
+    // 深拆代理最容易"顺手把数据也丢了"(比如把数组拆成普通对象), 所以逐字段验一遍
+    check('导出预设(界面): 参数快照完整落库(数组还是数组, 开关没被拆丢)',
+      !!uiSaved && uiSaved.srcIsArr === true && uiSaved.spaces === true
+      && uiSaved.match === 'contains' && uiSaved.dir === EXPORT_DIR,
+      JSON.stringify(uiSaved))
+
+    // 列表上的 auto 开关走的是另一条同类路径(`{ ...p, auto }`, 嵌套代理照旧)
+    const uiToggle = await cdp.eval(`
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      const row = [...document.querySelectorAll('.mask .prow')]
+        .find(e => e.textContent.includes(${JSON.stringify(uiPresetName)}))
+      if (!row) return { row: false }
+      const cb = row.querySelector('.auto-sw input')
+      if (!cb) return { row: true, cb: false }
+      const before = cb.checked
+      cb.click(); await sleep(1500)
+      const r = await window.tv.invoke('export:preset:list')
+      const p = r.presets.find(x => x.name === ${JSON.stringify(uiPresetName)})
+      const errEl = document.querySelector('.mask .box .err')
+      return { row: true, cb: true, before, after: p ? p.auto : null,
+        errText: errEl ? errEl.textContent.trim() : '' }
+    `)
+    check('导出预设(界面): 列表上的「变更后自动导出」开关能存回去',
+      uiToggle.row === true && uiToggle.cb === true && uiToggle.before === true
+      && uiToggle.after === false && uiToggle.errText === '',
+      `开关 ${uiToggle.before} → ${uiToggle.after}` + (uiToggle.errText ? ` · 报错 ${uiToggle.errText}` : ''))
+
+    const uiClean = await cdp.eval(`
+      const r = await window.tv.invoke('export:preset:list')
+      const p = r.presets.find(x => x.name === ${JSON.stringify(uiPresetName)})
+      if (!p) return { removed: 0 }
+      const d = await window.tv.invoke('export:preset:delete', { id: p.id })
+      const x = document.querySelector('.mask .x')
+      if (x) x.click()
+      const after = await window.tv.invoke('export:preset:list')
+      return { removed: d.removed, left: after.presets.length }
+    `)
+    check('导出预设(界面): 收尾 —— 删掉界面建的预设, 不给下一轮留残留',
+      uiClean.removed === 1, `删 ${uiClean.removed} · 剩 ${uiClean.left}`)
+
     /* ---------------- 8. 购物车 ---------------- */
     await cdp.eval(`__t.clickText('.hdr .nv', '购物车'); return true`)
     await waitFor(cdp, `__t.count('.ci') > 0`, { label: '购物车条目', timeout: 30000 })

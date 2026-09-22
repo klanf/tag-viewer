@@ -1,12 +1,14 @@
 /**
  * 渲染进程访问主进程的唯一入口
  * ============================
- * 所有后端调用都从这里出去。做了三件事:
+ * 所有后端调用都从这里出去。做了四件事:
  *  1. 包一层 Promise, 把主进程返回的 { error } 变成真正的 reject ——
  *     调用处就能用 try/catch, 不用每次判断返回值里有没有 error 字段。
  *  2. 保留一个浏览器降级: 万一在浏览器里打开(dist 目录直接双击), window.tv 不存在,
  *     给出明确的报错而不是 "undefined is not a function"。
  *  3. 图片 URL 构造集中在这里 —— 与主进程 imageproto.js 成对, 改一边必须改另一边。
+ *  4. 出口处统一 `toPlain()` 拆掉 Vue 的响应式代理 —— 否则一个 reactive 对象过桥
+ *     就是 `An object could not be cloned.`, 见 toPlain 的注释。
  */
 
 const tv = typeof window !== 'undefined' ? window.tv : null
@@ -24,13 +26,52 @@ export function fileUrl(path) {
 }
 
 /**
+ * 把载荷里的**响应式代理**拆成纯数据 —— 凡是要过桥的参数都得先过这里。
+ * ==================================================================
+ * 背景(2026-09-22 实测, 用户报「导出预设的时候报错」):
+ *   `ipcRenderer.invoke` 走结构化克隆, 而 **Proxy 一律克隆不了**。页面里把
+ *   Vue 的 reactive/ref 对象(或它**嵌套**的属性/数组)直接传过去, 就抛
+ *   `An object could not be cloned.` —— 而且实测是**在 contextBridge 那层就抛了**:
+ *   拿未授权的 channel 传纯对象能拿到我们自己的「未授权的 channel」,
+ *   传 Proxy 则只拿到克隆失败 —— 说明 preload 里那个白名单检查压根没轮到执行。
+ *   所以这道防线只能放在渲染进程这一侧, 放到 preload 已经太晚。
+ *
+ * 为什么"展开一层"救不了: `presets.value[i]` / `editing.value` 都是 reactive 代理,
+ *   `{ ...p }` 展开出来的 `params` 仍是**嵌套代理**, 里面 `params.source` 还是代理。
+ *
+ * 只做"去代理 + 复制成纯对象/数组", 其他类型原样交出去:
+ *   · Date / Map / Set / Buffer / TypedArray / 类实例 -> 不碰(结构化克隆本来就支持)
+ *   · 函数 / Symbol -> 不碰, 让它们照旧**响亮地报错**, 不在这里静默吞掉
+ * 用 WeakMap 兜住循环引用, 免得栈溢出。
+ */
+export function toPlain(v, seen = new WeakMap()) {
+  if (v === null || typeof v !== 'object') return v
+  // 裸传 ref 是常见手误, 而且 RefImpl 自带 dep/effect 链表 -> 克隆必炸。先取 .value。
+  if (v.__v_isRef === true) return toPlain(v.value, seen)
+  if (Array.isArray(v)) {
+    if (seen.has(v)) return seen.get(v)
+    const out = []
+    seen.set(v, out)
+    for (let i = 0; i < v.length; i++) out[i] = toPlain(v[i], seen)
+    return out
+  }
+  const proto = Object.getPrototypeOf(v)
+  if (proto !== Object.prototype && proto !== null) return v
+  if (seen.has(v)) return seen.get(v)
+  const out = {}
+  seen.set(v, out)
+  for (const k of Object.keys(v)) out[k] = toPlain(v[k], seen)
+  return out
+}
+
+/**
  * 调主进程。失败时 throw Error, message 是主进程给的错误文本。
  */
 export async function call(channel, payload) {
   if (!tv) {
     throw new Error('未在 Electron 中运行 —— 请用 npm start 启动应用, 不要直接打开 dist/index.html')
   }
-  const r = await tv.invoke(channel, payload)
+  const r = await tv.invoke(channel, toPlain(payload))
   if (r && typeof r === 'object' && r.error) {
     const err = new Error(r.error)
     err.code = r.code
