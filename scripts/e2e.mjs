@@ -1130,6 +1130,82 @@ async function main() {
     check('导出预设(界面): 收尾 —— 删掉界面建的预设, 不给下一轮留残留',
       uiClean.removed === 1, `删 ${uiClean.removed} · 剩 ${uiClean.left}`)
 
+    /*
+     * 首页动作区的分层结构: 搜索独占一行 / 导出做成分裂按钮 / 替换+预设导出降级成文字链。
+     *
+     * 为什么必须断言: 「导出(带路径)」原来是独立按钮, 改版后**只从分裂按钮的下拉里进得去** ——
+     * 谁顺手把那个菜单项删了, 这条 UI 路径就静默消失, 而别处一条断言都不会红。
+     *
+     * 这里刻意**不点**下拉里的两个导出项: 它们最终会走 dialog.showSaveDialog,
+     * 原生模态框在 e2e 里没人关得掉, 整轮直接挂死。带路径的导出语义由 selftest 覆盖,
+     * 这一节只保证「入口在、文案对、两个导出开关还绑着、展开不裁切」。
+     */
+    const homeBtns = await cdp.eval(`
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      const out = {}
+      const all = [...document.querySelectorAll('.btns .tv-btn')]
+      out.pathBtnGone = !all.some(b => b.textContent.includes('带路径'))
+      out.lnk = [...document.querySelectorAll('.btns .lnk .tv-btn')].map(b => b.textContent.trim())
+      out.tipLinks = document.querySelectorAll('.tip a').length
+
+      const left = document.querySelector('.left')
+      left.scrollTop = left.scrollHeight        // 动作区在表单底部, 不滚到底测不到几何
+      await sleep(300)
+      const caret = document.querySelector('.btns .caret')
+      out.caret = !!caret
+      if (!caret) { left.scrollTop = 0; return out }
+      caret.click(); await sleep(350)
+
+      const menu = document.querySelector('.btns .menu')
+      out.menuOpen = !!menu
+      if (!menu) { left.scrollTop = 0; return out }
+
+      out.items = [...menu.querySelectorAll('.mi .mt')].map(e => e.textContent.trim())
+      out.checks = [...menu.querySelectorAll('.mopt .tv-check')].map(e => e.textContent.trim())
+      out.emptyMenuBtn = [...menu.querySelectorAll('.mi .mh')].every(e => e.textContent.trim().length > 0)
+
+      const box = menu.getBoundingClientRect()
+      const row = document.querySelectorAll('.btns .brow')[1].getBoundingClientRect()
+      const lr = left.getBoundingClientRect()
+      out.sameWidthAsRow = Math.abs(box.width - row.width) < 1.5
+      out.insidePanel = box.top >= lr.top - 0.5 && box.bottom <= lr.bottom + 0.5
+        && box.left >= lr.left - 0.5 && box.right <= lr.right + 0.5
+      out.inViewport = box.top >= 0 && box.bottom <= window.innerHeight
+      out.caretRotated = !!menu.parentElement.querySelector('.chev.up')
+
+      const cbs = [...menu.querySelectorAll('.mopt .tv-check')]
+      out.cbBefore = cbs.map(e => e.classList.contains('on'))
+      cbs.forEach((e) => e.click()); await sleep(300)
+      out.cbAfter = cbs.map(e => e.classList.contains('on'))
+
+      caret.click(); await sleep(300)            // 收尾: 关下拉, 别让遮罩挡住后面的步骤
+      out.menuClosed = !document.querySelector('.btns .menu')
+      left.scrollTop = 0
+      return out
+    `)
+    check('首页动作区: 「导出(带路径)」不再占独立按钮, 已并入下拉',
+      homeBtns.pathBtnGone === true, `文字链 = ${(homeBtns.lnk || []).join('、')}`)
+    check('首页动作区: 分裂按钮下拉含两条导出方式 + 两个导出选项',
+      homeBtns.caret === true && homeBtns.menuOpen === true
+      && (homeBtns.items || []).length === 2
+      && (homeBtns.items || []).join('').includes('带图片路径')
+      && (homeBtns.checks || []).length === 2 && homeBtns.emptyMenuBtn === true,
+      `项 = ${(homeBtns.items || []).join(' / ')} · 选项 = ${(homeBtns.checks || []).join(' / ')}`)
+    check('首页动作区: 下拉与整排同宽且不被侧栏裁切',
+      homeBtns.sameWidthAsRow === true && homeBtns.insidePanel === true && homeBtns.inViewport === true,
+      `同宽=${homeBtns.sameWidthAsRow} 在侧栏内=${homeBtns.insidePanel} 在视口内=${homeBtns.inViewport}`)
+    check('首页动作区: 箭头随展开态翻转(菜单是向上开的)',
+      homeBtns.caretRotated === true, `chev.up = ${homeBtns.caretRotated}`)
+    check('首页动作区: 两个导出开关挪进下拉后仍能切换',
+      (homeBtns.cbAfter || []).length === 2
+      && (homeBtns.cbAfter || []).every((v, i) => v !== (homeBtns.cbBefore || [])[i]),
+      `${JSON.stringify(homeBtns.cbBefore)} → ${JSON.stringify(homeBtns.cbAfter)}`)
+    check('首页动作区: 替换/预设导出降级为文字链, 且关下拉后不留遮罩',
+      (homeBtns.lnk || []).length === 2 && homeBtns.lnk.some((t) => t.includes('替换'))
+      && homeBtns.lnk.some((t) => t.includes('预设导出'))
+      && homeBtns.menuClosed === true && homeBtns.tipLinks === 0,
+      `${(homeBtns.lnk || []).join('、')} · menuClosed=${homeBtns.menuClosed} · tip 里的链接数=${homeBtns.tipLinks}`)
+
     /* ---------------- 8. 购物车 ---------------- */
     await cdp.eval(`__t.clickText('.hdr .nv', '购物车'); return true`)
     await waitFor(cdp, `__t.count('.ci') > 0`, { label: '购物车条目', timeout: 30000 })

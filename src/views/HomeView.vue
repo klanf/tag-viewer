@@ -62,6 +62,7 @@ const statsLoading = ref(false)
 const showBlacklist = ref(false)
 const showReplace = ref(false)
 const showPresets = ref(false)
+const exportMenu = ref(false)      // 「⬇ 导出标签 ▾」下拉是否展开
 const autoPresetCount = ref(0)     // 开了「黑名单变更后自动导出」的预设数(按钮上显示)
 const exporting = ref(0)      // 0=空闲 1=纯标签 2=带路径
 const stripCharExport = ref(true)  // 导出时剔除角色/系列标签(含无括号角色, 走角色库)
@@ -207,6 +208,15 @@ async function doExport(withPath) {
   }
 }
 
+/**
+ * 下拉里点了某个导出变体: 先收起菜单再导出。
+ * 悬浮菜单正好压在那排按钮上, 不收起来就看不到"正在导出"的转圈反馈。
+ */
+function pickExport(withPath) {
+  exportMenu.value = false
+  return doExport(withPath)
+}
+
 /* ---------------- 收藏 ---------------- */
 /* 收藏按钮现在发整个 item —— tags 存进收藏记录当快照(收藏页要用) */
 function toggleFav(item) {
@@ -315,16 +325,6 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 
         <div class="checks">
           <TvCheckbox v-model="excludeChar" label="过滤角色标签(含括号的 xxx_(系列))" />
-          <TvCheckbox
-            v-model="stripCharExport"
-            label="⬇ 导出剔除角色/系列标签"
-            title="导出结果里去掉角色标签(含 higuchi_madoka 这类无括号写法, 由角色库识别)和裸系列标签; 生成提示词通常需要"
-          />
-          <TvCheckbox
-            v-model="prefs.bgAuto"
-            label="🌄 缺背景时补背景标签(导出/复制)"
-            title="标签组合里没有背景/场景标签时, 自动追加 scenery 等背景标签, 防止 AI 生图画出白底"
-          />
         </div>
 
         <div class="row">
@@ -344,23 +344,80 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
           />
         </div>
 
+        <!--
+          动作区分三层(改之前是 6 个等宽按钮摊成两排, 主次不分):
+            1. 搜索        —— 唯一的高频动作, 独占一行
+            2. 导出 + 黑名单 —— 导出做成分裂按钮(主键直接导出, ▾ 放"带路径"与两个导出选项);
+                              黑名单是 ban 循环入口, 留在明面上
+            3. 文字链      —— 替换/预设导出这类"进去配置"的入口, 降级成 ghost 小按钮
+          底部 tip 原本还挂着这三个入口的超链接, 与按钮完全重复, 已删;
+          说明文字改挂到各按钮的 title 上(悬停可见, 不再占版面)。
+        -->
         <div class="btns">
-          <TvButton variant="primary" @click="doSearch">🔍 搜索</TvButton>
-          <TvButton variant="secondary" :loading="exporting === 1" @click="doExport(false)">⬇ 导出标签</TvButton>
-          <TvButton variant="secondary" :loading="exporting === 2" @click="doExport(true)">⬇ 导出(带路径)</TvButton>
-          <TvButton variant="secondary" :title="presetTitle" @click="showPresets = true">
-            📤 预设导出<template v-if="autoPresetCount"> · 自动 {{ autoPresetCount }}</template>
-          </TvButton>
-          <TvButton variant="secondary" @click="showBlacklist = true">🚫 黑名单</TvButton>
-          <TvButton variant="secondary" @click="showReplace = true">🔁 替换</TvButton>
+          <div class="brow">
+            <TvButton variant="primary" @click="doSearch">🔍 搜索</TvButton>
+          </div>
+
+          <div class="brow">
+            <div class="split">
+              <TvButton :loading="exporting !== 0" @click="doExport(false)">⬇ 导出标签</TvButton>
+              <button
+                class="caret"
+                type="button"
+                :class="{ on: exportMenu }"
+                :aria-expanded="exportMenu ? 'true' : 'false'"
+                title="更多导出方式 / 导出选项"
+                @click="exportMenu = !exportMenu"
+              ><span class="chev" :class="{ up: exportMenu }">▾</span></button>
+            </div>
+
+            <TvButton title="导出时自动剔除黑名单里的标签" @click="showBlacklist = true">🚫 黑名单</TvButton>
+
+            <!--
+              菜单挂在**整排**上, 不挂在分裂按钮上 —— 按分裂按钮的宽度算只有半排宽,
+              两条说明文字和复选框 label 会立刻被挤成两三行(实测过)。
+            -->
+            <div v-if="exportMenu" class="menu-off" @click="exportMenu = false" />
+            <div v-if="exportMenu" class="menu">
+              <button class="mi" type="button" :disabled="exporting !== 0" @click="pickExport(false)">
+                <span class="mt">⬇ 导出标签</span>
+                <span class="mh">每行一组逗号分隔的标签</span>
+              </button>
+              <button class="mi" type="button" :disabled="exporting !== 0" @click="pickExport(true)">
+                <span class="mt">⬇ 导出（带图片路径）</span>
+                <span class="mh">每行末尾附上文件路径</span>
+              </button>
+              <div class="msep" />
+              <div class="mopt">
+                <TvCheckbox
+                  v-model="stripCharExport"
+                  label="导出剔除角色/系列标签"
+                  title="导出结果里去掉角色标签(含 higuchi_madoka 这类无括号写法, 由角色库识别)和裸系列标签; 生成提示词通常需要"
+                />
+              </div>
+              <div class="mopt">
+                <TvCheckbox
+                  v-model="prefs.bgAuto"
+                  label="缺背景时补背景标签"
+                  title="标签组合里没有背景/场景标签时, 自动追加 scenery 等背景标签, 防止 AI 生图画出白底"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="lnk">
+            <TvButton
+              variant="ghost"
+              size="sm"
+              title="导出时对标签应用替换规则"
+              @click="showReplace = true"
+            >🔁 替换规则</TvButton>
+            <TvButton variant="ghost" size="sm" :title="presetTitle" @click="showPresets = true">📤 预设导出</TvButton>
+            <span v-if="autoPresetCount" class="badge" :title="presetTitle">自动 {{ autoPresetCount }}</span>
+          </div>
         </div>
 
-        <div class="tip">
-          💡 筛选框留空 = 浏览全部图片 · 导出时自动剔除
-          <a href="#" @click.prevent="showBlacklist = true">黑名单</a>标签、应用
-          <a href="#" @click.prevent="showReplace = true">替换</a>规则 ·
-          <a href="#" @click.prevent="showPresets = true">预设导出</a>可让 ban 完自动导出
-        </div>
+        <div class="tip">💡 筛选框留空 = 浏览全部图片</div>
       </div>
     </aside>
 
@@ -444,8 +501,64 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 .row { display: flex; gap: 10px; margin-top: 4px; }
 .row > * { flex: 1; min-width: 0; }
 .checks { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
-.btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
-.btns :deep(.tv-btn) { flex: 1 1 auto; }
+/*
+ * 动作区。三层结构(搜索 / 导出+黑名单 / 文字链), 见模板里的注释。
+ * 原来是 `flex-wrap` 让 6 个按钮等宽对折, 谁高频谁低频完全看不出来。
+ */
+.btns { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+/* position: relative 是给导出菜单当定位上下文用的 —— 菜单要与整排同宽, 见模板注释 */
+.brow { position: relative; display: flex; gap: 6px; }
+.brow > * { flex: 1 1 0; min-width: 0; }
+
+/* 分裂按钮: 主键 = 直接导出, caret = 更多导出方式 + 导出选项 */
+.split { display: flex; min-width: 0; }
+.split :deep(.tv-btn) { flex: 1 1 auto; border-radius: var(--r-sm) 0 0 var(--r-sm); }
+.caret {
+  flex: 0 0 auto; width: 26px;
+  background: var(--panel2); color: var(--muted);
+  border: 1px solid var(--border); border-left: 0;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  font-size: 11px; line-height: 1; cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast);
+}
+.caret:hover, .caret.on { color: var(--text); border-color: var(--accent); }
+/* 菜单是向上展开的, 箭头跟着翻, 免得方向感对不上 */
+.chev { display: inline-block; transition: transform var(--t-fast); }
+.chev.up { transform: rotate(180deg); }
+
+/*
+ * 菜单**向上**展开: 动作区在侧栏底部, 往下会撞上 .left 的滚动裁切。
+ * .menu-off 是透明遮罩, 只负责点外部关闭(固定定位不受 .left 的 overflow 影响)。
+ */
+.menu-off { position: fixed; inset: 0; z-index: 55; }
+.menu {
+  position: absolute; right: 0; bottom: calc(100% + 6px); left: 0; z-index: 56;
+  max-height: 260px; overflow-y: auto;
+  padding: 4px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--r-sm); box-shadow: var(--shadow-1);
+}
+.mi {
+  display: flex; flex-direction: column; gap: 1px;
+  width: 100%; padding: 6px 8px;
+  background: transparent; border: 0; border-radius: 4px;
+  text-align: left; cursor: pointer;
+}
+.mi:not(:disabled):hover { background: var(--panel2); }
+.mi:disabled { opacity: .5; cursor: not-allowed; }
+.mt { font-size: 12px; color: var(--text); }
+.mh { font-size: 11px; color: var(--faint); }
+.msep { height: 1px; margin: 4px 0; background: var(--border); }
+.mopt { padding: 4px 8px; }
+
+/* 第三层: 配置入口的文字链 */
+.lnk { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px; }
+.lnk :deep(.tv-btn) { flex: 0 0 auto; }
+.badge {
+  padding: 1px 7px; border-radius: var(--r-pill);
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 11px; white-space: nowrap;
+}
 
 .result {
   flex: 1; min-width: 0;
