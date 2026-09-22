@@ -28,6 +28,10 @@ import {
   historySummary, historyDetail, saveHistory, deleteHistory, renameHistory,
 } from './core/cart.js'
 import { buildExport, buildCartExport } from './core/exporter.js'
+import {
+  listPresets, savePreset, deletePreset, runPreset,
+  blacklistFingerprint, afterBlacklistChange, setAutoNotifier, flushAuto,
+} from './core/exportPresets.js'
 import { scanFolder, scanCacheStats, purgeScanCachePaths } from './core/scan.js'
 import { runIngest, ingestStatus, pauseIngest, ingestState, queueStats } from './core/ingest.js'
 import {
@@ -140,6 +144,10 @@ function pushTaggerProgress(p) {
 }
 
 export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
+  // 自动导出的结果(成功/失败)由主进程推给渲染层弹 toast。
+  // 注册一次即可: 防抖到期时主窗口可能已经不是同一个, 所以每次都现取。
+  setAutoNotifier((payload) => mainWindow()?.webContents.send('export:auto', payload))
+
   const map = {
     // ---------------- 应用 / 数据集 ----------------
     'app:status': safe(() => status()),
@@ -316,8 +324,18 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
 
     // ---------------- 规则(黑名单 / 替换 / 背景) ----------------
     'blacklist:get': safe(() => ({ rules: blacklistRules(), text: blacklistText() })),
-    'blacklist:save': safe(({ text }) => saveBlacklistText(text)),
-    'blacklist:toggle': safe(({ tag }) => toggleBlacklistTag(tag)),
+    // 保存 / 单条 ban-unban: 改完看一眼"内容是不是真的变了" —— 变了才排自动导出。
+    // (原样保存一次、或点了 🚫 但被通配规则挡下, 都不该白跑一遍导出)
+    'blacklist:save': safe(({ text }) => {
+      const before = blacklistFingerprint()
+      const r = saveBlacklistText(text)
+      return { ...r, auto: afterBlacklistChange(before) }
+    }),
+    'blacklist:toggle': safe(({ tag }) => {
+      const before = blacklistFingerprint()
+      const r = toggleBlacklistTag(tag)
+      return { ...r, auto: afterBlacklistChange(before) }
+    }),
     'replace:get': safe(() => ({ rules: loadReplaceRules(), text: replaceText() })),
     'replace:save': safe(({ text }) => saveReplaceText(text)),
     'bg:get': safe(() => loadBgConfig()),
@@ -348,6 +366,26 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       return { ok: true, path: dlg.filePath, count: r.count, bytes: Buffer.byteLength(r.text, 'utf8') }
     }),
     'export:text': safe((raw) => buildExport(raw)),
+
+    // ---------------- 导出预设(黑名单变更后自动导出) ----------------
+    'export:preset:list': safe(() => ({ presets: listPresets() })),
+    'export:preset:save': safe((raw) => savePreset(raw)),
+    'export:preset:delete': safe(({ id }) => deletePreset(id)),
+    'export:preset:run': safe(({ id }) => runPreset(id, { trigger: 'manual' })),
+    // 等"排程中的自动导出"跑完 —— 关窗/换数据前收尾用, 保证落盘不半途而废
+    'export:preset:flush': safe(async () => { await flushAuto(); return { ok: true } }),
+    // 选目标目录: 与 scan:pickFolder 同一套"记住上次选的目录"行为
+    'export:preset:pickDir': safe(async () => {
+      const last = getSettings().lastPickDir
+      const r = await dialog.showOpenDialog(mainWindow(), {
+        title: '选择自动导出的目标文件夹',
+        properties: ['openDirectory', 'createDirectory'],
+        ...(last && fs.existsSync(last) ? { defaultPath: last } : {}),
+      })
+      if (r.canceled || !r.filePaths.length) return { canceled: true }
+      saveSettings({ lastPickDir: r.filePaths[0] })
+      return { ok: true, path: r.filePaths[0] }
+    }),
     'export:cart': safe(async ({ tags, spaces = true, save = true } = {}) => {
       const r = buildCartExport(tags || [], { spaces })
       if (!save) return r
@@ -539,4 +577,4 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
 }
 
 /** 主进程主动推送的事件名(渲染进程用 tv.on 订阅) */
-export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress', 'tagger:progress']
+export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress', 'tagger:progress', 'export:auto']

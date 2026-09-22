@@ -131,6 +131,7 @@ export const USER_FILES = [
   'export_bg.txt',          // 背景补全规则
   'user_meta.json',         // 用户元数据(收藏/备注)
   'cart_history.json',      // 购物车结算历史
+  'export_presets.json',    // 导出预设(自动导出用)
   'scan_folders.json',      // 扫描文件夹收藏夹(含本机路径)
 ]
 export const USER_DIRS = ['.thumb_cache']
@@ -197,6 +198,8 @@ export const DATA_ROUTE = Object.freeze({
   // U 用户数据: 用户自己的积累, 绝不出机器
   'user_meta.json': { kind: 'user' },
   'cart_history.json': { kind: 'user' },
+  // 导出预设(含目标目录这类本机路径) -> user/export_presets.json
+  'export_presets.json': { kind: 'user' },
   // 登记表: 真源是 tags.db 的 folders 表, 这份 json 降级为「导出备份 + 首次导入源」
   'scan_folders.json': { kind: 'user', as: 'folders.json' },
   // U 规则: 三个导出词表

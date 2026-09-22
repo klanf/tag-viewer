@@ -37,6 +37,8 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
  *                        之后指纹没变就跳过导入, 所以第二轮起启动快很多。
  *                        **weilin_data\* 翻译库也在这里**(递归拷, 见 STATE_DIRS):
  *                        没有它就没法验证"翻译真的加载出来了"。
+ *   .e2e-work/export-dest/ 导出预设的目标目录(预设自动导出的落盘位置, 42MB 级;
+ *                        **是证据, 不是脏数据**), 由 e2e 的 7.5 节使用并断言
  *   .e2e-work/scan/      扫描页用的 5 张测试图(从 test-fixtures/ 复制)
  *   .e2e-work/moved-dest/ 右键「移动到」的目标目录(搬文件用, 内容不清理)
  *   .e2e-work/userdata/  独立的 Electron userData(单实例锁 + localStorage 都干净)

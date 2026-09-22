@@ -7,6 +7,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api, onPush } from '@/utils/api.js'
 import { LS, readLS, writeLS } from '@/utils/lskey.js'
+import { useUiStore } from './useUiStore.js'
+import { nfmt } from '@/utils/format.js'
 
 export const useAppStore = defineStore('app', () => {
   const phase = ref('idle')          // idle | loading | ready | error
@@ -60,6 +62,36 @@ export const useAppStore = defineStore('app', () => {
   const loading = computed(() => phase.value === 'loading')
   const totalImages = computed(() => stats.value?.records ?? 0)
 
+  /**
+   * 黑名单变更 -> 自动导出的回执(主进程推 export:auto)。
+   * 渲染层只负责说人话地报一下: 成功就报导了几个预设、各多少行;
+   * **失败必须明确报出来** —— 自动行为静默失败比没有更糟。
+   */
+  function notifyAutoExport(payload) {
+    const ui = useUiStore()
+    const results = payload?.results || []
+    if (!results.length) {
+      // 数据集还没就绪时主进程会推一条空结果 —— 得说清"这次还没导",
+      // 但不能说成"这次不导了": 主进程已经挂上就绪后的补跑(exportPresets.armReadyRetry)
+      if (payload?.reason === 'not-ready') {
+        ui.warn('黑名单已更新, 数据还在加载 —— 加载完会立刻自动导出', 3600)
+      }
+      return
+    }
+    const oks = results.filter((r) => r.ok)
+    const bads = results.filter((r) => !r.ok)
+    if (bads.length && !oks.length) {
+      ui.err(`自动导出失败: ${bads[0].name} · ${bads[0].error}`, 4200)
+      return
+    }
+    const okMsg = oks.map((r) => `${r.name} ${nfmt(r.count)} 行`).join(' · ')
+    if (bads.length) {
+      ui.warn(`自动导出: ${okMsg}; 另有 ${bads.length} 个失败(${bads[0].name}: ${bads[0].error})`, 4600)
+    } else {
+      ui.ok(`✅ 黑名单已更新, 已自动导出: ${okMsg}`, 3400)
+    }
+  }
+
   /** 首次进入时调一次: 拉状态 + 订阅进度推送 */
   async function init() {
     if (started.value) return
@@ -74,6 +106,9 @@ export const useAppStore = defineStore('app', () => {
     })
     onPush('ingest:progress', (p) => { ingest.value = p })
     onPush('tagger:progress', (p) => { tagger.value = p })
+    // 黑名单变更后的自动导出结果 —— 订阅放在 app store 里(而不是首页):
+    // ban 大多发生在标签页 / 光箱, 那时首页可能压根没挂载。
+    onPush('export:auto', (payload) => notifyAutoExport(payload))
 
     applyStatus(await api.status())
     // 主进程是页面 did-finish-load 之后才开始加载数据, 有可能这里已经 ready 了

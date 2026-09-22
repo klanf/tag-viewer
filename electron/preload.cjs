@@ -30,6 +30,9 @@ const CHANNELS = new Set([
   'cart:history', 'cart:detail', 'cart:save', 'cart:delete', 'cart:rename',
   // 导出
   'export:preview', 'export:save', 'export:text', 'export:cart',
+  // 导出预设(黑名单变更后自动导出)
+  'export:preset:list', 'export:preset:save', 'export:preset:delete',
+  'export:preset:run', 'export:preset:flush', 'export:preset:pickDir',
   // 扫描
   'scan:pickFolder', 'scan:folder',
   // 增量入库(磁盘 <-> tags.db 对齐)
@@ -50,7 +53,7 @@ const CHANNELS = new Set([
   'diag:stats', 'diag:clearSearchCache', 'diag:clearThumbs', 'diag:fileInfo',
 ])
 
-const PUSH = new Set(['app:progress', 'app:reloaded', 'scan:progress', 'ingest:progress', 'tagger:progress'])
+const PUSH = new Set(['app:progress', 'app:reloaded', 'scan:progress', 'ingest:progress', 'tagger:progress', 'export:auto'])
 
 /** 自定义协议的 URL 构造 —— 与 imageproto.js 的解析必须成对 */
 function thumbUrl(p, w = 400) {

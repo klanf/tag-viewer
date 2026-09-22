@@ -23,6 +23,7 @@ import { bootstrap, status } from './core/app-state.js'
 import { runIngest, queueStats } from './core/ingest.js'
 import { runTagger, stopTagger, taggerState } from './core/tagger.js'
 import { ds } from './core/dataset.js'
+import { flushAuto, hasPendingAuto } from './core/exportPresets.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || ''
@@ -296,6 +297,8 @@ async function runTagOnce() {
 }
 
 let loading = false
+/** 退出前 flush 自动导出时置真 —— 防止 before-quit 被自己递归触发 */
+let quitting = false
 async function startLoad() {
   if (loading) return
   loading = true
@@ -451,6 +454,19 @@ app.whenReady().then(() => {
 })
 
 app.on('child-process-gone', (_e, d) => log('warn', `child-process-gone: ${JSON.stringify(d)}`))
+
+/**
+ * 退出前把"排程中的自动导出"跑完。
+ * 场景: ban 完最后一个词条马上关窗口 —— 1.5s 防抖还没到期, 不 flush 就白按了一次。
+ * 这里同步等一下(最多几秒), 保证落盘不半途而废。
+ */
+app.on('before-quit', (e) => {
+  if (quitting || !gotLock) return
+  if (!hasPendingAuto()) return
+  e.preventDefault()
+  quitting = true
+  Promise.resolve(flushAuto()).finally(() => app.quit())
+})
 
 app.on('window-all-closed', () => {
   if (!gotLock) return

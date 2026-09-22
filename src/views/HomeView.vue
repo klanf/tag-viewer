@@ -24,6 +24,7 @@ import TvInput from '@/components/base/TvInput.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvImageGrid from '@/components/image/TvImageGrid.vue'
 import TvRulesEditorModal from '@/components/rules/TvRulesEditorModal.vue'
+import TvExportPresetsModal from '@/components/export/TvExportPresetsModal.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
 import { useSearchHistory } from '@/composables/useSearchHistory.js'
 import { useAppStore } from '@/stores/useAppStore.js'
@@ -60,8 +61,37 @@ const statsLoading = ref(false)
 
 const showBlacklist = ref(false)
 const showReplace = ref(false)
+const showPresets = ref(false)
+const autoPresetCount = ref(0)     // 开了「黑名单变更后自动导出」的预设数(按钮上显示)
 const exporting = ref(0)      // 0=空闲 1=纯标签 2=带路径
 const stripCharExport = ref(true)  // 导出时剔除角色/系列标签(含无括号角色, 走角色库)
+
+/** 预设弹窗里「新建预设」的初值 = 首页当前筛选条件(建完之后就是快照, 不再联动) */
+const presetSnapshot = computed(() => ({
+  source: [...src.selected],
+  q: q.value,
+  mode: mode.value,
+  match: match.value,
+  exclude: exclude.value,
+  exclude_char: excludeChar.value,
+  spaces: true,
+  blacklist: true,
+  replace: true,
+  bg: prefs.bgAuto,
+  strip_char: stripCharExport.value,
+  with_path: false,
+}))
+
+const presetTitle = computed(() => (autoPresetCount.value
+  ? `已开启自动导出: ${autoPresetCount.value} 个预设(ban 完黑名单后自动覆盖导出)`
+  : '把筛选条件 + 目标目录存成预设, ban 完自动导出'))
+
+async function refreshPresetCount() {
+  try {
+    const r = await api.exportPresets()
+    autoPresetCount.value = (r?.presets || []).filter((p) => p.auto && p.dir).length
+  } catch { /* 取不到就不显示角标, 不影响主流程 */ }
+}
 
 const feed = useImageFeed({ infinite: true, pageSize: 60 })
 
@@ -195,6 +225,7 @@ async function initHome() {
   await Promise.allSettled([
     src.load().catch((e) => ui.err('来源统计加载失败: ' + e.message)),
     loadStats(),
+    refreshPresetCount(),
   ])
   await doSearch()
 }
@@ -207,6 +238,8 @@ watch(() => app.epoch, (n) => { if (n) initHome() })
 // 收藏筛选 / 排序 / 每页数量变化 -> 重搜
 watch(() => fav.onlyFav, () => doSearch())
 watch(sort, () => doSearch())
+// 打开预设弹窗时刷一下"自动 N"角标 —— 预设也可能是在别处(或上一轮)建的
+watch(showPresets, (v) => { if (v) refreshPresetCount() })
 watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 // 背景补全开关: 只影响复制/导出, 不用重搜
 </script>
@@ -315,6 +348,9 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
           <TvButton variant="primary" @click="doSearch">🔍 搜索</TvButton>
           <TvButton variant="secondary" :loading="exporting === 1" @click="doExport(false)">⬇ 导出标签</TvButton>
           <TvButton variant="secondary" :loading="exporting === 2" @click="doExport(true)">⬇ 导出(带路径)</TvButton>
+          <TvButton variant="secondary" :title="presetTitle" @click="showPresets = true">
+            📤 预设导出<template v-if="autoPresetCount"> · 自动 {{ autoPresetCount }}</template>
+          </TvButton>
           <TvButton variant="secondary" @click="showBlacklist = true">🚫 黑名单</TvButton>
           <TvButton variant="secondary" @click="showReplace = true">🔁 替换</TvButton>
         </div>
@@ -322,7 +358,8 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
         <div class="tip">
           💡 筛选框留空 = 浏览全部图片 · 导出时自动剔除
           <a href="#" @click.prevent="showBlacklist = true">黑名单</a>标签、应用
-          <a href="#" @click.prevent="showReplace = true">替换</a>规则
+          <a href="#" @click.prevent="showReplace = true">替换</a>规则 ·
+          <a href="#" @click.prevent="showPresets = true">预设导出</a>可让 ban 完自动导出
         </div>
       </div>
     </aside>
@@ -373,6 +410,13 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 
     <TvRulesEditorModal v-model="showBlacklist" kind="blacklist" @saved="doSearch" />
     <TvRulesEditorModal v-model="showReplace" kind="replace" @saved="doSearch" />
+    <TvExportPresetsModal
+      v-model="showPresets"
+      :sources="src.list"
+      :total-images="stats?.total_images ?? src.totalImages"
+      :snapshot="presetSnapshot"
+      @changed="refreshPresetCount"
+    />
   </div>
 </template>
 

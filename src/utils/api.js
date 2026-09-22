@@ -100,6 +100,14 @@ export const api = {
   exportText: (q) => call('export:text', q),
   exportCart: (tags, opts) => call('export:cart', { tags, ...opts }),
 
+  // 导出预设: 存好筛选条件+目标目录, 黑名单一变就自动覆盖导出一次
+  exportPresets: () => call('export:preset:list'),
+  exportPresetSave: (preset) => call('export:preset:save', preset),
+  exportPresetDelete: (id) => call('export:preset:delete', { id }),
+  exportPresetRun: (id) => call('export:preset:run', { id }),
+  exportPresetFlush: () => call('export:preset:flush'),
+  pickExportDir: () => call('export:preset:pickDir'),
+
   // 扫描
   pickFolder: (opts) => call('scan:pickFolder', opts),
   scanFolder: (q) => call('scan:folder', q),

@@ -760,6 +760,267 @@ async function main() {
       banToggle && banToggle.nowBanned !== banToggle.wasBanned && banToggle.restored === banToggle.wasBanned,
       JSON.stringify(banToggle))
 
+    /* ---------------- 7.5 导出预设: ban 完自动导出 (2026-09-22) ---------------- */
+    /*
+     * 验的是"改了黑名单不用再手动点导出"这条链路, 全程落在测试工作目录里:
+     *   预设存  .e2e-work/data/user/export_presets.json
+     *   导出到  .e2e-work/export-dest/preset-e2e.txt
+     * 证据用**真实文件内容**, 不靠界面文案:
+     *   ban 一个真实存在的标签 -> 文件内容必须变, 且该标签消失;
+     *   取消 ban            -> 内容必须**逐字节回到基线**(说明导出的确是黑名单的函数);
+     *   关掉自动开关再 ban   -> 文件纹丝不动(负向控制)。
+     */
+    const EXPORT_DIR = path.join(path.dirname(DATA_DIR), 'export-dest')
+    fs.mkdirSync(EXPORT_DIR, { recursive: true })
+    const EXPORT_NAME = 'preset-e2e.txt'
+    const EXPORT_PATH = path.join(EXPORT_DIR, EXPORT_NAME)
+    const readExport = () => (fs.existsSync(EXPORT_PATH) ? fs.readFileSync(EXPORT_PATH, 'utf8') : '')
+    /** 文件的"版本指纹"(mtime+size) —— 比读 42MB 全文便宜得多 */
+    const statExport = () => {
+      try { const s = fs.statSync(EXPORT_PATH); return `${s.mtimeMs}|${s.size}` } catch { return '' }
+    }
+    /**
+     * 等文件内容变得 ≠ before(自动导出是"防抖 1.5s + 导出耗时", 得轮询)。
+     *
+     * 2026-09-22 改: 先用 stat 探、**只在真的变了之后**才读全文。
+     * 原来每 400ms 读一次 42MB —— 既慢, 又让"刚被主进程写完的目标文件"更容易
+     * 处在被占用的状态(实测那次 rename 就是 EPERM 挂掉的, 见 exportPresets 里的注释),
+     * 等于测试自己给被测代码使绊子。
+     */
+    const waitExportChange = async (before, timeoutMs = 25000) => {
+      const t0 = Date.now()
+      let lastStat = statExport()
+      while (Date.now() - t0 < timeoutMs) {
+        await sleep(400)
+        const st = statExport()
+        if (st === lastStat) continue
+        lastStat = st
+        const now = readExport()
+        if (now !== before) return { changed: true, waited: Date.now() - t0, text: now }
+      }
+      return { changed: false, waited: Date.now() - t0, text: readExport() }
+    }
+    /** 导出行里是否**整词**含有某个标签(不能拿子串判断, girl 会误命中 2girls) */
+    const hasTag = (text, tag) => text.split('\n').some((l) => l.split(',').map((s) => s.trim()).includes(tag))
+    /**
+     * 导出内容里的标签是**空格形态**, 数据集/黑名单里存的是**下划线形态**。
+     *
+     * export 的默认参数 spaces=true 会把每个标签的 `_` 换成空格(buildExport 里那行
+     * `tags.map(t => t.replace(/_/g, ' '))`), 于是:
+     *   导出文件里看到 `looking at viewer`  ←→  tags.db 里是 `looking_at_viewer`(实测 68016 张)
+     *   导出文件里看到 `open mouth`        ←→  tags.db 里是 `open_mouth`(实测 36143 张)
+     *
+     * 2026-09-22 踩到的坑(4 条断言假失败的真因):
+     *   挑候选时从**导出内容**里取 token -> 拿到空格形态, 原样丢给 blacklist:toggle ->
+     *   黑名单里写进一条 `looking at viewer`。而 isBlockedFast 拿**下划线形态**的标签去比对
+     *   (它不做空格->下划线归一), 这条规则**永远不可能命中** -> ban 成了静默空操作。
+     *   偏偏 afterBlacklistChange 只看"黑名单文本指纹变没变" —— 文本确实变了, 于是
+     *   scheduled=true、自动导出照跑, 但导出内容**逐字节不变**;
+     *   断言看到的就是"自动导出没被触发"(其实触发了: 手动导出/落盘/回执全都正常)。
+     * 所以凡是拿导出 token 去操作**数据侧**(黑名单)的地方, 必须先转回下划线形态。
+     */
+    const asDatasetTag = (t) => String(t).replace(/ /g, '_')
+
+    /*
+     * 幂等: 先清掉上一轮可能残留的预设, 免得断言认错对象。
+     *
+     * 2026-09-22 加严: 原来只删名字以 `e2e` 开头的, 于是**任何别的**遗留预设
+     * (比如手工探针建的 `probe 自动导出`)都会留在沙箱里 —— 它的 auto 开关也是开着的,
+     * 直接把「全新一轮 e2e 到底该有几个 auto 预设」这个前提搞坏:
+     *   · 首页角标变成「自动 2」(断言写的是自动 1) -> 失败
+     *   · 弹窗列表第一行是别人的名字(断言要求名字里有 e2e) -> 失败
+     * 所以判据加一条"目标目录落在这个沙箱里的一律清掉" —— 那是测试自己的地盘,
+     * 用户真实预设的目标目录不在这里, 不会被误删。
+     *
+     * 路径判定放在 **Node 侧**做: 一是能在真 JS 里痛快地归一斜杠(手工探针存下来的
+     * 目录用**正斜杠**、`path.join` 出来的用**反斜杠**, 不归一根本比不中),
+     * 二是免得在 cdp.eval 的模板字符串里跟 `\\` 转义纠缠。
+     */
+    const listedPresets = await cdp.eval(`return (await window.tv.invoke('export:preset:list')).presets`)
+    const norm = (s) => String(s || '').replace(/\\/g, '/').toLowerCase()
+    const SANDBOX = norm(path.dirname(EXPORT_DIR))
+    const staleIds = (listedPresets || [])
+      .filter((p) => p.name.startsWith('e2e') || norm(p.dir).startsWith(SANDBOX))
+      .map((p) => p.id)
+    const cleaned = await cdp.eval(`
+      for (const id of ${JSON.stringify(staleIds)}) await window.tv.invoke('export:preset:delete', { id })
+      const left = (await window.tv.invoke('export:preset:list')).presets
+      return { left: left.length, names: left.map((p) => p.name) }
+    `)
+    cleaned.removed = staleIds.length
+
+    const savedPreset = await cdp.eval(`
+      const r = await window.tv.invoke('export:preset:save', {
+        name: 'e2e 自动导出',
+        dir: ${JSON.stringify(EXPORT_DIR)},
+        file: ${JSON.stringify(EXPORT_NAME)},
+        auto: true,
+        params: { source: [], q: '', mode: 'any', match: 'contains', exclude: '',
+          exclude_char: true, spaces: true, blacklist: true, replace: true, bg: true,
+          strip_char: false, with_path: false },
+      })
+      return { id: r.preset.id, auto: r.preset.auto, count: r.presets.length }
+    `)
+    check('导出预设: 能保存(目标目录 + 参数快照 + 自动开关)',
+      !!savedPreset?.id && savedPreset.auto === true,
+      `清掉遗留预设 ${cleaned.removed} 个 · 现有 ${savedPreset?.count} 个`
+      + (cleaned.names?.length ? ` · 清完还剩别人建的 ${cleaned.names.join('、')}` : ''))
+
+    /*
+     * 自动导出的**回执**必须收下来 —— 失败时"压根没触发"和"触发了但被就绪守卫跳过"
+     * 在文件层面长得一模一样(目标文件 mtime 不动), 只有这条推送能区分:
+     * 主进程两条路径都会推 —— 跑完推 {results}, 被跳过推 {phase}(见 exportPresets.runAuto)。
+     * 2026-09-22 加: 上一轮 4 条断言失败时, 正是缺这份证据只能靠猜。
+     */
+    const tapAutoEvents = () => cdp.eval(`
+      if (window.__offAuto) window.__offAuto()
+      window.__autoEv = []
+      window.__offAuto = window.tv.on('export:auto', (p) => window.__autoEv.push({
+        at: p.at,
+        skipPhase: p.phase || '',
+        n: (p.results || []).length,
+        trig: (p.results || []).map((r) => r.trigger || ''),
+        err: (p.results || []).map((r) => r.error || '').filter(Boolean),
+      }))
+      return true
+    `)
+    const readAutoEvents = () => cdp.eval(`return { ev: window.__autoEv || [], phase: (await window.tv.invoke('app:status')).phase }`)
+    const autoEvidence = async () => {
+      const r = await readAutoEvents()
+      return `${r.ev.length} 条回执(phase=${r.phase}) ${JSON.stringify(r.ev)}`
+    }
+    await tapAutoEvents()
+
+    // 立即导出: 文件真的落盘, 行数与回执一致
+    const presetRun = await cdp.eval(`return await window.tv.invoke('export:preset:run', { id: ${JSON.stringify(savedPreset.id)} })`)
+    const baselineText = readExport()
+    const baselineLines = baselineText.split('\n').filter((l) => l.trim()).length
+    check('导出预设: 立即导出真的写到目标目录', !!presetRun?.ok && fs.existsSync(EXPORT_PATH),
+      `${presetRun?.path || '没落盘'}`)
+    check('导出预设: 回执行数 == 文件实际行数', presetRun?.count > 0 && presetRun.count === baselineLines,
+      `回执 ${presetRun?.count} · 文件 ${baselineLines} 行`)
+    const strayFiles = fs.readdirSync(EXPORT_DIR).filter((f) => f.startsWith('preset-e2e'))
+    check('导出预设: 固定文件名原地覆盖(只留一个文件, 不堆副本)',
+      strayFiles.length === 1, `目录里=${strayFiles.join(', ')}`)
+
+    // 界面: 首页入口 + 弹窗列表
+    await cdp.eval(`__t.clickText('.hdr .nv', '看板'); return true`)
+    await sleep(900)
+    const presetModal = await cdp.eval(`
+      __t.clickText('.btns .tv-btn', '预设导出')
+      await new Promise(r => setTimeout(r, 800))
+      return {
+        rows: __t.count('.mask .prow'),
+        name: __t.text('.mask .pname'),
+        autoOn: __t.count('.mask .auto-sw input:checked'),
+        path: __t.text('.mask .ppath'),
+        meta: __t.text('.mask .pmeta'),
+      }
+    `)
+    check('导出预设: 弹窗列出预设(名字/目标文件/自动开关/上次导出)',
+      presetModal.rows >= 1 && /e2e/.test(presetModal.name) && presetModal.autoOn >= 1
+      && presetModal.path.includes(EXPORT_NAME) && /\d/.test(presetModal.meta),
+      `${presetModal.name} · ${presetModal.meta.slice(0, 60)}`)
+    await cdp.shot('12-export-presets')
+    await cdp.eval(`document.querySelector('.mask .x').click(); return true`)
+    await sleep(400)
+    const homeBtnText = await cdp.eval(`return __t.text('.btns')`)
+    check('导出预设: 首页按钮显示「自动 N」角标', /预设导出/.test(homeBtnText) && /自动\s*1/.test(homeBtnText),
+      homeBtnText.slice(0, 90))
+
+    // 自动导出: 挑一个**真实出现在导出内容里**的标签 ban 掉
+    const blText = (await cdp.eval(`const r = await window.tv.invoke('blacklist:get'); return r.text || ''`)) || ''
+    const freq = new Map()
+    for (const line of baselineText.split('\n')) {
+      for (const t of line.split(',').map((s) => s.trim())) if (t) freq.set(t, (freq.get(t) || 0) + 1)
+    }
+    // 导出内容里的形态(空格) —— 只用来读文件、算频次、断言
+    const candidates = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([t]) => t)
+    // 黑名单/数据集里的形态(下划线) —— 只用来写黑名单、比对规则(见 asDatasetTag 的注释)
+    const blSet = new Set(blText.split('\n').map((l) => l.trim().toLowerCase()).filter((l) => l && !l.startsWith('#')))
+    const alreadyBanned = (t) => blSet.has(asDatasetTag(t).toLowerCase())
+    let probe = ''           // 导出内容形态(断言用)
+    let probeTag = ''        // 数据集形态(操作黑名单用)
+    let probeBanned = false
+    let probeAuto = null     // blacklist:toggle 回执里的 auto(排程结果) —— 与回执推送互补的证据
+    const tried = []         // 逐个候选的尝试结果: 失败时能一眼看出卡在哪一个、为什么
+    for (const t of candidates) {
+      // 已在黑名单里 -> toggle 语义相反(会把它解开), 跳过。
+      // 注意比的是**下划线形态**: 早先用空格形态比, 对多词标签永远比不中。
+      if (alreadyBanned(t)) { tried.push(`${t}:已在黑名单`); continue }
+      const tag = asDatasetTag(t)
+      const r = await cdp.eval(`return await window.tv.invoke('blacklist:toggle', { tag: ${JSON.stringify(tag)} })`)
+      tried.push(`${tag}:${r?.action || '?'}`
+        + (r?.auto ? `(changed=${r.auto.changed},sched=${r.auto.scheduled},autoN=${r.auto.autoCount})` : ''))
+      if (r?.banned) { probe = t; probeTag = tag; probeBanned = true; probeAuto = r.auto || null; break }
+    }
+    check('导出预设: 前置条件 —— 找到真实存在的标签并 ban 成功', !!probe,
+      `probe=${probe || '无'}(黑名单里写作 ${probeTag || '-'}) · 候选=${candidates.slice(0, 4).join('/')}`
+      + ` · 尝试=[${tried.join(' | ')}]` + (probeAuto ? ` · 排程=${JSON.stringify(probeAuto)}` : ''))
+
+    let afterBan = { changed: false, text: baselineText, waited: 0 }
+    if (probeBanned) afterBan = await waitExportChange(baselineText)
+    const evAfterBan = await autoEvidence()
+    check('导出预设: ban 后**自动**导出覆盖了目标文件(1.5s 防抖后)',
+      afterBan.changed, `等了 ${afterBan.waited}ms · ${evAfterBan}`)
+    check('导出预设: 自动导出确实套用了新黑名单(probe 标签已从内容里消失)',
+      !!probe && !hasTag(afterBan.text, probe), `probe=${probe} · 回执 ${evAfterBan}`)
+
+    // 取消 ban -> 内容必须逐字节回到基线(证明导出结果就是黑名单的函数)
+    if (probeBanned) {
+      await cdp.eval(`return await window.tv.invoke('blacklist:toggle', { tag: ${JSON.stringify(probeTag)} })`)
+    }
+    const afterUnban = await waitExportChange(afterBan.text)
+    check('导出预设: 取消 ban 后导出内容逐字节回到基线',
+      afterUnban.changed && afterUnban.text === baselineText,
+      `等了 ${afterUnban.waited}ms · 长度 ${afterUnban.text.length} vs ${baselineText.length} · ${await autoEvidence()}`)
+
+    // 负向控制: 关掉自动开关, 再 ban 一个标签 -> 文件必须纹丝不动
+    await cdp.eval(`
+      const r = await window.tv.invoke('export:preset:list')
+      const p = r.presets.find((x) => x.id === ${JSON.stringify(savedPreset.id)})
+      await window.tv.invoke('export:preset:save', { ...p, auto: false })
+      return true
+    `)
+    /*
+     * 黑名单文本到这里已经变过两轮(ban probe / unban probe), 上面那份 blSet 是**旧的**。
+     * 负向控制要挑的是"当前没被 ban 的词", 必须按**现在**的黑名单重算 ——
+     * 复用旧快照正是上一版竞态的来源之一。
+     */
+    const blText2 = (await cdp.eval(`const r = await window.tv.invoke('blacklist:get'); return r.text || ''`)) || ''
+    const blSet2 = new Set(blText2.split('\n').map((l) => l.trim().toLowerCase()).filter((l) => l && !l.startsWith('#')))
+    let probe2 = ''          // 导出内容形态
+    let probe2Tag = ''       // 数据集形态
+    for (const t of candidates) {
+      if (t === probe || blSet2.has(asDatasetTag(t).toLowerCase())) continue
+      const tag = asDatasetTag(t)
+      const r = await cdp.eval(`return await window.tv.invoke('blacklist:toggle', { tag: ${JSON.stringify(tag)} })`)
+      if (r?.banned) { probe2 = t; probe2Tag = tag; break }
+    }
+    const beforeNeg = readExport()
+    await sleep(6000)                       // 远超防抖 + 导出耗时, 真触发了不可能不变
+    const afterNeg = readExport()
+    check('导出预设(负向): 关掉自动开关后 ban 不再触发导出',
+      !!probe2 && afterNeg === beforeNeg,
+      `probe2=${probe2 || '无'} · 文件${afterNeg === beforeNeg ? '未变' : '变了'}`)
+    /*
+     * 这条的语义 2026-09-22 修正(原来写反了):
+     *   beforeNeg 是在 **ban probe2 之前**读的, 里面**本来就应该还有** probe2 ——
+     *   原来断言写成 `!hasTag(beforeNeg, probe2)`, 那要求"文件里没有 probe2",
+     *   即要求"导出已经跑过了", 与上一条(没跑)自相矛盾, 任何一轮都必挂。
+     * 正确的证据是: probe2 仍在文件里 -> 说明这一轮 ban 之后确实没有任何导出落盘。
+     */
+    check('导出预设(负向): 上一条 ban 确实没有触发任何导出(probe2 仍在文件里)',
+      !!probe2 && hasTag(beforeNeg, probe2), `probe2=${probe2 || '无'}`)
+    if (probe2) await cdp.eval(`return await window.tv.invoke('blacklist:toggle', { tag: ${JSON.stringify(probe2Tag)} })`)
+
+    // 收尾: 删除预设(顺便验删除接口), 导出文件留着当证据
+    const presetDel = await cdp.eval(`return await window.tv.invoke('export:preset:delete', { id: ${JSON.stringify(savedPreset.id)} })`)
+    const afterDel = await cdp.eval(`const r = await window.tv.invoke('export:preset:list'); return { n: r.presets.length }`)
+    check('导出预设: 删除预设后再查列表里没有它',
+      presetDel?.removed === 1 && afterDel.n === cleaned.left,
+      `删 ${presetDel?.removed} · 剩 ${afterDel.n}`)
+
     /* ---------------- 8. 购物车 ---------------- */
     await cdp.eval(`__t.clickText('.hdr .nv', '购物车'); return true`)
     await waitFor(cdp, `__t.count('.ci') > 0`, { label: '购物车条目', timeout: 30000 })
