@@ -25,6 +25,37 @@ export function ts(v) {
 }
 
 /** 只保留最后两段路径, 卡片上显示用(完整路径太长) */
+/**
+ * 像素尺寸 -> CSS `aspect-ratio` 字符串; 有任一维缺失/非法就返回**空串**。
+ *
+ * 消费方一律写成 `ratioOf(w, h) || '9 / 16'`: 回落值必须与改动前完全一致,
+ * 这样"老库还没回填尺寸 / 文件头读不出来"的那些图, 行为一点不变 ——
+ * 引入新特性时最怕的就是顺手把老路径也改了。
+ */
+export function ratioOf(w, h) {
+  const W = Number(w) || 0
+  const H = Number(h) || 0
+  return (W > 0 && H > 0) ? `${W} / ${H}` : ''
+}
+
+/**
+ * 安全模式判定 —— 与主进程 `core/safety.js` 的 `hiddenAt` 是**同一套语义**。
+ * 前端不能 import 主进程模块, 所以这里有一份等价实现; 改判定规则时两边必须一起改。
+ *
+ *   unsafe 0 = 干净            -> 两档都不藏
+ *   unsafe 1 = 命中 core 段    -> 两档都藏
+ *   unsafe 2 = 只命中 edge 段  -> 只有 edge 档藏, core 档放行
+ *
+ * 用数值比较而不是在前端重跑标签匹配: 标记是**读数据集时**在主进程算好的
+ * (见 dataset.js 的 pushRecord), 于是切开关/切档位只是换个 0/1/2 的比较,
+ * 八万行数据一行都不用重载。
+ */
+export function hiddenBySafety(unsafe, level) {
+  const u = Number(unsafe) || 0
+  if (u <= 0) return false
+  return u === 1 || level === 'edge'
+}
+
 export function shortPath(p) {
   if (!p) return ''
   const parts = String(p).split(/[\\/]/)

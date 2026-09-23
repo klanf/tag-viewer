@@ -116,9 +116,24 @@ const ADDITIVE_COLS = [
   // 真源是 DB 之后, 这份统计必须跟着登记表一起存 —— 否则卡片要么显示不出来,
   // 要么得为了几个数字把每个目录重新扫一遍。
   ['folders', 'stats_json', "TEXT NOT NULL DEFAULT ''"],
+  // images 表: 像素尺寸(2026-09-23)。卡片要按图片真实比例渲染, 系列封面要
+  // 「优先挑竖图」, 两件事都得先知道每张图多宽多高。
+  //
+  // **必须加在这里, 不能只加进 IMAGES_V2_COLS** —— 后者由 applyV2Shape 执行,
+  // 而 applyV2Shape 只在迁移路径上跑(runMigrations 在 cur >= SCHEMA_VERSION 时
+  // 直接早退, 用户库早就迁完了)。这个坑跟下面注释里那段是同一个: "加列"和
+  // "建表"不是一个执行时机, 写进建表语句里的列对老库一辈子不生效。
+  // 加在这里 = 每次 openDb 都幂等检查一遍, 老库原地补齐。
+  ['images', 'px_w', 'INTEGER'],
+  ['images', 'px_h', 'INTEGER'],
 ]
 
-/** v2 给 images 补的列: [列名, 定义]。缺哪个补哪个, 已有则跳过(幂等) */
+/** v2 给 images 补的列: [列名, 定义]。缺哪个补哪个, 已有则跳过(幂等)。
+ *
+ * ⚠️ **v2 之后新加的列一律写进 ADDITIVE_COLS, 不要加在这个数组里** ——
+ * 它由 applyV2Shape 执行, 而 applyV2Shape 只在迁移路径上跑; 用户库早就
+ * 迁到 SCHEMA_VERSION 了, runMigrations 会直接早退, 加在这里对老库
+ * **永远不生效**(2026-09-23 加 px_w/px_h 时确认过一次, 差一步就踩进去)。 */
 const IMAGES_V2_COLS = [
   ['folder_id', 'INTEGER'],
   ['mtime_ms', 'INTEGER'],
@@ -847,7 +862,8 @@ export function readRecords(onRecord, onProgress = () => {}) {
     ? ` AND (i.folder_id IS NULL OR i.folder_id NOT IN (${offIds.map(() => '?').join(',')}))`
     : ''
   const chunk = db.prepare(`
-    SELECT i.id AS id, i.path AS path, i.src_id AS src_id, i.folder_id AS folder_id, i.tags AS tags
+    SELECT i.id AS id, i.path AS path, i.src_id AS src_id, i.folder_id AS folder_id,
+           i.tags AS tags, i.px_w AS px_w, i.px_h AS px_h
     FROM images i WHERE i.id > ? AND i.gone = 0${vis} ORDER BY i.id LIMIT ?
   `)
   let lastId = 0
@@ -874,6 +890,11 @@ export function readRecords(onRecord, onProgress = () => {}) {
           || folderNames.get(Number(r.folder_id))
           || '',
         tags,
+        // 像素尺寸: 卡片按真实比例渲染 / 系列封面优先挑竖图的依据。
+        // 老库回填之前这里是 null —— 消费方一律**回落到改动前的行为**,
+        // 不要拿 0 或猜测值凑一个比例出来。
+        px_w: r.px_w === null || r.px_w === undefined ? 0 : Number(r.px_w),
+        px_h: r.px_h === null || r.px_h === undefined ? 0 : Number(r.px_h),
       })
       n++
     }

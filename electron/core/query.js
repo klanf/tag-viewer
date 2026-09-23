@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs'
 import {
-  ds, statsFor, recordsFor, firstPathMap, recordByPath, minIdx,
+  ds, statsFor, recordsFor, firstPathMap, recordByPath,
   seriesName, isCharacterTag, isCopyrightTag, charShortName, CATEGORY_LABELS, guessCategory,
 } from './dataset.js'
 import { loadUserMeta, patchUserMeta } from './meta.js'
@@ -91,6 +91,41 @@ function clampInt(v, dflt, lo, hi) {
 
 // ---------------------------------------------------------------- 系列 / 角色
 
+/**
+ * 从一组记录下标里挑**封面** —— 挑被裁得最少的那张。
+ *
+ * 旧行为是 `minIdx(ids)`, 即"id 最小的那张", 完全不看横竖; 而卡片容器是固定的
+ * 3/4(见 TvEntityCard), 封面一旦是横图就会被 `object-fit: cover` 裁掉大半。
+ * 实测用户库里横图占一半(壁纸那几个来源全是横的), 撞上的概率不低。
+ *
+ * 新判据: 谁的长宽比离 **0.75(= 容器 3/4)** 最近谁当封面。在"竖图为主"的
+ * 目录里这个规则自然选出竖图 —— 因为竖图离 0.75 更近, 不需要额外写一条
+ * "优先竖图"的特例。同分时取下标最小的(等于老的"最早入库的当封面"),
+ * 保证同一批数据下封面是稳定的、不会每次请求换一张。
+ *
+ * 没有尺寸的行(老库还没回填)记 Infinity —— **不参与竞争**, 但仍然可以作为
+ * 兜底; 万一整组都没有尺寸, 结果与改动前完全一致(退回 min id)。
+ */
+function coverIdx(ids) {
+  let best = -1
+  let bestScore = Infinity
+  for (const i of ids) {
+    const r = ds.records[i]
+    if (!r) continue
+    const w = Number(r.px_w) || 0
+    const h = Number(r.px_h) || 0
+    // 越小越"接近容器比例"。无尺寸 = Infinity, 只在别人也都没有时胜出。
+    const score = (w > 0 && h > 0) ? Math.abs(w / h - 0.75) : Infinity
+    // 同分取下标最小的 —— **显式比较**, 不依赖 Set 的遍历顺序
+    // (seriesImgs / seriesChars 里的下标集合不保证升序)。
+    if (best < 0 || score < bestScore || (score === bestScore && i < best)) {
+      bestScore = score
+      best = i
+    }
+  }
+  return best < 0 ? 0 : best
+}
+
 export function getSeries(raw = {}) {
   const p = parseQuery(raw)
   const srcSet = p.srcSet
@@ -138,7 +173,7 @@ export function getSeries(raw = {}) {
       name,
       images: ids.size + extraImgs,
       characters: chars.size + extra.length,
-      thumb: ds.records[ids.size ? minIdx(ids) : 0].path,
+      thumb: ds.records[ids.size ? coverIdx(ids) : 0].path,
       category: cats[name] || guessCategory(name),
     })
     seen.add(name)
@@ -202,7 +237,7 @@ export function getCharacters(raw = {}) {
       tag,
       name: charShortName(tag),
       images: ids.size,
-      thumb: ds.records[minIdx(ids)].path,
+      thumb: ds.records[coverIdx(ids)].path,
     })
   }
 

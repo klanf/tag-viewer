@@ -20,6 +20,7 @@ import TvPager from '@/components/base/TvPager.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvSelect from '@/components/base/TvSelect.vue'
 import TvState from '@/components/base/TvState.vue'
+import TvSafetyModal from '@/components/safety/TvSafetyModal.vue'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { api } from '@/utils/api.js'
 import { nfmt } from '@/utils/format.js'
@@ -34,6 +35,8 @@ const total = ref(0)
 const tags = ref([])
 const loading = ref(false)
 const error = ref('')
+/** 安全模式设置台(集合就是标签集合, 所以入口放在标签页最顺) */
+const showSafety = ref(false)
 
 /* ---------------- 标签列表 ---------------- */
 async function loadTags(resetPage = true) {
@@ -88,7 +91,6 @@ async function toggleBan(tag) {
 
 onMounted(() => loadTags(true))
 </script>
-
 <template>
   <div class="tags-view">
     <div class="head">
@@ -123,6 +125,7 @@ onMounted(() => loadTags(true))
         />
         <span class="hint">共 {{ nfmt(total) }} 个标签</span>
         <span class="hint faint">点标签看它的图片 · 🚫 = 导出时剔除 · 灰色删除线 = 已 ban</span>
+        <TvButton size="sm" @click="showSafety = true">🛡 安全模式</TvButton>
       </div>
 
       <div class="scroll">
@@ -149,6 +152,8 @@ onMounted(() => loadTags(true))
         />
       </div>
     </div>
+
+    <TvSafetyModal v-model="showSafety" />
   </div>
 </template>
 

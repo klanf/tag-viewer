@@ -29,6 +29,8 @@
     "test:ingest": "node scripts/test-ingest.mjs",
     "test:tagger": "node scripts/test-tagger.mjs",
     "test:folders": "node scripts/test-folders.mjs",
+    "test:visual": "node scripts/test-visual.mjs",
+    "backfill:dims": "node scripts/backfill-dims.mjs",
     "folders:export": "node scripts/folders-export.mjs",
     "txt:archive": "node scripts/archive-legacy-txt.mjs",
     "txt:archive:apply": "node scripts/archive-legacy-txt.mjs --apply",

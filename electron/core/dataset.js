@@ -25,6 +25,7 @@ import fs from 'node:fs'
 import { streamTagFile } from './tagfile.js'
 import { syncSources, readRecords, dbReady, sourceNameList } from './store.js'
 import { loadCharLib, libIsChar, libCharSeries, libIsCopyright, charLibDiag } from './charlib.js'
+import { unsafeLevelOf, safetyMatcher } from './safety.js'
 
 /** Danbooru 分类组名: 出现在 xxx_(group) 里时不是真实作品系列 */
 export const NON_SERIES_GROUPS = new Set([
@@ -141,7 +142,12 @@ export function guessCategory(name) {
 // ---------------------------------------------------------------- 数据集状态
 
 export const ds = {
-  records: [],          // [{ path, tags: string[], ltags: string[], source: string }]
+  records: [],          // [{ path, tags, ltags, source, px_w, px_h, unsafe }]
+                        //   px_w/px_h: 像素尺寸(0=未知, 卡片回落到 9/16 默认比例)
+                        //   unsafe:    0=干净 / 1=命中敏感标签的 core 段 / 2=只命中 edge 段
+                        //              —— 读数据集时算一次, 前端切档只做比较, 不重载数据
+  unsafeCore: 0,        // 命中 core 段的条数 —— core 档开启时会隐藏这么多
+  unsafeEdge: 0,        // 只命中 edge 段的条数 —— edge 档比 core 档再多隐藏这么多
   sourceNames: [],
   byPath: new Map(),    // path -> record  (O(1) 替代原版的全表扫描)
   tagCounter: new Map(),
@@ -170,10 +176,34 @@ function intern(s) {
 
 export function tagPoolSize() { return tagPool.size }
 
+/**
+ * 按**当前**标签集合重算所有记录的安全标记。
+ *
+ * 用在: 用户在界面上改了敏感标签集合之后。只遍历内存里的 tags(八万条约 150ms),
+ * 比重新读一遍库(几秒)便宜得多 —— 而且不需要碰磁盘上的任何一行数据。
+ * 逐条 Set 查询, 顺带把两个计数重算出来给界面显示。
+ */
+export function recomputeSafety() {
+  const m = safetyMatcher()
+  ds.unsafeCore = 0
+  ds.unsafeEdge = 0
+  for (const r of ds.records) {
+    const u = unsafeLevelOf(r.ltags, m)
+    r.unsafe = u
+    if (u === 1) ds.unsafeCore++
+    else if (u === 2) ds.unsafeEdge++
+  }
+  return { core: ds.unsafeCore, edge: ds.unsafeEdge, total: ds.records.length }
+}
+
 // ---------------------------------------------------------------- 解析
 
-/** 把一条记录塞进 ds(标签过一遍字符串池) */
-function pushRecord(p, rawTags, srcName) {
+/** 把一条记录塞进 ds(标签过一遍字符串池)
+ * @param {string} p 路径
+ * @param {string[]} rawTags 标签
+ * @param {string} srcName 来源名
+ * @param {{w:number,h:number}|null} [dims] 像素尺寸; 从 txt 建库时没有(留 0) */
+function pushRecord(p, rawTags, srcName, dims = null) {
   const tags = []
   const ltags = []
   for (const raw of rawTags) {
@@ -182,7 +212,23 @@ function pushRecord(p, rawTags, srcName) {
     ltags.push(intern(t.toLowerCase()))
   }
   if (!tags.length) return
-  ds.records.push({ path: p, tags, ltags, source: srcName })
+  /* 安全模式标记 —— 在**读数据集时**算一次(八万条 × 约 40 标签, 一两百毫秒)。
+   * 放这里而不是过滤时现算: 前端切开关/切档位就只做一次数值比较, 不用为了
+   * 过滤去重载整个数据集。ltags 已经是小写的, 直接喂进去。 */
+  const unsafe = unsafeLevelOf(ltags)
+  if (unsafe === 1) ds.unsafeCore++
+  else if (unsafe === 2) ds.unsafeEdge++
+  ds.records.push({
+    path: p,
+    tags,
+    ltags,
+    source: srcName,
+    // 0 = 不知道(老库还没回填 / 从 txt 建库来的)。消费方必须把 0 当"未知",
+    // 回落到默认比例 —— 拿 0 算比例会得到 Infinity 或 0, 布局直接塌掉。
+    px_w: Number(dims?.w) || 0,
+    px_h: Number(dims?.h) || 0,
+    unsafe,
+  })
 }
 
 /**
@@ -207,6 +253,8 @@ export async function loadDataset(dataFiles, onProgress = () => {}) {
   ds.byPath = new Map()
   ds.sourceNames = [...dataFiles.keys()]
   ds.dbSync = null
+  ds.unsafeCore = 0
+  ds.unsafeEdge = 0
   tagPool.clear()
 
   const files = [...dataFiles.entries()]
@@ -232,7 +280,7 @@ export async function loadDataset(dataFiles, onProgress = () => {}) {
     onProgress({ phase: 'db-read', done: Math.round(totalBytes * 0.4), total: totalBytes })
     let last = 0
     readRecords((rec) => {
-      pushRecord(rec.path, rec.tags, rec.source)
+      pushRecord(rec.path, rec.tags, rec.source, { w: rec.px_w, h: rec.px_h })
       const n = ds.records.length
       if (n - last >= 5000) {
         last = n
@@ -253,6 +301,8 @@ export async function loadDataset(dataFiles, onProgress = () => {}) {
     console.error('[dataset] SQLite 路径不可用, 回退解析 txt:', e?.message || e)
     ds.records = []
     ds.byPath = new Map()
+    ds.unsafeCore = 0
+    ds.unsafeEdge = 0
     tagPool.clear()
     ds.dbSync = null
   }

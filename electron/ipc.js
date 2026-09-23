@@ -42,9 +42,14 @@ import {
   purgeFolder, exportFoldersJson,
 } from './core/folders.js'
 import { thumbStats, clearThumbs, thumbCacheSize } from './core/thumbs.js'
+import {
+  safetySummary, saveSafetyState, safetyText, saveSafetyText, toggleSafetyTag,
+} from './core/safety.js'
+// ds/tagPoolSize 供旧逻辑用; recomputeSafety 只为读数据集里那两个敏感标记计数
+// (安全模式界面要显示"开了会隐藏多少张"), 别拆成两行 import —— ESM 会因重复声明直接报错。
+import { ds, tagPoolSize, recomputeSafety } from './core/dataset.js'
 import { searchStats, clearSearchCache } from './core/search.js'
 import { moveFile } from './core/fileTransfer.js'
-import { ds, tagPoolSize } from './core/dataset.js'
 import { charLibDiag } from './core/charlib.js'
 import { translateInfo } from './core/translate.js'
 import { resolveFavorites } from './core/favResolve.js'
@@ -385,6 +390,33 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     'replace:save': safe(({ text }) => saveReplaceText(text)),
     'bg:get': safe(() => loadBgConfig()),
     'rules:reload': safe(() => { invalidateRuleCaches(); return { ok: true } }),
+
+    // ---------------- 安全模式(按标签集合隐藏露骨内容) ----------------
+    /* 只做**展示层过滤**: 库里一行数据都不动, 统计数字也不重算 —— 开关关掉
+       立刻全回来。标记在读数据集时就算好了(record.unsafe = 0/1/2), 所以这里
+       切开关/切档位只是改一个 json, 不需要重载八万行数据。 */
+    'safety:get': safe(() => ({
+      ...safetySummary(),
+      // 两个档位各会隐藏多少张(core 段命中数 / 仅 edge 段命中数)
+      coreHit: ds.unsafeCore,
+      edgeHit: ds.unsafeCore + ds.unsafeEdge,
+      total: ds.records.length,
+    })),
+    'safety:set': safe((raw) => saveSafetyState(raw || {})),
+    'safety:text': safe(() => ({ text: safetyText() })),
+    // 改了集合必须**重算标记** —— record.unsafe 是读数据集时按当时的集合算的。
+    // 只遍历内存(约 150ms), 不重读库; 前端拿新标记由渲染层 bump 一次版本号
+    // 让各视图重查(见 useSafetyStore)。
+    'safety:save': safe(({ text }) => {
+      const r = saveSafetyText(text)
+      const counts = recomputeSafety()
+      return { ...r, ...counts }
+    }),
+    'safety:toggle': safe(({ tag, level }) => {
+      const r = toggleSafetyTag(tag, level)
+      const counts = recomputeSafety()
+      return { ...r, ...counts }
+    }),
 
     // ---------------- 购物车历史 ----------------
     'cart:history': safe(() => historySummary()),

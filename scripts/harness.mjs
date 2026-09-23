@@ -294,8 +294,48 @@ export function ensureWorkDir({ quiet = false } = {}) {
         try { db.exec('ROLLBACK') } catch { /* 忽略 */ }
         throw e
       }
+
+      /* 像素尺寸: 只在**整库都还没有尺寸**时补一份假的(2026-09-23)。
+       *
+       * 为什么不真读文件头: 沙箱库是从真实库拷来的, 那些图在 F 盘上 —— 为了几条
+       * 渲染断言去读八万次真实文件的头, 既慢(实测十几分钟)又越界(测试不该去摸用户的图)。
+       *
+       * ⚠️ 补的必须是**统一比例**, 绝不能"奇数行横图 / 偶数行竖图" —— 这是踩过的坑:
+       * 系列封面 coverIdx 的判据是"离容器 3/4 最近者当选", 一旦假数据造出**比真数据更
+       * 理想**的比例, 封面就会被换成一张**磁盘上其实早就不在**的图。实测现场:
+       * atelier_ryza 的封面从 1135 被换成 1178(垃圾桶/1400-1499/292019.png
+       * 那一条, 文件早没了), 于是每轮都渲染出**确定性 404**, 而且一眼看不出跟"加尺寸"有关。
+       * 统一比例下所有候选同分, coverIdx 退化成老的 minIdx, 逐张与改动前一致。
+       *
+       * 已有真实尺寸时就**原样保留**(别拿假数据盖真数据), 只把 1/7 行的尺寸清空,
+       * 好让"缺尺寸要回落 9/16"这条有数据可测 —— 这一步是安全的: 清空只会让候选
+       * 退出竞争(Infinity), **不可能把某张图推上封面**。
+       *
+       * 列不存在时先补列 —— harness 跑在 Electron 之前, 这时 openDb 还没执行过。 */
+      let dims = 0
+      let dimsReal = 0
+      try {
+        const ic = new Set(db.prepare('PRAGMA table_info(images)').all().map((r) => r.name))
+        for (const c of ['px_w', 'px_h']) {
+          if (!ic.has(c)) db.exec(`ALTER TABLE images ADD COLUMN ${c} INTEGER`)
+        }
+        dimsReal = db.prepare('SELECT COUNT(*) n FROM images WHERE px_w > 0').get().n
+        if (dimsReal === 0) {
+          dims = db.prepare(`UPDATE images SET px_w = 832, px_h = 1216
+                             WHERE px_w IS NULL`).run().changes
+        } else {
+          dims = -db.prepare(`UPDATE images SET px_w = NULL, px_h = NULL
+                              WHERE id % 7 = 1 AND px_w IS NOT NULL`).run().changes
+        }
+      } catch (e) {
+        console.warn(`[harness] 补人造尺寸失败: ${e.message}`)
+      }
+
       db.close()
       reset.push(`tags.db:folders(复位扫描 ${offScan} 行, 找回来源 ${revived} 行, 降级失效目录 ${demoted} 行, 保留已移出 ${kept} 行, 删除测试夹 ${dropped} 行)`)
+      if (dims > 0) reset.push(`tags.db:images(整库无尺寸, 补了一份**统一比例**的假尺寸 ${dims} 行)`)
+      else if (dims < 0) reset.push(`tags.db:images(保留真实尺寸, 清空 ${-dims} 行当"缺尺寸回落"用)`)
+      else if (dimsReal > 0) reset.push('tags.db:images(真实尺寸齐全, 未改动)')
     } catch (e) {
       // 复位失败不该让整轮测试挂掉 —— 但要吭声, 否则下一轮的空列表断言失败
       // 会变成"莫名其妙"(实测过这类: 现象在断言, 原因在准备阶段)。

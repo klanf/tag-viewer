@@ -26,6 +26,8 @@ const CHANNELS = new Set([
   // 规则
   'blacklist:get', 'blacklist:save', 'blacklist:toggle',
   'replace:get', 'replace:save', 'bg:get', 'rules:reload',
+  // 安全模式(按标签集合隐藏露骨内容; 只做展示层过滤)
+  'safety:get', 'safety:set', 'safety:text', 'safety:save', 'safety:toggle',
   // 购物车历史
   'cart:history', 'cart:detail', 'cart:save', 'cart:delete', 'cart:rename',
   // 导出

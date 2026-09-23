@@ -203,10 +203,10 @@ export async function statAll(files) {
  * 进度消息实时回来, 转发给渲染端画进度条。
  * @returns {Promise<Array<{tags:string[], source:string}>>} 与 files 下标一一对应
  */
-export function parseInWorker(files, onProgress) {
+export function parseInWorker(files, onProgress, kind = 'meta') {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL('./scanWorker.js', import.meta.url), {
-      workerData: { files },
+      workerData: { files, kind },
     })
     w.on('message', (m) => {
       if (m?.type === 'progress') {
@@ -225,8 +225,17 @@ export function parseInWorker(files, onProgress) {
   })
 }
 
-/* ---------------------------------------------------------------- 主流程 */
+/**
+ * 只读尺寸的批量入口 —— ingest 给老库懒回填 px_w/px_h 走这条。
+ * 与 parseInWorker 共用同一个 worker 文件(靠 kind='size' 分支), 不占主进程。
+ * @returns {Promise<Array<{w:number,h:number}|null>>} 与 files 下标一一对应。
+ *   null = 文件读不到 / 格式认不出 —— 调用方**保留旧值**, 别写 0 冒充尺寸。
+ */
+export function sizeInWorker(files, onProgress) {
+  return parseInWorker(files, onProgress, 'size')
+}
 
+/* ---------------------------------------------------------------- 主流程 */
 /**
  * @param {object} raw  {path, recursive, limit, force, rebuild}
  * @param {(p:{done:number,total:number})=>void} [onProgress]

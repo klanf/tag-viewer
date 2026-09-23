@@ -32,7 +32,7 @@
  */
 import fs from 'node:fs'
 import { openDb, normalizeImagePath, rebuildTags } from './store.js'
-import { listImages, statAll, parseInWorker } from './scan.js'
+import { listImages, statAll, parseInWorker, sizeInWorker } from './scan.js'
 import { flog } from './filelog.js'
 
 /** 单轮同步的运行状态(IPC 与启动日志都读它) */
@@ -52,6 +52,12 @@ export const ingestState = {
   running: false,
 }
 
+/** 每轮最多补多少张图片尺寸。
+ *  全库八万张一次补完, 会让「同步」这一步从几秒变成一分钟往上, 用户会以为卡死。
+ *  分批做: 进度条能走完、补过的行立刻生效、中途关掉也不丢已补的部分。
+ *  3 万这个量级每轮多花十几秒 —— 只读 64KB 文件头, 不解码像素。 */
+const DIM_FILL_MAX = 30000
+
 function emptyStats() {
   return {
     folders: 0,        // 参与同步的目录数
@@ -64,6 +70,8 @@ function emptyStats() {
     goneSet: 0,        // 规则 5: 标记消失
     goneCleared: 0,    // 规则 6: 磁盘又出现, 清 gone
     readImages: 0,     // **真正读了图的张数** —— 反向验收的关键指标
+    dimsBackfilled: 0, // 本轮补上的像素尺寸(只读文件头, 不算 readImages)
+    dimsPending: 0,    // 还没补尺寸的行数(下轮同步接着补)
     ms: 0,
   }
 }
@@ -240,7 +248,7 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
 
   // ---- 2. 读库内现状(按 folder_id, 迁移已保证无孤立行) ----
   const rows = db.prepare(
-    'SELECT id, path, tags, mtime_ms, size, tags_src, gone FROM images WHERE folder_id = ?',
+    'SELECT id, path, tags, mtime_ms, size, tags_src, gone, px_w FROM images WHERE folder_id = ?',
   ).all(f.id)
   const dbByPath = new Map(rows.map((r) => [r.path, r]))
   const queued = new Map(
@@ -253,6 +261,7 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
   const goneUpd = []      // id —— 磁盘已不见
   const goneClr = []      // id —— 磁盘又出现
   const toRead = []       // { path, kind:'new'|'changed', id?, m, s }
+  const dimFill = []      // [id, path] —— 「规则 1 真跳过」但还没尺寸的行(懒回填)
   let skipped = 0
 
   for (const [npath, d] of disk) {
@@ -277,10 +286,21 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
     const hasFp = r.mtime_ms !== null && r.size !== null
     if (!hadGone && hasFp && Number(r.mtime_ms) === d.m && Number(r.size) === d.s) {
       skipped++                     // 规则 1: 真跳过, 一次图都不读
+      // 唯一例外: 还没有尺寸。卡片要按真实比例渲染、系列封面要优先挑竖图,
+      // 都得靠它 —— 只读文件头(不解码), 所以不记进 readImages 那个指标。
+      // px_w 为 NULL = "从没试过"; 补过但读不到的会写成 0, 不再反复重试。
+      if (r.px_w === null) {
+        stats.dimsPending++
+        if (dimFill.length < DIM_FILL_MAX) dimFill.push([r.id, npath])
+      }
       continue
     }
     if (!hadGone && !hasFp) {
       statUpd.push([d.m, d.s, r.id])  // 首轮: 只补指纹
+      if (r.px_w === null) {
+        stats.dimsPending++
+        if (dimFill.length < DIM_FILL_MAX) dimFill.push([r.id, npath])
+      }
       stats.statBackfilled++
       skipped++
       continue
@@ -313,20 +333,40 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
     for (let i = 0; i < paths.length; i++) parsed.set(paths[i], res[i] || { tags: [], source: '' })
   }
 
+  // ---- 4.5 懒回填像素尺寸(只读文件头, 与上面"读元数据"是两回事) ----
+  // 为什么放在这里而不是塞进上面那次 worker: 上面只处理「新图 / 图变了」,
+  // 而缺尺寸的是**已经跳过好几轮的老行**(规则 1 的"一次图都不读"恰恰是它们)。
+  // 单独一批走 kind='size' 的 worker, 不解码像素, 也不进 readImages 指标。
+  const dimRows = []      // [px_w, px_h, id]
+  if (!dryRun && dimFill.length) {
+    emit(onProgress, { phase: 'dims', done: 0, total: dimFill.length, note: `补图片尺寸 ${dimFill.length} 张` })
+    const res = await sizeInWorker(dimFill.map((x) => x[1]), (p) => {
+      if (p?.type === 'progress') emit(onProgress, { phase: 'dims', done: p.done, total: p.total })
+    })
+    for (let i = 0; i < dimFill.length; i++) {
+      const s = res[i]
+      // 拿不到就写 0(="试过了, 没有"), 而不是继续留 NULL —— 留 NULL 会让它
+      // 每轮同步都被重新收进待补列表, 卡在那里永远出不来。
+      dimRows.push([s ? Number(s.w) : 0, s ? Number(s.h) : 0, dimFill[i][0]])
+    }
+    stats.dimsBackfilled += dimRows.length
+  }
+
   // ---- 5. 先算出落库计划(预演模式下就到此为止) ----
   const srcId = srcIdFor(db, f.label)
   const now = Date.now()
   const plan = { inserts: [], metaUpdates: [], fpUpdates: [], queue: [] }
   for (const item of toRead) {
     const p = parsed.get(item.path) || { tags: [], source: '' }
+    const dim = p.dim || null          // worker 顺手读到的像素尺寸, 可能为 null
     const hasMeta = Array.isArray(p.tags) && p.tags.length > 0
     if (hasMeta) {
       const tags = p.tags.join(',')
-      if (item.kind === 'new') plan.inserts.push({ path: item.path, tags, m: item.m, s: item.s })
-      else plan.metaUpdates.push({ id: item.id, path: item.path, tags, m: item.m, s: item.s })
+      if (item.kind === 'new') plan.inserts.push({ path: item.path, tags, m: item.m, s: item.s, dim })
+      else plan.metaUpdates.push({ id: item.id, path: item.path, tags, m: item.m, s: item.s, dim })
     } else {
       // 裸图: 不动已有标签(legacy 值可能是世上唯一一份), 只更新指纹 + 入队
-      if (item.kind === 'changed') plan.fpUpdates.push({ id: item.id, m: item.m, s: item.s })
+      if (item.kind === 'changed') plan.fpUpdates.push({ id: item.id, m: item.m, s: item.s, dim })
       plan.queue.push({ path: item.path, m: item.m, s: item.s })
     }
   }
@@ -345,21 +385,34 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
       for (const id of goneUpd) goneStmt.run(id)
 
       const insStmt = db.prepare(`
-        INSERT INTO images (path, src_id, tags, folder_id, mtime_ms, size, tags_src, gone, tagged_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'meta', 0, ?)
+        INSERT INTO images (path, src_id, tags, folder_id, mtime_ms, size, tags_src, gone, tagged_at, px_w, px_h)
+        VALUES (?, ?, ?, ?, ?, ?, 'meta', 0, ?, ?, ?)
       `)
-      for (const x of plan.inserts) insStmt.run(x.path, srcId, x.tags, f.id, x.m, x.s, now)
+      // 尺寸拿不到就写 0(=未知): 卡片回落到 9/16 默认比例, 但不会被当成
+      // "还没补过"每轮重读一遍。
+      for (const x of plan.inserts) {
+        insStmt.run(x.path, srcId, x.tags, f.id, x.m, x.s, now, x.dim?.w || 0, x.dim?.h || 0)
+      }
 
       // 重读到了元数据 -> 覆盖(图内原生提示词永远优先)。
       const metaStmt = db.prepare(`
-        UPDATE images SET tags = ?, tags_src = 'meta', mtime_ms = ?, size = ?, gone = 0, tagged_at = ?
+        UPDATE images SET tags = ?, tags_src = 'meta', mtime_ms = ?, size = ?, gone = 0,
+                          tagged_at = ?, px_w = ?, px_h = ?
         WHERE id = ?
       `)
-      for (const x of plan.metaUpdates) metaStmt.run(x.tags, x.m, x.s, now, x.id)
+      for (const x of plan.metaUpdates) {
+        metaStmt.run(x.tags, x.m, x.s, now, x.dim?.w || 0, x.dim?.h || 0, x.id)
+      }
 
       // 重读**没**读到元数据 -> 只更新指纹 + 确认它还在磁盘上
-      const fpStmt = db.prepare('UPDATE images SET mtime_ms = ?, size = ?, gone = 0 WHERE id = ?')
-      for (const x of plan.fpUpdates) fpStmt.run(x.m, x.s, x.id)
+      const fpStmt = db.prepare(
+        'UPDATE images SET mtime_ms = ?, size = ?, gone = 0, px_w = ?, px_h = ? WHERE id = ?',
+      )
+      for (const x of plan.fpUpdates) fpStmt.run(x.m, x.s, x.dim?.w || 0, x.dim?.h || 0, x.id)
+
+      // 规则 1 跳过的老行: 只补尺寸, 别的字段一个字都不动
+      const dimStmt = db.prepare('UPDATE images SET px_w = ?, px_h = ? WHERE id = ?')
+      for (const [w, h, id] of dimRows) dimStmt.run(w, h, id)
 
       // 已有元数据 -> 不必再反推(可能之前入过队, 比如图被换成了带元数据的版本)
       const qDel = db.prepare('DELETE FROM tag_queue WHERE path = ?')
@@ -390,7 +443,8 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
   stats.queued += qn
   emit(onProgress, {
     phase: 'folder-done', folderIndex: index, folderTotal: total,
-    note: `${f.label || f.path}: 新增 ${ins} · 更新 ${metaUpd} · 入队 ${qn} · 消失 ${goneUpd.length}`,
+    note: `${f.label || f.path}: 新增 ${ins} · 更新 ${metaUpd} · 入队 ${qn} · 消失 ${goneUpd.length}`
+      + (dimRows.length ? ` · 补尺寸 ${dimRows.length}` : ''),
   })
 }
 

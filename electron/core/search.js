@@ -94,7 +94,13 @@ export function searchRecords(records, searchTags, mode, match,
         kept.push(tag)
       }
     }
-    out[w++] = { path: r.path, tags: kept }
+    /* 结果必须带上**卡片渲染真正要用的字段**, 不能只挑 path/tags。
+     * 2026-09-23 踩过一次: 卡片改成按 px_w/px_h 渲染真实比例后, 这里漏了尺寸字段,
+     * 于是所有卡片**静默**回落到 9/16(横图又被裁成竖条), 一个错都不报 ——
+     * 只有 e2e 那条"卡片比例不再是清一色 9/16"的断言抓到了。同理漏 `unsafe`
+     * 会让安全模式永远筛不掉任何东西, 漏 `source` 会让卡片上的来源角标消失。
+     * 所以这里改成 spread: **以后给记录加字段会自动带出来**, 不要再手写字段列表。 */
+    out[w++] = { ...r, tags: kept }
   }
   out.length = w
   return out

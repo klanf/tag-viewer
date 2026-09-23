@@ -147,6 +147,16 @@ export const useAppStore = defineStore('app', () => {
   }
 
   /**
+   * 手动让各视图重跑一次初始查询 —— 数据集本身没重载, 但主进程返回的记录里
+   * 带了新的信息时用。目前唯一的调用点是**改了安全模式的敏感标签集合**:
+   * 主进程会重算每条记录的 unsafe 标记(只遍历内存), 而渲染层手里是上一次的
+   * 副本, 只有重新查一次才能拿到新标记。
+   *
+   * 不加进 applyStatus 那套(它是"数据换了一茬"的语义), 单独一个入口更清楚。
+   */
+  function bumpEpoch() { epoch.value++ }
+
+  /**
    * 手动触发后台任务。
    *
    * ⚠️ 这几个 action 之前**不存在**(2026-09-20 修): 徽标里的「再同步一次」
@@ -184,7 +194,7 @@ export const useAppStore = defineStore('app', () => {
   return {
     phase, error, progress, stats, translate, workspace, config, sourcesInfo, loadMs, epoch,
     theme, ready, loading, totalImages, ingest, tagger,
-    init, reload, applyStatus, toggleTheme, applyTheme,
+    init, reload, applyStatus, bumpEpoch, toggleTheme, applyTheme,
     ingestRun, ingestPause, taggerRun, taggerPause, taggerRefresh,
   }
 })

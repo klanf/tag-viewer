@@ -180,6 +180,10 @@ a:hover { text-decoration: underline; }
   grid-template-columns: repeat(auto-fill, minmax(var(--grid-min), 1fr));
   gap: 10px;
   align-content: start;
+  /* 卡片高度不再统一了(2026-09-23: 图片按真实比例渲染, 横图矮、竖图高),
+     所以不能让 grid 把同一行的卡片拉齐 —— 拉齐只会往矮卡片里塞一大片空白。
+     `start` = 各自保持自己的高度、顶部对齐。 */
+  align-items: start;
 }
 
 /* 分页条 */

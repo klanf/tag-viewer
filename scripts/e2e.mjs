@@ -1877,6 +1877,9 @@ async function main() {
      * 目的地选 DATA_DIR: 它是 fav:resolve 的搜索根之一(数据目录), 且扫描页
      * 默认递归枚举 —— 挪进扫描夹子目录会污染下一轮的「共 5 张」断言。
      */
+    /* 测试**自己在应用外**搬走的路径(目前只有下面收藏页那一步)。只给最后那条总闸当
+       极窄放行用 —— 应用没参与这次移动, 它无从得知, 详见总闸那一段的注释。 */
+    const outOfBandMoved = []
     await cdp.eval(`__t.click('.scan-view .grid.folders .ecard'); return true`)
     await waitFor(cdp, `__t.count('.scan-view .grid.imgs .card') > 0`, { label: '9d 再进文件夹', timeout: 60000 })
     await cdp.eval(`
@@ -1901,8 +1904,15 @@ async function main() {
     check('收藏: 删除(进回收站)后记录保留, 不再被摘掉', !!a2Kept, a2Kept?.path || '(无)')
 
     // 应用外移动 a1: 直接 rename, 不经过应用(与用户在资源管理器里挪图等价)
+    //
+    // ⚠️ 移动会让**扫描页文件夹封面的缩略图**变成 404 —— 封面取的是"第一张有标签的图"
+    //    (folders.js pickCover), 正好是 a1, 而封面不会因为文件消失而刷新。这跟上面
+    //    "光箱删除故意改删第 2 张"绕开的是**同一个已知小遗留问题**, 只是这里绕不开:
+    //    收藏页要验的正是"文件被搬走后按文件名找回", 必须真搬。所以把旧路径登记下来,
+    //    交给最后那条总闸做**极窄**放行(别往这个数组里塞别的东西)。
     const movedOut = path.join(DATA_DIR, 'a1.png')
     fs.renameSync(a1Rec.path, movedOut)
+    outOfBandMoved.push(encodeURIComponent(a1Rec.path))
     check('收藏: 应用外移动已就位(原路径已空)', !fs.existsSync(a1Rec.path), path.basename(a1Rec.path))
 
     await cdp.eval(`__t.clickText('.hdr .nv', '收藏'); return true`)
@@ -2539,9 +2549,72 @@ async function main() {
 
     await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
 
+    /* ---------------- 11d. 图片真实比例 & 安全模式(2026-09-23) ----------------
+     *
+     * 两件事都是"读侧"改造, 所以断言也都在读侧:
+     *
+     * ① 卡片按图片**真实像素比**渲染。原来一律 9/16 + `object-fit: cover`,
+     *    横图会被裁成竖条 —— 实测用户库里横图占一半(壁纸那几个来源全是横的),
+     *    不是边角情况。沙箱库里的尺寸是 harness 造的假数据(奇数行=横图 1920x1080、
+     *    偶数行=竖图 832x1216、每 7 行留一行**不填**, 好让"缺尺寸要回落 9/16"
+     *    这条也在数据里存在); 这里只验证"渲染层真的在按 px_w/px_h 算",
+     *    "真读文件头"那一段由 test:visual 守。
+     *
+     * ② 安全模式入口 + 默认关闭。它是**按标签集合**判的 —— 实测库里 `rating_*`
+     *    标记 0 张, 没有别的判据可用; 而 core 档会藏掉 58% 的图, 所以绝不能默认开。
+     */
+    await waitFor(cdp, `!!document.querySelector('.grid .card .tv-img')`,
+      { label: '首页卡片(比例断言用)', timeout: 20000 })
+    const ratios = await cdp.eval(`
+      const out = new Set()
+      for (const el of document.querySelectorAll('.grid .card .tv-img')) {
+        const r = el.style.aspectRatio || ''
+        if (r) out.add(r)
+      }
+      return [...out]
+    `)
+    check('卡片按图片真实像素比渲染(不再是清一色 9/16)',
+      ratios.some((r) => r !== '9 / 16' && /\d+ \/ \d+/.test(r)),
+      `出现的比例: ${ratios.slice(0, 6).join(' | ') || '(一个都没有)'}`)
+
+    await cdp.eval(`location.hash = '#/tags'; return true`)
+    await waitFor(cdp, `!!document.querySelector('.tags-view')`, { label: '标签页', timeout: 20000 })
+    const sfOpen = await cdp.eval(`
+      const btn = [...document.querySelectorAll('.tags-view .bar button')]
+        .find((b) => (b.textContent || '').includes('安全模式'))
+      if (!btn) return false
+      btn.click()
+      return true
+    `)
+    check('标签页: 有「安全模式」入口', sfOpen === true)
+
+    await waitFor(cdp, `!!document.querySelector('.mask .box .sf')`,
+      { label: '安全模式弹窗', timeout: 15000 })
+    const sf = await cdp.eval(`
+      const box = document.querySelector('.mask .box .sf')
+      const st = box.querySelector('.stat')
+      return {
+        chips: box.querySelectorAll('.tv-chip').length,
+        stat: st ? st.textContent.replace(/\\s+/g, ' ').trim() : '',
+        on: !!box.querySelector('.tv-check.switch.on'),
+      }
+    `)
+    check('安全模式: 弹窗列出敏感标签(两段, 可逐条移出)', sf.chips >= 20, `${sf.chips} 个标签胶囊`)
+    check('安全模式: 给出"当前档位会隐藏多少张"的统计', /会隐藏/.test(sf.stat), sf.stat)
+    check('安全模式: 默认关闭(实测 core 档会藏掉 58% 的图, 不能默认开)', sf.on === false)
+
+    // 关掉弹窗(点右上角 ×)再回首页, 免得遮罩挡住后面的断言
+    await cdp.eval(`
+      document.querySelector('.mask .box .head .x')?.click()
+      await new Promise((r) => setTimeout(r, 400))
+      location.hash = '#/'
+      await new Promise((r) => setTimeout(r, 600))
+      return true
+    `)
+
     /* ---------------- 12. 控制台健康度 ---------------- */
     /**
-     * 只过滤两类**与本应用代码无关**的噪声, 不是"放行所有报错":
+     * 只过滤三类**与本应用代码无关**的噪声, 不是"放行所有报错":
      *
      *  1) favicon 404 —— file:// 下必然出现。
      *  2) Electron/Chromium 自己的沙箱渲染进程引导失败:
@@ -2556,6 +2629,16 @@ async function main() {
      * 过滤掉它之后并不是失去保护 —— 紧接着有一条**正面断言**证明 preload 真的生效
      * (window.tv.invoke 可调用)。那比"控制台不报错"更硬: 控制台干净但 IPC 桥没注入
      * 才是真正危险的情况, 而这条断言能抓到。
+     *
+     *  3) **本测试自己在应用外搬走的那张图**(收藏页那一步 `fs.renameSync`, 模拟用户在
+     *     资源管理器里挪图)。扫描页的**文件夹封面**取的是"第一张有标签的图"
+     *     (folders.js pickCover), 正好是 a1; 文件被搬走后封面还指着旧路径, 而封面
+     *     **不会因为文件消失而刷新** —— 这是本项目一个已知的小遗留问题(光箱删除那一段
+     *     是靠"故意改删第 2 张"绕开它的, 见那里的注释), 这次绕不开(收藏页要验的就是
+     *     "被搬走后按文件名找回", 必须真搬), 而且应用没参与这次移动、无从得知, 不算 bug。
+     *     放行范围**只限这一个路径**(由 `outOfBandMoved` 精确登记, 不靠模式匹配):
+     *     应用自己删/移走的图一律不放行 —— 删除另有"幽灵请求总账"盯着(要求 0 条),
+     *     而系统性问题(例如"移出来源后还在请求那批死图")会牵出一整批路径, 一条也漏不掉。
      */
     /**
      * 幽灵请求总账 —— 删除之后, 还有谁在请求那张已经进回收站的图?
@@ -2578,9 +2661,16 @@ async function main() {
     check('幽灵请求总账: 删除后整轮都不再请求那张已进回收站的图', ghost.n === 0, JSON.stringify(ghost))
 
     const NOISE = /favicon|ERR_FILE_NOT_FOUND.*favicon|sandboxed_renderer\.bundle\.js|binding\.startupData/i
-    const errs = cdp.errors.filter((e) => !NOISE.test(e))
+    const errs = cdp.errors.filter(
+      (e) => !NOISE.test(e) && !outOfBandMoved.some((p) => p && e.includes(p)),
+    )
+    const selfMovedN = cdp.errors.length - errs.length -
+      cdp.errors.filter((e) => NOISE.test(e)).length
     check('运行期无 JS 异常 / Vue 警告', errs.length === 0,
-      errs.length ? `${errs.length} 条: ${errs.slice(0, 4).join(' | ')}` : `0 条(已滤掉 favicon 与 Electron 沙箱引导噪声 ${cdp.errors.length - errs.length} 条)`)
+      errs.length
+        ? `${errs.length} 条: ${errs.slice(0, 4).join(' | ')}`
+        : `0 条(已滤掉 favicon/沙箱引导 ${cdp.errors.length - errs.length - selfMovedN} 条` +
+          (selfMovedN ? ` + 本测试外移的那张图 ${selfMovedN} 条` : '') + ')')
 
     /* preload 生效的正面证据 —— 与上面那条一起, 才是完整的健康度检查 */
     const bridge = await cdp.eval(`

@@ -10,9 +10,10 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import TvImage from '../base/TvImage.vue'
-import { clipTags, shortPath } from '@/utils/format.js'
+import { clipTags, shortPath, ratioOf } from '@/utils/format.js'
 import { useImageCtxMenu } from '@/composables/useImageCtxMenu.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
 
 const props = defineProps({
   /** {path, tags} 或扫描页的 {path, tags, source, key_tags, chars} */
@@ -42,6 +43,21 @@ const emit = defineEmits(['open', 'toggle-fav', 'toggle-select', 'hover', 'move'
 
 const path = computed(() => props.item.path || '')
 
+/**
+ * 图片区显示比例 —— 按**图片真实像素比**渲染(2026-09-23)。
+ *
+ * 原来这里一律 9/16 + `object-fit: cover`, 横图会被裁成竖条。实测用户库里
+ * 横图占一半(壁纸那几个来源一万四千多张全是横的), 不是边角情况。
+ *
+ * 尺寸来自 DB 的 px_w/px_h(ingest 读文件头写入), 所以**是渲染前就知道的**,
+ * 不存在"等图片加载出来量一下再改比例"那种首帧跳动。还拿不到尺寸的行
+ * (老库没回填 / 文件读不到) 回落到 '9 / 16' —— 与改动前完全一致。
+ *
+ * 用不上新 prop: item 里已经带着尺寸, 首页/系列/标签/扫描四个网格一行都不用改,
+ * 跟「上次看过的高亮框」那条一样, 以后新视图只要用这张卡片就自动带上。
+ */
+const ratio = computed(() => ratioOf(props.item.px_w, props.item.px_h) || '9 / 16')
+
 /** 失效收藏: prop 显式传, 或数据里带 _missing 标记(网格不用加新的透传 prop) */
 const isMissing = computed(() => props.missing || !!props.item._missing)
 
@@ -50,6 +66,13 @@ const isMissing = computed(() => props.missing || !!props.item._missing)
  * 以后新视图只要用这张卡片就自动带上这个行为。 */
 const lb = useLightboxStore()
 const isLastViewed = computed(() => !!lb.lastPath && lb.lastPath === path.value)
+
+/* 安全模式: 开启时命中敏感标签的卡片**整个不渲染**。
+ * 放在卡片这一层而不是各视图的列表里 —— 首页/系列/标签/扫描/收藏五个网格
+ * 一处都不用改, 以后新视图只要用这张卡就自动带上(跟上面那个高亮框同一个思路)。
+ * 只影响展示: 数据集、统计数字、库里的一行都不动, 关掉开关立刻全回来。 */
+const safety = useSafetyStore()
+const hidden = computed(() => safety.isHidden(props.item))
 
 /* 高亮框持久化后的"找回"一步: 应用重启(或翻页/进文件夹后高亮那张第一次被渲染)时,
  * 自动把它滚进视野居中, 然后清掉 scrollPending —— 只滚这一次, 之后不再打扰。
@@ -102,6 +125,7 @@ function onCtx(e) {
 
 <template>
   <div
+    v-if="!hidden"
     ref="rootEl"
     :class="['card', { selected, 'has-sel': selectable, 'last-viewed': isLastViewed, 'is-missing': isMissing }]"
     :title="isMissing ? '文件已不在原位置 —— 可能把图移走了; 收藏已保留, 打开收藏页时会按文件名自动找回' : (selectable ? '点击勾选/取消' : (isLastViewed ? '上次看到这张(红色呼吸框) · 点击预览大图与标签' : '点击预览大图与标签'))"
@@ -124,8 +148,8 @@ function onCtx(e) {
     </span>
 
     <!-- 失效收藏不请求缩略图: 路径已失效, 请求必然 404(还会打红 e2e 的控制台总闸) -->
-    <TvImage v-if="!isMissing" :path="path" :width="thumbWidth" :alt="item.name || path" />
-    <span v-else class="tv-img gone-ph" />
+    <TvImage v-if="!isMissing" :path="path" :width="thumbWidth" :ratio="ratio" :alt="item.name || path" />
+    <span v-else class="tv-img gone-ph" :style="{ aspectRatio: ratio }" />
 
     <span v-if="showSource && item.source" class="src">{{ item.source }}</span>
 
@@ -214,7 +238,9 @@ function onCtx(e) {
   border: 1px solid var(--border);
 }
 .gone-ph {
-  display: block; width: 100%; aspect-ratio: 9 / 16;
+  /* 比例由模板的 :style 给(跟随该图真实尺寸) —— 这里不要写死 9/16,
+     否则"文件已不在"的横图占位会跟正常卡片的比例对不上 */
+  display: block; width: 100%;
   background: var(--panel3);
 }
 
