@@ -333,7 +333,8 @@ export async function scanFolder(raw = {}, onProgress = null) {
   const items = []
   let withPrompt = 0
   for (const fp of files) {
-    if (!statMap.has(fp)) continue
+    const st = statMap.get(fp)
+    if (!st) continue
     const r = reuse.get(fp) || parsed.get(fp)
     if (!r) continue
     if (r.tags.length) withPrompt++
@@ -343,6 +344,11 @@ export async function scanFolder(raw = {}, onProgress = null) {
       tags: r.tags,
       source: r.source,
       folder: path.basename(path.dirname(fp)),
+      /* 排序要用(2026-09-23): 扫描页的排序全在前端做, 而前端只有 name/folder 可排,
+         想按时间或大小排就必须把 stat 里的这两项带过去。`statMap` 本来就为每个文件
+         存了 m/s(见上面的 statSync), 所以这是纯白捡的, 不用额外读盘。 */
+      mtime: st.m,
+      size: st.s,
     })
   }
 

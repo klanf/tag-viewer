@@ -23,6 +23,9 @@ import { useFloatBack } from '@/composables/useFloatBack.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useFavStore } from '@/stores/useFavStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { usePrefsStore } from '@/stores/usePrefsStore.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { nfmt } from '@/utils/format.js'
 
 const route = useRoute()
@@ -30,19 +33,26 @@ const router = useRouter()
 const lb = useLightboxStore()
 const fav = useFavStore()
 const ui = useUiStore()
+const prefs = usePrefsStore()
+/** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
+const safety = useSafetyStore()
 
 const tag = ref('')
-const imgSort = ref('path')
+const imgSort = ref(prefs.sortTagImgs)
 const imgPageSize = ref(60)
 const feed = useImageFeed({ infinite: true, pageSize: 60 })
 
 /** 当前图片流顺序 —— 传给大图预览做「上一张 / 下一张」 */
-const imgPaths = computed(() => feed.results.value.map((i) => i.path).filter(Boolean))
+const shownResults = computed(() => safety.filterItems(feed.results.value))
+const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boolean))
 watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
 
 function imgQuery() {
   return { q: tag.value, match: 'contains', sort: imgSort.value }
 }
+
+/* 排序改了就记下来(不用重新点一遍); 重查由模板上的 @change="load()" 负责 */
+watch(imgSort, (v) => { prefs.sortTagImgs = v })
 
 async function load() {
   feed.setPageSize(imgPageSize.value)
@@ -120,6 +130,7 @@ function toggleFav(item) {
         <span class="hint">条匹配</span>
         <span class="hint faint">点大图里的标签可以继续往下跳 · 悬停标签点 📋 只复制这一个</span>
         <span class="spacer" />
+        <TvSafetyToggle />
         <TvSelect
           v-model="imgSort"
           size="sm"

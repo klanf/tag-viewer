@@ -27,6 +27,9 @@ import { useSourceStore } from '@/stores/useSourceStore.js'
 import { useCartStore } from '@/stores/useCartStore.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { usePrefsStore } from '@/stores/usePrefsStore.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { api } from '@/utils/api.js'
 import { nfmt, stripZhSeries } from '@/utils/format.js'
 
@@ -34,6 +37,9 @@ const src = useSourceStore()
 const cart = useCartStore()
 const lb = useLightboxStore()
 const ui = useUiStore()
+const prefs = usePrefsStore()
+/** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
+const safety = useSafetyStore()
 
 const view = ref('series')        // series | chars | images
 const loading = ref(false)
@@ -230,9 +236,10 @@ const imgFeed = useImageFeed({ infinite: true, pageSize: 60 })
  * 当前图片流顺序 —— 传给大图预览做「上一张 / 下一张」。
  * 无限滚动追加后会被 watch 同步进去, 所以滚到哪就能翻到哪。
  */
-const imgPaths = computed(() => imgFeed.results.value.map((i) => i.path).filter(Boolean))
+const shownResults = computed(() => safety.filterItems(imgFeed.results.value))
+const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boolean))
 watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
-const imgSort = ref('path')
+const imgSort = ref(prefs.sortSeries)
 const imgPageSize = ref(60)
 const curChar = ref(null)
 
@@ -275,7 +282,7 @@ onMounted(() => {
   showSeriesList()
 })
 
-watch(imgSort, reloadImages)
+watch(imgSort, (v) => { prefs.sortSeries = v; reloadImages() })
 watch(imgPageSize, (v) => { imgFeed.setPageSize(v); reloadImages() })
 watch(charSort, () => { /* 纯前端排序, computed 已经处理 */ })
 
@@ -314,6 +321,10 @@ watch(() => route.query.series, async (name) => {
         :total="src.totalImages"
         @change="onSourceChange"
       />
+      <!-- 放在**顶栏**而不是图片流的工具栏里: 系列页有"系列/角色/图片"三层,
+           只有"图片"那层有图 —— 放工具栏的话, 用户在系列列表那一屏就找不到开关。
+           顶栏是三层都在的, 一份就够。 -->
+      <TvSafetyToggle />
     </div>
 
     <div class="panel body">

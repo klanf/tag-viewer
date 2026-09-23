@@ -13,11 +13,15 @@ import TvCheckoutModal from './TvCheckoutModal.vue'
 import TvHistoryModal from './TvHistoryModal.vue'
 import { useCartStore } from '@/stores/useCartStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { api } from '@/utils/api.js'
 
 const cart = useCartStore()
 const ui = useUiStore()
+/** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
+const safety = useSafetyStore()
 const lb = useLightboxStore()
 
 const showCheckout = ref(false)
@@ -96,6 +100,7 @@ async function revealItem(it) {
             <TvButton size="sm" variant="warn" :disabled="!cart.count" @click="showCheckout = true">💳 结算</TvButton>
             <TvButton size="sm" variant="secondary" @click="showHistory = true">🕘 历史</TvButton>
             <TvButton size="sm" variant="primary" :disabled="!cart.count" @click="openCartFile">📋 复制</TvButton>
+            <TvSafetyToggle icon-only />
             <TvButton size="sm" variant="danger" :disabled="!cart.count" @click="clearAll">🗑 清空</TvButton>
           </div>
 

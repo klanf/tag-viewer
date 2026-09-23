@@ -19,10 +19,14 @@ import TvImageGrid from '@/components/image/TvImageGrid.vue'
 import { useFavStore } from '@/stores/useFavStore.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 
 const fav = useFavStore()
 const lb = useLightboxStore()
 const ui = useUiStore()
+/** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
+const safety = useSafetyStore()
 
 /** 找回后确认"文件已不在"的路径(原路径), 卡片据此标灰 */
 const missingSet = ref(new Set())
@@ -35,9 +39,12 @@ const tagFilter = ref('')
 const displayList = computed(() => {
   const q = tagFilter.value.trim().toLowerCase()
   const sorted = fav.list.slice().sort((a, b) => (b.at || 0) - (a.at || 0))
-  return sorted
+  const hit = sorted
     .filter((r) => !q || (r.tags || []).some((t) => t.toLowerCase().includes(q)))
     .map((r) => (missingSet.value.has(r.path) ? { ...r, _missing: true } : r))
+  /* 安全模式: 收藏记录里带着**收藏那一刻的标签快照**, 所以库外/失效的收藏也判得出来
+     (见 useSafetyStore.unsafeOf —— 没有 unsafe 字段就按标签现算)。 */
+  return safety.filterItems(hit)
 })
 
 /** 传给光箱的翻页列表: 当前过滤结果(标灰的也能开 —— 光箱自己会显示加载失败) */
@@ -75,6 +82,7 @@ onMounted(async () => {
         placeholder="按标签过滤收藏(子串匹配)"
         spellcheck="false"
       >
+      <TvSafetyToggle />
     </header>
 
     <TvImageGrid

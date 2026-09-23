@@ -1,16 +1,27 @@
 <script setup>
 /**
- * 图片网格 —— 首页 / 系列页 / 标签页 / 扫描页共用
- * ===========================================
+ * 图片网格 —— 首页 / 系列页 / 标签页 / 收藏页共用
+ * =============================================
  * 把「渲染卡片 + 三种状态 + 无限滚动哨兵」收在一起。页面只负责喂数据。
  *
- * 无限滚动用 IntersectionObserver, rootMargin 600px ——
- * 与旧版 setupInfiniteLoad 的 600px 保持一致, 用户滚到还有半屏时就开始加载,
- * 体感是"无缝"的。
+ * 排布方式(2026-09-23 改): **自适应行高**(justified rows), 见
+ * composables/useJustifiedRows.js 的说明 —— 每行按图片真实比例铺满, 行高自适应,
+ * 一行都不留空洞, 而且一张图都不裁。改之前是 CSS grid 按行对齐, 横图下方必然空一片。
+ *
+ * 安全模式也在这一层过滤(只影响展示): 传进来的 `results` 先过一遍安全模式, 于是
+ *   · 网格里少掉的图不占格子;
+ *   · 页脚那句「已经到底了(共 N 张)」里的 N 是**过滤后**的真实张数;
+ *   · 各视图传给光箱的翻页序列用的是同一个过滤结果(见各视图的 imgPaths)。
+ *
+ * 无限滚动用 IntersectionObserver, rootMargin 600px —— 与旧版 setupInfiniteLoad 的
+ * 600px 保持一致, 用户滚到还有半屏时就开始加载, 体感是"无缝"的。
  */
 import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
 import TvImageCard from './TvImageCard.vue'
 import TvState from '../base/TvState.vue'
+import { useJustifiedRows } from '@/composables/useJustifiedRows.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import { nfmt } from '@/utils/format.js'
 
 const props = defineProps({
   results: { type: Array, default: () => [] },
@@ -33,9 +44,22 @@ const props = defineProps({
   selectedTags: { type: [Object, Array], default: null },
   emptyText: { type: String, default: '没有匹配的图片' },
   loadingText: { type: String, default: '加载中...' },
-  gridMin: { type: String, default: '' },
+  /** 「竖图目标宽度」: 自适应行高下竖图大约这么宽(默认与原 --grid-min 一致) */
+  rowBase: { type: Number, default: 150 },
 })
 const emit = defineEmits(['open', 'toggle-fav', 'toggle-select', 'load-more', 'hover', 'move', 'leave'])
+
+/* 安全模式: 只做展示层过滤, 数据集/统计数字一个都不动(关掉立刻全回来) */
+const safety = useSafetyStore()
+
+/** 真正渲染的列表 = 传进来的结果过一遍安全模式 */
+const shown = computed(() => safety.filterItems(props.results))
+/** 有图, 但全被安全模式藏掉了 —— 得明确告诉用户, 否则看起来像"搜不到" */
+const allHidden = computed(() => (
+  !!props.results.length && !shown.value.length && safety.on
+))
+
+const { wrapEl, rows } = useJustifiedRows(shown, { base: props.rowBase })
 
 const sentinel = ref(null)
 let io = null
@@ -78,50 +102,63 @@ function onHover(payload) {
 </script>
 
 <template>
-  <div class="wrap-grid">
+  <div ref="wrapEl" class="wrap-grid">
     <TvState v-if="error" state="error" :text="`加载失败: ${error}`" />
     <TvState
-      v-else-if="!results.length && loading"
+      v-else-if="!shown.length && loading"
       state="loading"
       :text="loadingText"
     />
     <TvState
-      v-else-if="!results.length && loadedOnce"
+      v-else-if="allHidden"
+      state="empty"
+      :text="`${nfmt(results.length)} 张都被安全模式隐藏了 —— 在工具栏关掉它就能看到`"
+    />
+    <TvState
+      v-else-if="!shown.length && loadedOnce"
       state="empty"
       :text="emptyText"
     />
     <TvState
-      v-else-if="!results.length"
+      v-else-if="!shown.length"
       state="empty"
       text=""
     />
     <template v-else>
-      <div class="grid" :style="gridMin ? { '--grid-min': gridMin } : undefined">
-        <TvImageCard
-          v-for="(item, i) in results"
-          :key="itemKey(item, i)"
-          :item="item"
-          :thumb-width="thumbWidth"
-          :favable="favable"
-          :favorited="favable && isFav(item.path)"
-          :show-source="showSource"
-          :tag-mode="tagMode"
-          :footnote="footnote"
-          :selectable="selectable"
-          :selected="isSelected(item)"
-          @open="(it) => emit('open', it)"
-          @toggle-fav="(p) => emit('toggle-fav', p)"
-          @toggle-select="(it) => emit('toggle-select', it)"
-          @hover="onHover"
-          @move="(e) => emit('move', e)"
-          @leave="emit('leave')"
-        />
+      <div class="grid jrows">
+        <div v-for="(row, ri) in rows" :key="ri" class="jrow">
+          <div
+            v-for="(c, ci) in row.cells"
+            :key="itemKey(c.item, ci)"
+            class="jcell"
+            :style="{ width: `${c.w}px`, '--img-h': `${row.h}px` }"
+          >
+            <TvImageCard
+              :item="c.item"
+              fill
+              :thumb-width="thumbWidth"
+              :favable="favable"
+              :favorited="favable && isFav(c.item.path)"
+              :show-source="showSource"
+              :tag-mode="tagMode"
+              :footnote="footnote"
+              :selectable="selectable"
+              :selected="isSelected(c.item)"
+              @open="(it) => emit('open', it)"
+              @toggle-fav="(p) => emit('toggle-fav', p)"
+              @toggle-select="(it) => emit('toggle-select', it)"
+              @hover="onHover"
+              @move="(e) => emit('move', e)"
+              @leave="emit('leave')"
+            />
+          </div>
+        </div>
       </div>
       <!-- 无限滚动哨兵 -->
       <div ref="sentinel" class="sentinel" />
-      <div v-if="loading && results.length" class="more-msg">加载中...</div>
-      <div v-else-if="infinite && !hasMore && results.length" class="more-msg">
-        已经到底了(共 {{ results.length }} 张)
+      <div v-if="loading && shown.length" class="more-msg">加载中...</div>
+      <div v-else-if="infinite && !hasMore && shown.length" class="more-msg">
+        已经到底了(共 {{ nfmt(shown.length) }} 张)
       </div>
     </template>
     <!-- 分页模式由父组件把分页条放进这个插槽 -->

@@ -186,6 +186,44 @@ a:hover { text-decoration: underline; }
   align-items: start;
 }
 
+/* 自适应行高网格(justified rows) —— 图片网格专用, 2026-09-23
+ * ==========================================================
+ * 只留 `.grid` 的按行对齐会怎样: 一行的高度取这一行里最高的卡, 横图(矮)下面空出一大片。
+ * 实测横图占一半(壁纸来源 100% 横), 所以满屏都是空洞 → 用户不接受。
+ *
+ * 这里把图片网格换成"每行按比例铺满、行高自适应"(见 composables/useJustifiedRows.js),
+ * 空洞彻底消失, 而且**一张图都不裁**。
+ *
+ * 行高/宽度由 JS 算好内联写在每个 `.jcell` 上(`width` 与 `--img-h`):
+ *   · `width`   = 行高 × 这张图的宽高比  -> 按比例分宽度, 一行正好贴满
+ *   · `--img-h` = 这一行的行高            -> 图片框高度, 每行一致
+ * 于是同一行的卡片**总高严格相同**(图片 + 固定高度的文字区), 下一行才能整齐接上。
+ *
+ * 文字区为什么必须给固定高度: `.tags` 的内容多寡会让它 6px~28px 之间浮动
+ * (`keys` 模式还能到 42px) —— 不固定的话, 同一行里图片底边对齐了、卡片底边却参差,
+ * 下一行就又出现细缝。固定之后行与行之间是严丝合缝的。
+ *
+ * 类名保留 `.grid`(前面加了 `.grid.jrows` 覆写) —— 全站/e2e 有十几处选择器写的是
+ * `.grid .card`, 改类名会让它们集体失配, 得不偿失。
+ */
+.grid.jrows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
+}
+.jrows .jrow { display: flex; gap: 10px; align-items: flex-start; }
+.jrow .jcell { flex: 0 0 auto; min-width: 0; }
+.jcell > .card { display: flex; flex-direction: column; }
+/* 图片框: 高度由行高定, 宽度由单元格宽度定 —— 两者之比就是图片真实比例, cover 也不会裁到东西 */
+.jcell > .card > .tv-img { flex: 0 0 auto; height: var(--img-h); }
+/* 文字区固定高度(见上面注释): 普通卡 28+20, 扫描页的 keys 模式 42+20 */
+.jcell > .card > .tags { flex: 0 0 auto; height: 28px; box-sizing: border-box; }
+.jcell > .card > .tags.keys { height: 42px; }
+.jcell > .card > .foot { flex: 0 0 auto; height: 20px; box-sizing: border-box; }
+/* 失效卡的灰底占位块也要跟着行高走 */
+.jcell > .card > .gone-ph { flex: 0 0 auto; height: var(--img-h); }
+
 /* 分页条 */
 .pager { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; margin-top: 12px; }
 .pager .page {

@@ -15,6 +15,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { findElectron, electronEnv } from './electron-path.mjs'
 import { freePort, clearPageState, ensureWorkDir, sleep, ROOT } from './harness.mjs'
 
@@ -26,6 +27,54 @@ let USER_DATA = ''
 /** 「移动到」的目标目录 —— 真实搬文件用, 每轮重建 */
 let MOVED_DIR = ''
 const KEEP = process.argv.includes('--keep')
+
+/* ------------------------------------------------------------ 控制台总闸的两个小工具 */
+
+/** 沙箱库的只读句柄(给"陈旧记录"判定用), 懒开一次 */
+let probeDb = null
+
+/**
+ * 从 CDP 的控制台文本里抠出被请求的图片路径(只认 tv:// 那两条协议的 p= 参数)。
+ * 抠不到就返回空串 —— 调用方按"不豁免"处理。
+ */
+function requestedPath(msg) {
+  const m = /[?&]p=([^&\s"']+)/.exec(String(msg || ''))
+  if (!m) return ''
+  try { return decodeURIComponent(m[1]) } catch { return '' }
+}
+
+/**
+ * **陈旧记录**判定 —— 控制台总闸的一条"证明式"豁免(2026-09-23)。
+ *
+ * 背景: 沙箱库是从真实库 `VACUUM INTO` 拷来的, 拷贝时间点早于"应用最近一次同步",
+ * 所以库里会留下一批 **文件早就不在磁盘上、却还 gone=0** 的行(实测 Anima-Random
+ * 一个来源就有 40 条)。看板认为它存在 -> 渲染卡片 -> 请求缩略图 -> 404。
+ * 这不是应用代码的 bug, 是数据陈旧; 而"卡片按真实比例排版"之后每屏渲染的张数变了、
+ * e2e 又多跑了好几个页面, 请求面变大, 这种 404 就被翻出来了(以前是侥幸没撞上)。
+ *
+ * 判据要**两条同时成立**才放行:
+ *   ① 请求的路径在磁盘上确实不存在;
+ *   ② 沙箱库里那一行存在、且 `gone=0`。
+ * 只满足 ① 一律不放行 —— 路径拼错、编码错、协议改造错也都会让 ① 成立, 而那正是这条
+ * 总闸该抓的东西。所以这里不是"放行所有 404", 而是"能证明是陈旧数据的 404"。
+ *
+ * 打不开库 / 查询出错一律**不放行**(宁可红一次让人来查, 也不要悄悄放行)。
+ */
+function isStaleRecord(p) {
+  if (!p || !DATA_DIR) return false
+  try { if (fs.existsSync(p)) return false } catch { return false }
+  try {
+    if (!probeDb) {
+      const f = path.join(DATA_DIR, 'tags.db')
+      /* 优先只读打开; 万一 WAL 下 readOnly 打不开(库正被跑着的应用占着),
+         退回普通打开 —— 这个句柄只用来跑 SELECT, 不写任何东西。 */
+      try { probeDb = new DatabaseSync(f, { readOnly: true }) }
+      catch { probeDb = new DatabaseSync(f) }
+    }
+    const r = probeDb.prepare('SELECT gone FROM images WHERE path = ?').get(p)
+    return !!r && Number(r.gone) === 0
+  } catch { return false }
+}
 
 /**
  * 跳过截图 —— 截图是给人看的辅助产物, 但它会**堵死整条 CDP 连接**。
@@ -296,8 +345,14 @@ async function main() {
     env: electronEnv({ TV_DATA_DIR: DATA_DIR, TV_E2E_CTX_MOVE: MOVED_DIR }),
   })
   let childExited = null
-  child.stdout.on('data', (b) => process.stdout.write(`[main] ${b}`))
-  child.stderr.on('data', (b) => process.stderr.write(`[main!] ${b}`))
+  /* 主进程 stdout 里混着**渲染进程转发**的 console —— `electron/main.js` 的
+     console-message 通道, 形如 `<ts> [render] <url>:<line> [error] <msg>`。
+     这条通道和 CDP 的收集路径**不是同一条**: 浏览器自己产生的消息(ResizeObserver、
+     CSP、内存警告…)只走这里。所以必须单独留一份 —— 否则"断言全绿"会漏掉它们
+     (2026-09-23 实测: 网格重排产生的 7 条 ResizeObserver 警告, CDP 一条都没收到)。 */
+  const mainLog = []
+  child.stdout.on('data', (b) => { mainLog.push(String(b)); process.stdout.write(`[main] ${b}`) })
+  child.stderr.on('data', (b) => { mainLog.push(String(b)); process.stderr.write(`[main!] ${b}`) })
   child.on('exit', (code, sig) => { childExited = `code=${code} sig=${sig}` })
 
   const page = await findPage()
@@ -2549,47 +2604,107 @@ async function main() {
 
     await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
 
-    /* ---------------- 11d. 图片真实比例 & 安全模式(2026-09-23) ----------------
+    /* ---------------- 11d. 真实比例排版 & 安全模式(2026-09-23) ----------------
      *
-     * 两件事都是"读侧"改造, 所以断言也都在读侧:
+     * ① 自适应行高网格: 卡片按图片真实比例渲染(原来一律 9/16 + `object-fit: cover`,
+     *    横图被裁成竖条), 排布换成"每行按比例铺满、行高自适应" —— 按行对齐的话横图
+     *    下面必然空一片。实测横图占一半(壁纸那几个来源 100% 是横的), 用户明确不接受。
+     *    算法本身由 test:visual 钉死, 这里量的是**页面上真实的几何**。
      *
-     * ① 卡片按图片**真实像素比**渲染。原来一律 9/16 + `object-fit: cover`,
-     *    横图会被裁成竖条 —— 实测用户库里横图占一半(壁纸那几个来源全是横的),
-     *    不是边角情况。沙箱库里的尺寸是 harness 造的假数据(奇数行=横图 1920x1080、
-     *    偶数行=竖图 832x1216、每 7 行留一行**不填**, 好让"缺尺寸要回落 9/16"
-     *    这条也在数据里存在); 这里只验证"渲染层真的在按 px_w/px_h 算",
-     *    "真读文件头"那一段由 test:visual 守。
+     * ② 安全模式开关**每个能看到图片的页面都要有**(用户原话), 且默认关闭。
+     *    它是**按标签集合**判的 —— 实测库里 `rating_*` 标记 0 张, 没有别的判据可用;
+     *    而 core 档会藏掉 58% 的图, 所以绝不能默认开。
      *
-     * ② 安全模式入口 + 默认关闭。它是**按标签集合**判的 —— 实测库里 `rating_*`
-     *    标记 0 张, 没有别的判据可用; 而 core 档会藏掉 58% 的图, 所以绝不能默认开。
+     * ③ "打开就一键过滤"是功能本体: 点一下, 网格里的图真的少了; 再点一下全部回来。
+     *    末尾**必须确认开关回到"关"** —— 它是写进沙箱 data/safety.json 的持久状态,
+     *    留一个 on:true 会让后面每一轮的卡数断言都少一半(harness 每轮也会清零, 双保险)。
      */
-    await waitFor(cdp, `!!document.querySelector('.grid .card .tv-img')`,
-      { label: '首页卡片(比例断言用)', timeout: 20000 })
-    const ratios = await cdp.eval(`
-      const out = new Set()
-      for (const el of document.querySelectorAll('.grid .card .tv-img')) {
-        const r = el.style.aspectRatio || ''
-        if (r) out.add(r)
+    /* ① 自适应行高网格(justified rows): 每行按真实比例铺满、行高自适应。
+     *
+     * 为什么算法已经在 test:visual 里钉死了还要在渲染层再量一遍: 算法对不代表页面用上了
+     * —— 少写一个 `fill`、少算一个 `--img-h`, 就会退回"按行对齐、横图下面空一片"。
+     * 所以这里量的是**真实几何**(贴边偏差 / 行内图片框高差 / 横竖图确实同时存在),
+     * 不是"样式里有没有 aspectRatio"那个字符串 —— 现在填的是 `auto`(高度由行高给)。
+     *
+     * 沙箱库里的尺寸是 harness 造的假数据(奇数行=横 1920x1080、偶数行=竖 832x1216、
+     * 每 7 行留一行不填 -> 走 9/16 回落), 所以"同一页里横竖都有"这条一定测得到。 */
+    await waitFor(cdp, `!!document.querySelector('.grid.jrows .jrow .card')`,
+      { label: '首页自适应行高网格', timeout: 30000 })
+    const lay = await cdp.eval(`
+      const g = document.querySelector('.grid.jrows')
+      if (!g) return { rows: 0 }
+      const rows = [...g.querySelectorAll('.jrow')]
+      const cw = g.clientWidth
+      const rect = (el) => el.getBoundingClientRect()
+      let maxDev = 0
+      for (const r of rows.slice(0, -1)) {
+        const cs = [...r.children]
+        if (!cs.length) continue
+        const a = rect(cs[0]); const b = rect(cs[cs.length - 1])
+        maxDev = Math.max(maxDev, Math.abs((b.right - a.left) - cw))
       }
-      return [...out]
+      let maxH = 0
+      for (const r of rows) {
+        const hs = [...r.querySelectorAll('.tv-img')].map((e) => rect(e).height)
+        if (hs.length) maxH = Math.max(maxH, Math.max(...hs) - Math.min(...hs))
+      }
+      const asp = [...g.querySelectorAll('.tv-img')].map((e) => {
+        const b = rect(e); return b.width / b.height
+      })
+      return {
+        rows: rows.length,
+        maxDev: Math.round(maxDev),
+        maxH: Math.round(maxH),
+        wide: asp.filter((a) => a > 1.2).length,
+        tall: asp.filter((a) => a < 0.8).length,
+        sample: asp.slice(0, 5).map((a) => a.toFixed(2)).join(' '),
+      }
     `)
-    check('卡片按图片真实像素比渲染(不再是清一色 9/16)',
-      ratios.some((r) => r !== '9 / 16' && /\d+ \/ \d+/.test(r)),
-      `出现的比例: ${ratios.slice(0, 6).join(' | ') || '(一个都没有)'}`)
+    check('自适应行高: 每行左右铺满(横图下面不再空一片)',
+      lay.rows > 1 && lay.maxDev <= 4, `${lay.rows} 行 · 最大贴边偏差 ${lay.maxDev}px`)
+    check('自适应行高: 同一行内图片框等高', lay.maxH <= 2, `行内最大高差 ${lay.maxH}px`)
+    check('真实比例: 同一页里既有明显横图也有明显竖图',
+      lay.wide > 0 && lay.tall > 0, `横 ${lay.wide} / 竖 ${lay.tall} · 比例样本 ${lay.sample}`)
 
-    await cdp.eval(`location.hash = '#/tags'; return true`)
-    await waitFor(cdp, `!!document.querySelector('.tags-view')`, { label: '标签页', timeout: 20000 })
-    const sfOpen = await cdp.eval(`
-      const btn = [...document.querySelectorAll('.tags-view .bar button')]
-        .find((b) => (b.textContent || '').includes('安全模式'))
-      if (!btn) return false
-      btn.click()
-      return true
+    /* ② 安全模式开关必须**随处可得** —— 用户原话是"可以看到图片的地方都要加个开关"。
+     *    少接一个页面, 用户就得先跳去标签页才能开, 这一条就是防这个回归的。 */
+    const PAGES = [
+      ['#/', '看板', '.result-head .safe-tog'],
+      ['#/scan', '扫描', '.scan-view .safe-tog'],
+      ['#/series', '系列浏览', '.series-view .head .safe-tog'],
+      ['#/tags', '标签浏览', '.tags-view .bar .safe-tog'],
+      ['#/favs', '收藏', '.favs-view .bar .safe-tog'],
+      ['#/cart', '角色购物车', '.cart-view .panel.head .safe-tog'],
+    ]
+    const missing = []
+    for (const [hash, name, sel] of PAGES) {
+      await cdp.eval(`location.hash = ${JSON.stringify(hash)}
+        await new Promise((r) => setTimeout(r, 1300))
+        return true`)
+      const has = await cdp.eval(`return !!document.querySelector(${JSON.stringify(sel)})`)
+      if (!has) missing.push(name)
+    }
+    check('安全模式开关: 每个能看到图片的页面都有', missing.length === 0,
+      missing.length ? `缺: ${missing.join(', ')}` : `${PAGES.length} 个页面全有`)
+
+    /* ③ 入口点开是设置台(档位 / 集合 / "会隐藏多少张") */
+    await cdp.eval(`location.hash = '#/tags'
+      await new Promise((r) => setTimeout(r, 1200))
+      return true`)
+    await waitFor(cdp, `!!document.querySelector('.tags-view .bar')`, { label: '标签页', timeout: 20000 })
+    const sfEntry = await cdp.eval(`
+      const tog = document.querySelector('.tags-view .bar .safe-tog')
+      return {
+        on: !!tog && tog.classList.contains('on'),
+        text: (tog && tog.querySelector('.st-btn') ? tog.querySelector('.st-btn').textContent : '').replace(/\\s+/g, ''),
+      }
     `)
-    check('标签页: 有「安全模式」入口', sfOpen === true)
+    check('标签页: 有「安全模式」入口', sfEntry.text.includes('安全'), sfEntry.text)
+    check('安全模式: 默认关闭(实测 core 档会藏掉 58% 的图, 不能默认开)', sfEntry.on === false)
 
+    await cdp.eval(`document.querySelector('.tags-view .bar .safe-tog .st-set').click(); return true`)
     await waitFor(cdp, `!!document.querySelector('.mask .box .sf')`,
-      { label: '安全模式弹窗', timeout: 15000 })
+      { label: '安全模式设置台', timeout: 15000 })
     const sf = await cdp.eval(`
       const box = document.querySelector('.mask .box .sf')
       const st = box.querySelector('.stat')
@@ -2599,18 +2714,40 @@ async function main() {
         on: !!box.querySelector('.tv-check.switch.on'),
       }
     `)
-    check('安全模式: 弹窗列出敏感标签(两段, 可逐条移出)', sf.chips >= 20, `${sf.chips} 个标签胶囊`)
+    check('安全模式: 设置台列出敏感标签(两段, 可逐条移出)', sf.chips >= 20, `${sf.chips} 个标签胶囊`)
     check('安全模式: 给出"当前档位会隐藏多少张"的统计', /会隐藏/.test(sf.stat), sf.stat)
-    check('安全模式: 默认关闭(实测 core 档会藏掉 58% 的图, 不能默认开)', sf.on === false)
+    check('安全模式: 设置台里的开关也是关闭的', sf.on === false)
 
-    // 关掉弹窗(点右上角 ×)再回首页, 免得遮罩挡住后面的断言
     await cdp.eval(`
       document.querySelector('.mask .box .head .x')?.click()
       await new Promise((r) => setTimeout(r, 400))
-      location.hash = '#/'
-      await new Promise((r) => setTimeout(r, 600))
       return true
     `)
+
+    /* ④ "打开就一键过滤掉" —— 这是这个功能的本体: 点一下开关, 网格里的图**真的少了**;
+     *    再点一下, 全部回来。前面那几条都只是"入口在不在"。 */
+    await cdp.eval(`location.hash = '#/'
+      await new Promise((r) => setTimeout(r, 1200))
+      return true`)
+    await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '首页卡片(过滤前)', timeout: 30000 })
+    const beforeN = await cdp.eval(`return __t.count('.grid .card')`)
+    await cdp.eval(`document.querySelector('.result-head .safe-tog .st-btn').click(); return true`)
+    await waitFor(cdp, `__t.count('.grid .card') < ${beforeN}`,
+      { label: '安全模式生效(卡片变少)', timeout: 15000 }).catch(() => null)
+    const onN = await cdp.eval(`return __t.count('.grid .card')`)
+    const onCls = await cdp.eval(`return !!document.querySelector('.result-head .safe-tog.on')`)
+    check('安全模式: 打开后网格里的图真的少了一大截', onN > 0 && onN < beforeN, `${beforeN} -> ${onN} 张`)
+    check('安全模式: 开关自己进入"已开"状态', onCls === true)
+
+    await cdp.eval(`document.querySelector('.result-head .safe-tog .st-btn').click(); return true`)
+    await waitFor(cdp, `__t.count('.grid .card') >= ${beforeN}`,
+      { label: '关掉安全模式后图片回来', timeout: 15000 }).catch(() => null)
+    const offN = await cdp.eval(`return __t.count('.grid .card')`)
+    check('安全模式: 关掉立刻全部回来(只影响显示, 不动库里的数据)', offN > onN, `${onN} -> ${offN} 张`)
+    const offCls = await cdp.eval(`return !!document.querySelector('.result-head .safe-tog.on')`)
+    check('安全模式: 关掉后开关状态复位(不留残留 —— 否则后面每一轮的卡数断言都会莫名其妙少一半)',
+      offCls === false)
+
 
     /* ---------------- 12. 控制台健康度 ---------------- */
     /**
@@ -2639,6 +2776,9 @@ async function main() {
      *     放行范围**只限这一个路径**(由 `outOfBandMoved` 精确登记, 不靠模式匹配):
      *     应用自己删/移走的图一律不放行 —— 删除另有"幽灵请求总账"盯着(要求 0 条),
      *     而系统性问题(例如"移出来源后还在请求那批死图")会牵出一整批路径, 一条也漏不掉。
+     *  4) **沙箱库里的陈旧记录**(2026-09-23 起)。见 isStaleRecord 的注释 —— 判据是
+     *     "路径在磁盘上不存在 **且** 库里那行还在且 gone=0", 两条同时成立才算陈旧数据,
+     *     属于**证明式**豁免(不是放宽成"忽略 404")。
      */
     /**
      * 幽灵请求总账 —— 删除之后, 还有谁在请求那张已经进回收站的图?
@@ -2660,17 +2800,228 @@ async function main() {
     `)
     check('幽灵请求总账: 删除后整轮都不再请求那张已进回收站的图', ghost.n === 0, JSON.stringify(ghost))
 
+    /* ---------------- 11e. 扫描页排序: 记住选择 + 8 种排序(2026-09-23) ----------------
+     *
+     * ⚠️ **为什么这一段写在"12. 控制台健康度"里面(紧跟幽灵请求总账之后), 而不在前面**:
+     *    它要测"重启后还记得排序", 手段是 `location.reload()` —— 而 reload 会把
+     *    9c 段装在**页面里**的两个全局(`window.__imgReq` / `window.__delBase`)一起清掉。
+     *    上面那条幽灵请求断言读的正是这两个, 一旦被清, `base` 变成空串, 过滤结果恒为 0
+     *    —— 断言**照样绿, 但已经不测任何东西了**。所以顺序只能是:
+     *      幽灵请求 → 本段(可以随便重载) → 控制台断言(重载后跑, 覆盖面反而更大)。
+     *
+     * 用户两条诉求: "每次进去都要点一下排序"(要记住) 和 "增加按时间排序, 其他排序方式"。
+     *
+     * 为什么三条一起测:
+     *   · 只测"下拉里有 8 项"  -> 漏掉"选了不生效";
+     *   · 只测"选了生效"      -> 漏掉"不记住"(每次进来还是默认);
+     *   · 只测"记住了"        -> 漏掉"串了键"(扫描页的选择把看板也改了, 两边同值照样通过)。
+     *
+     * 用自己的夹具夹(不碰 .e2e-work/scan): 那一份跑到这里已经被删掉/移走几张了
+     * (9c/9d 的删除与"移动到"断言各拿走一张), 而且**不能还原** —— 12 段那条
+     * "幽灵请求总账" 认的就是"删除后整轮都不再请求那张图", 把文件放回去会让它误报。
+     *
+     * 地面真值全部**自己造**: 5 张图的**名字 / 大小 / mtime 三个序彼此不同**,
+     * 否则(比如默认夹具 mtime 与名字同序) time_desc 恰好等于 name_desc, 测了跟没测一样。
+     *   p1 <- a5(69B, 无元数据) · p2 <- a1(437B) · p3 <- a4(321B)
+     *   p4 <- a2(437B)          · p5 <- a3(426B)
+     * 于是 size_asc = p1,p3,p5,p2,p4 —— 与名字序 p1..p5 明显不同, "按大小真的生效"这才测得出来。
+     */
+    const SORT_DIR = path.join(path.dirname(SCAN_DIR), 'sort-fixture')
+    const SORT_MAP = {
+      'p1.png': 'a5.png', 'p2.png': 'a1.png', 'p3.png': 'a4.png',
+      'p4.png': 'a2.png', 'p5.png': 'a3.png',
+    }
+    // mtime 故意**非单调**: p1 中、p2 最早、p3 最晚、p4 次晚、p5 次早
+    const SORT_MT = {
+      'p1.png': '2022-01-03T00:00:00Z', 'p2.png': '2022-01-01T00:00:00Z',
+      'p3.png': '2022-01-05T00:00:00Z', 'p4.png': '2022-01-04T00:00:00Z',
+      'p5.png': '2022-01-02T00:00:00Z',
+    }
+    const NAME_ORD = ['p1.png', 'p2.png', 'p3.png', 'p4.png', 'p5.png']
+    const TIME_DESC = ['p3.png', 'p4.png', 'p1.png', 'p5.png', 'p2.png']
+    const SIZE_ASC = ['p1.png', 'p3.png', 'p5.png', 'p2.png', 'p4.png']
+    /* 大->小 **不是** 小->大的严格逆序: p2/p4 同是 437 字节, 兜底规则是"主键相同按文件名升序",
+       所以并列那一对在两个方向里都保持 p2 在前。这条正是"兜底真的在起作用"的证据 ——
+       没有兜底的话同大小的一批每次刷新都会换顺序。 */
+    const SIZE_DESC = ['p2.png', 'p4.png', 'p5.png', 'p3.png', 'p1.png']
+    fs.mkdirSync(SORT_DIR, { recursive: true })
+    for (const [dst, srcName] of Object.entries(SORT_MAP)) {
+      const dstP = path.join(SORT_DIR, dst)
+      fs.copyFileSync(path.join(ROOT, 'test-fixtures', 'scan-test', srcName), dstP)
+      const t = new Date(SORT_MT[dst])
+      fs.utimesSync(dstP, t, t)
+    }
+
+    /* 页面上的排序辅助 —— TvSelect 是**原生 `<select>`**(不是自定义弹层),
+       所以 set value + dispatch 'change' 与用户手点完全等价(组件监听的就是 change)。
+       每次**重新查**元素(重扫/重载后 Vue 可能重建它, 闭包里揣着旧节点会静默失灵)。 */
+    const SORT_PROBE = `
+      const findSel = () => {
+        const lab = [...document.querySelectorAll('.scan-view .pager-bar .tv-select')]
+          .find((l) => ((l.querySelector('.lab') || {}).textContent || '').includes('排序'))
+        return lab ? lab.querySelector('select') : null
+      }
+      window.__pickSort = async (v) => {
+        const s = findSel()
+        if (!s) throw new Error('找不到排序下拉')
+        s.value = v
+        s.dispatchEvent(new Event('change', { bubbles: true }))
+        await new Promise((r) => setTimeout(r, 650))
+        return true
+      }
+      window.__sortNow = () => { const s = findSel(); return s ? s.value : '' }
+      window.__sortOpts = () => { const s = findSel(); return s ? [...s.options].map((o) => o.value) : [] }
+      window.__names = () => [...document.querySelectorAll('.scan-view .grid.imgs .card')].map((c) => {
+        const f = c.querySelector('.foot')
+        const raw = (f && f.getAttribute('title')) || (f ? f.textContent : '') || ''
+        return String(raw).split(/[\\\\/]/).pop()
+      })
+      return true
+    `
+    /* 打开某个扫描夹 —— 按**卡片文本**里出现夹具名来找。
+       不用路径: normFolderPath 会做规范化, 用路径比字符串容易在斜杠/大小写上翻车;
+       也不用"第几张卡": 列表里本来就有别的文件夹(垃圾桶/桌面壁纸…), 顺序也不固定。
+       ⚠️ 等待条件**必须是"这一张卡出现"**, 不能写"卡片数 > 0" —— 后者被列表里已有的
+       文件夹立刻满足, 于是新加的那个还没扫完就去找它, 直接报"没找到卡片"(实测踩到)。 */
+    const SORT_NAME = path.basename(SORT_DIR)
+    const OPEN_FOLDER = `
+      const hit = [...document.querySelectorAll('.scan-view .grid.folders .ecard')]
+        .find((c) => (c.textContent || '').toLowerCase().includes(${JSON.stringify(SORT_NAME.toLowerCase())}))
+      if (!hit) throw new Error('没找到文件夹卡片: ' + ${JSON.stringify(SORT_NAME)})
+      hit.click()
+      return true
+    `
+    const SORT_CARD_READY = `!![...document.querySelectorAll('.scan-view .grid.folders .ecard')]` +
+      `.some((c) => (c.textContent || '').toLowerCase().includes(${JSON.stringify(SORT_NAME.toLowerCase())}))`
+    const gotoScanAndAdd = async () => {
+      await cdp.eval(`location.hash = '#/scan'
+        await new Promise((r) => setTimeout(r, 1400))
+        return true`)
+      await waitFor(cdp, `!!document.querySelector('.scan-view')`, { label: '扫描页', timeout: 30000 })
+      /* ScanView 在 KeepAlive 白名单里 —— 切回来会**停在离开时的层级**。
+         上一段(9e)是停在"文件夹里"那一层的, 那一层**没有**添加框, 也没有文件夹卡,
+         所以先退回列表层, 否则下面两处 waitFor 会一直等到超时。 */
+      await cdp.eval(`
+        const back = document.querySelector('.scan-view .crumb .link')
+        if (back) { back.click(); await new Promise((r) => setTimeout(r, 700)) }
+        return true
+      `)
+      await waitFor(cdp, `!!document.querySelector('.scan-view .tv-input')`, { label: '扫描页列表层', timeout: 30000 })
+      // 粘贴路径 + 回车 = 添加(重复添加不产生第二条, 见 9 段) —— 保证它一定在列表里
+      await cdp.eval(`
+        __t.setInput('.scan-view .tv-input', ${JSON.stringify(SORT_DIR)})
+        await new Promise((r) => setTimeout(r, 150))
+        __t.pressEnter('.scan-view .tv-input')
+        return true
+      `)
+      await waitFor(cdp, SORT_CARD_READY, { label: '排序夹具夹卡片出现', timeout: 90000 })
+      await cdp.eval(OPEN_FOLDER)
+      await waitFor(cdp, `__t.count('.scan-view .grid.imgs .card') === 5`, { label: '排序夹具 5 张', timeout: 60000 })
+      await cdp.eval(SORT_PROBE)
+    }
+    await gotoScanAndAdd()
+
+    const opts = await cdp.eval(`return __sortOpts()`)
+    check('扫描排序: 下拉里有 8 种排序(含按时间 / 按大小)',
+      opts.length === 8 && opts.includes('time_desc') && opts.includes('size_desc'),
+      `${opts.length} 种: ${opts.join(',')}`)
+
+    const ord = await cdp.eval(`
+      const out = {}
+      for (const v of ['name', 'name_desc', 'time_desc', 'time_asc', 'size_asc', 'size_desc', 'tags_desc', 'folder']) {
+        await __pickSort(v)
+        out[v] = __names()
+      }
+      return out
+    `)
+    const J = (a) => JSON.stringify(a || [])
+    check('扫描排序: 按文件名 A-Z(自然排序)', J(ord.name) === J(NAME_ORD), (ord.name || []).join(','))
+    check('扫描排序: 文件名 Z-A 是 A-Z 的逆序',
+      J(ord.name_desc) === J([...NAME_ORD].reverse()), (ord.name_desc || []).join(','))
+    check('扫描排序: 按修改时间 新->旧 真的按 mtime 排(顺序与文件名序不同)',
+      J(ord.time_desc) === J(TIME_DESC), (ord.time_desc || []).join(','))
+    check('扫描排序: 按修改时间 旧->新 是 新->旧 的逆序',
+      J(ord.time_asc) === J([...TIME_DESC].reverse()), (ord.time_asc || []).join(','))
+    check('扫描排序: 按大小 小->大 真的按字节数排(与文件名序不同)',
+      J(ord.size_asc) === J(SIZE_ASC), (ord.size_asc || []).join(','))
+    check('扫描排序: 按大小 大->小 真的按字节数排(并列的那对仍按文件名, 不抖)',
+      J(ord.size_desc) === J(SIZE_DESC), (ord.size_desc || []).join(','))
+    check('扫描排序: 按标签数 多->少 把"没有元数据"那张排到最后',
+      (ord.tags_desc || [])[4] === 'p1.png', (ord.tags_desc || []).join(','))
+    check('扫描排序: 同一夹里"按子文件夹"退化成按文件名(不塌成随机序)',
+      J(ord.folder) === J(NAME_ORD), (ord.folder || []).join(','))
+
+    /* 记住 —— 写的是 sortScan 这一个键, 且**没串到看板那一份**(两处共用一个键的话,
+       在扫描页调顺序会顺手把看板的顺序也改掉, 而只测"记住了"是发现不了的)。 */
+    await cdp.eval(`return __pickSort('time_desc')`)
+    const ls1 = await cdp.eval(`return {
+      scan: localStorage.getItem('tv_sort_scan'),
+      home: localStorage.getItem('tv_sort_home'),
+    }`)
+    check('扫描排序: 选择只写进 sortScan 这一个键(没串到看板那份)',
+      ls1.scan === 'time_desc' && ls1.home !== 'time_desc', `scan=${ls1.scan} · home=${ls1.home}`)
+
+    /* 重启(重载)后仍然是上次选的那个 —— 这才是"每次进去都要点一下"的修法。
+       重载会重建执行上下文: __t 与排序辅助都要重新注入。 */
+    try { await cdp.eval(`setTimeout(() => location.reload(), 20); return true`) } catch { /* 上下文即将销毁 */ }
+    await sleep(900)
+    await waitFor(cdp, `!!document.querySelector('#app .hdr')`, { label: '重载后顶栏', timeout: 60000 })
+    await cdp.eval(HELPERS)
+    await waitFor(cdp, `!!document.querySelector('.scan-view .tv-input')`, { label: '重载后扫描页', timeout: 60000 })
+    await waitFor(cdp, SORT_CARD_READY, { label: '重载后夹具夹卡片', timeout: 60000 })
+    await cdp.eval(OPEN_FOLDER)
+    await waitFor(cdp, `__t.count('.scan-view .grid.imgs .card') === 5`, { label: '重载后夹具 5 张', timeout: 60000 })
+    await cdp.eval(SORT_PROBE)
+    const persisted = await cdp.eval(`return { v: __sortNow(), names: __names() }`)
+    check('扫描排序: 重启(重载)后不用再点 —— 还是上次选的那个且顺序也对',
+      persisted.v === 'time_desc' && J(persisted.names) === J(TIME_DESC),
+      `${persisted.v} · ${(persisted.names || []).join(',')}`)
+
+    /* 负向控制: 手改 localStorage 塞个坏值, 必须**回落默认**而不是把列表搞空
+       (取值走白名单, 坏值 -> 'name')。 */
+    await cdp.eval(`localStorage.setItem('tv_sort_scan', 'bogus'); return true`)
+    try { await cdp.eval(`setTimeout(() => location.reload(), 20); return true`) } catch { /* 上下文即将销毁 */ }
+    await sleep(900)
+    await waitFor(cdp, `!!document.querySelector('#app .hdr')`, { label: '重载后顶栏(坏值)', timeout: 60000 })
+    await cdp.eval(HELPERS)
+    await waitFor(cdp, `!!document.querySelector('.scan-view .tv-input')`, { label: '重载后扫描页(坏值)', timeout: 60000 })
+    await waitFor(cdp, SORT_CARD_READY, { label: '坏值重载后夹具夹卡片', timeout: 60000 })
+    await cdp.eval(OPEN_FOLDER)
+    await waitFor(cdp, `__t.count('.scan-view .grid.imgs .card') === 5`, { label: '坏值后夹具 5 张', timeout: 60000 })
+    await cdp.eval(SORT_PROBE)
+    const bad = await cdp.eval(`return { v: __sortNow(), n: __t.count('.scan-view .grid.imgs .card') }`)
+    check('扫描排序: 坏值(手改 localStorage)回落默认, 不把列表搞空',
+      bad.v === 'name' && bad.n === 5, `${bad.v} · ${bad.n} 张`)
+
+
     const NOISE = /favicon|ERR_FILE_NOT_FOUND.*favicon|sandboxed_renderer\.bundle\.js|binding\.startupData/i
-    const errs = cdp.errors.filter(
-      (e) => !NOISE.test(e) && !outOfBandMoved.some((p) => p && e.includes(p)),
-    )
-    const selfMovedN = cdp.errors.length - errs.length -
-      cdp.errors.filter((e) => NOISE.test(e)).length
+    const errs = []
+    let selfMovedN = 0
+    let staleN = 0
+    for (const e of cdp.errors) {
+      if (NOISE.test(e)) continue
+      if (outOfBandMoved.some((p) => p && e.includes(p))) { selfMovedN++; continue }
+      if (isStaleRecord(requestedPath(e))) { staleN++; continue }
+      errs.push(e)
+    }
     check('运行期无 JS 异常 / Vue 警告', errs.length === 0,
       errs.length
         ? `${errs.length} 条: ${errs.slice(0, 4).join(' | ')}`
-        : `0 条(已滤掉 favicon/沙箱引导 ${cdp.errors.length - errs.length - selfMovedN} 条` +
-          (selfMovedN ? ` + 本测试外移的那张图 ${selfMovedN} 条` : '') + ')')
+        : `0 条(已滤掉 favicon/沙箱引导 ${cdp.errors.length - errs.length - selfMovedN - staleN} 条` +
+          (selfMovedN ? ` + 本测试外移的那张图 ${selfMovedN} 条` : '') +
+          (staleN ? ` + 陈旧记录(库里 gone=0 但文件已不在) ${staleN} 条` : '') + ')')
+
+    /* 同一个"控制台干净"的**另一条通道** —— 主进程转发的渲染器日志。
+       上面那条只看 CDP; 浏览器自发的消息(ResizeObserver / CSP / 内存警告…)只走主进程
+       转发, 实测正是靠这条才看见网格重排产生的 7 条 ResizeObserver 警告。
+       豁免口径与上面完全一致(favicon/沙箱引导、本测试自己外移的那张、陈旧记录)。 */
+    const fwd = mainLog.join('').split(/\r?\n/)
+      .filter((l) => /\[render\]/.test(l) && /\[(error|warning)\]/.test(l))
+      .filter((l) => !NOISE.test(l))
+      .filter((l) => !outOfBandMoved.some((p) => p && l.includes(p)))
+      .filter((l) => !isStaleRecord(requestedPath(l)))
+    check('主进程转发的渲染器日志也没有 error / warning(CDP 收不到的那条通道)', fwd.length === 0,
+      fwd.length ? `${fwd.length} 条: ${fwd.slice(0, 3).map((s) => s.slice(-160)).join(' | ')}` : '0 条')
 
     /* preload 生效的正面证据 —— 与上面那条一起, 才是完整的健康度检查 */
     const bridge = await cdp.eval(`

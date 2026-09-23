@@ -219,6 +219,125 @@ fs.writeFileSync(dataFile('safety_tags.txt'), '', 'utf8')
 safety.invalidateSafetyCache()
 eq('集合文件空了 -> 判定仍可用(内置默认兜底)', safety.unsafeLevelOf(['nude']), 1)
 
+/* ============================================================
+ *  自适应行高网格(justified rows) —— 2026-09-23
+ * ============================================================
+ * 这是**纯函数**, 所以能在这里把性质钉死, 不用开浏览器:
+ *   · 每一行都要左右铺满(不能留空洞 —— 用户不接受的就是空洞);
+ *   · 每张图的单元格宽/行高必须等于它自己的宽高比(等于不裁图);
+ *   · 最后一行不够长时**不许**拉伸(否则末尾一两张会被拉成巨图);
+ *   · 拿不到尺寸的图按 9/16 参与(与卡片回落一致);
+ *   · 没量到容器宽度时返回空 —— 宁可先不画, 也不要瞎排一版再跳一下。
+ */
+const { buildRows, aspectOf } = await load('src/composables/useJustifiedRows.js')
+
+const LAND = { px_w: 1280, px_h: 720 }        // 16:9 横
+const PORT = { px_w: 832, px_h: 1216 }        // 竖(约 0.684)
+const NONE = {}                               // 没尺寸
+const mk = (n, proto) => Array.from({ length: n }, (_, i) => ({ path: `p${i}.png`, ...proto }))
+
+const W = 1200
+const GAP = 10
+const rowW = (r) => r.cells.reduce((a, c) => a + c.w, 0) + GAP * (r.cells.length - 1)
+
+/* 竖图铺满一行: 除了最后一行, 每一行都必须贴边 */
+{
+  const rows = buildRows(mk(12, PORT), W, { base: 150, gap: GAP })
+  const full = rows.slice(0, -1)
+  const dev = full.reduce((a, r) => Math.max(a, Math.abs(rowW(r) - W)), 0)
+  ok('自适应行高: 每张竖图行都铺满(空洞消失)', full.length > 0 && dev <= 2,
+    `${full.length} 行, 最大偏差 ${dev}px`)
+  const last = rows[rows.length - 1]
+  ok('自适应行高: 最后一行不超出容器', rowW(last) <= W, `${rowW(last)} / ${W}`)
+  ok('自适应行高: 最后一行没被拉伸(短行保持目标行高)', last.h <= rows[0].h + 2,
+    `末行 ${last.h} vs 首行 ${rows[0].h}`)
+  const wp = full[0].cells[0].w
+  ok('自适应行高: 竖图宽度贴近原 --grid-min(150)', wp >= 128 && wp <= 172, `${wp}px`)
+}
+
+/* 不裁图: 单元格宽 / 行高 == 图片自身宽高比 */
+{
+  const rows = buildRows([...mk(6, LAND), ...mk(6, PORT)], W, { base: 150, gap: GAP })
+  let worst = 0
+  for (const r of rows) for (const c of r.cells) worst = Math.max(worst, Math.abs(c.w / r.h - aspectOf(c.item)))
+  ok('自适应行高: 图片一张都不用裁(宽高比守住)', worst < 0.02, `最大比例偏差 ${worst.toFixed(4)}`)
+}
+
+/* 一行里横图一定比竖图宽 —— 这正是"横图不再被压成竖条"的判据 */
+{
+  const rows = buildRows([LAND, PORT], W, { base: 150, gap: GAP })
+  const row = rows[0]
+  ok('自适应行高: 同一行里横图比竖图宽', row.cells[0].w > row.cells[1].w * 2,
+    `横 ${row.cells[0].w} vs 竖 ${row.cells[1].w}`)
+}
+
+/* 超宽全景图: 独占一行、宽度正好铺满、行高不越界 */
+{
+  const rows = buildRows([{ px_w: 6000, px_h: 1000 }], W, { base: 150, gap: GAP })
+  ok('自适应行高: 极宽全景图独占一行且铺满', rows.length === 1 && Math.abs(rowW(rows[0]) - W) <= 2,
+    `h=${rows[0].h} w=${rows[0].cells[0].w}`)
+  ok('自适应行高: 行高被夹在合理区间', rows[0].h >= 120 && rows[0].h <= 600, String(rows[0].h))
+}
+
+/* 缺尺寸 -> 与卡片同一套回落(9/16), 不能因为没尺寸就不排 */
+{
+  ok('缺尺寸回落 9/16(与卡片一致)', aspectOf(NONE) === 9 / 16, String(aspectOf(NONE)))
+  const rows = buildRows(mk(10, NONE), W, { base: 150, gap: GAP })
+  ok('缺尺寸的行也铺满', rows.length > 1 && Math.abs(rowW(rows[0]) - W) <= 2, `${rows.length} 行`)
+}
+
+/* 还没量到宽度 / 空列表 -> 返回空, 不瞎排 */
+{
+  ok('宽度未知 -> 不排版(不瞎猜)', buildRows(mk(5, PORT), 0, { base: 150 }).length === 0)
+  ok('空列表 -> 空', buildRows([], W, { base: 150 }).length === 0)
+  ok('行高随"竖图目标宽度"变', buildRows(mk(12, PORT), W, { base: 220 }).length <
+    buildRows(mk(12, PORT), W, { base: 150 }).length)
+}
+
+/* ============================================================
+ *  前端镜像判定 == 主进程判定
+ * ============================================================
+ * 扫描页的图是**库外**的(库里没有它们的行), 所以安全模式只能在前端按标签现算
+ * (src/utils/safetyMatch.js)。两份实现一旦分叉, 就会出现"库内页面藏了、扫描页没藏"
+ * 这种最难查的不一致 —— 这里用同一批标签把两边钉在一起。
+ */
+const { compileRules, unsafeOfTags } = await load('src/utils/safetyMatch.js')
+const mirrorOf = (m) => ({ core: compileRules(m.core.raw), edge: compileRules(m.edge.raw) })
+
+{
+  const m = safety.safetyMatcher()
+  const cases = [
+    ['nude'], ['1girl', 'smile'], ['thighhighs'], ['breasts'],
+    ['nude', '1girl'], ['censored'], ['rating_explicit'], ['Nude'], ['panties'],
+    ['swimsuit'], ['completely_nude'], ['areola_slip'], ['spread_pussy'], ['下着'],
+  ]
+  const mi = mirrorOf(m)
+  let diff = 0
+  const detail = []
+  for (const c of cases) {
+    const a = safety.unsafeLevelOf(c, m)
+    const b = unsafeOfTags(c, mi)
+    if (a !== b) { diff++; detail.push(`${c.join(',')}: 主进程=${a} 前端=${b}`) }
+  }
+  eq('前端镜像与主进程的判定逐条一致', diff, 0)
+  if (detail.length) for (const d of detail) console.log(`      · ${d}`)
+  eq('镜像: 大小写不敏感', unsafeOfTags(['NUDE'], mi), 1)
+}
+
+/* 通配规则也要一致(最容易只改一边的地方) */
+{
+  fs.writeFileSync(dataFile('safety_tags.txt'), '[core]\n*_penetration\n[edge]\n*_lingerie*\n', 'utf8')
+  safety.invalidateSafetyCache()
+  const m = safety.safetyMatcher()
+  const mi = mirrorOf(m)
+  eq('通配(后缀): 主进程', safety.unsafeLevelOf(['x_penetration'], m), 1)
+  eq('通配(后缀): 前端镜像', unsafeOfTags(['x_penetration'], mi), 1)
+  eq('通配(包含): 主进程', safety.unsafeLevelOf(['white_lingerie_set'], m), 2)
+  eq('通配(包含): 前端镜像', unsafeOfTags(['white_lingerie_set'], mi), 2)
+  eq('通配不误伤(前缀不同)', unsafeOfTags(['penetration_test'], mi), 0)
+  eq('同一标签两侧一致(不误伤也是两边一致)', safety.unsafeLevelOf(['penetration_test'], m), unsafeOfTags(['penetration_test'], mi))
+}
+
 /* ---------------------------------------------------------- 收尾 */
 
 closeDb()

@@ -15,12 +15,16 @@ import TvInput from '@/components/base/TvInput.vue'
 import TvState from '@/components/base/TvState.vue'
 import { useCartStore } from '@/stores/useCartStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { api } from '@/utils/api.js'
 import { stripZhSeries } from '@/utils/format.js'
 
 const cart = useCartStore()
 const ui = useUiStore()
+/** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
+const safety = useSafetyStore()
 const lb = useLightboxStore()
 const router = useRouter()
 
@@ -126,6 +130,7 @@ async function reveal(it) {
         <span class="sub">从各系列收集的角色, 可随时删除; 导出为 wildcard 随机抽角色</span>
       </div>
       <span class="spacer" />
+      <TvSafetyToggle />
       <TvButton variant="secondary" @click="router.push('/series')">← 回系列浏览</TvButton>
       <TvButton variant="success" :loading="busy" :disabled="!cart.count" @click="exportAll">⬇ 导出全部</TvButton>
       <TvButton variant="warn" :disabled="!cart.count" @click="showCheckout = true">💳 结算</TvButton>

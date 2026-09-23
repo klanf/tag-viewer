@@ -38,6 +38,13 @@ const props = defineProps({
   /** 选择模式下的勾选态 */
   selectable: { type: Boolean, default: false },
   selected: { type: Boolean, default: false },
+  /**
+   * 自适应行高网格(justified rows)里使用。
+   * 那种布局下**高度由容器给**(每个单元格上的 `--img-h` = 这一行的行高), 所以图不能再
+   * 自己声明 aspect-ratio, 否则两个高度会打架 —— 传 'auto' 就是"不设比例约束"。
+   * 宽度仍由单元格宽度决定, 而那个宽度本来就是"行高 × 宽高比"算出来的, 于是图一张不裁。
+   */
+  fill: { type: Boolean, default: false },
 })
 const emit = defineEmits(['open', 'toggle-fav', 'toggle-select', 'hover', 'move', 'leave'])
 
@@ -148,8 +155,8 @@ function onCtx(e) {
     </span>
 
     <!-- 失效收藏不请求缩略图: 路径已失效, 请求必然 404(还会打红 e2e 的控制台总闸) -->
-    <TvImage v-if="!isMissing" :path="path" :width="thumbWidth" :ratio="ratio" :alt="item.name || path" />
-    <span v-else class="tv-img gone-ph" :style="{ aspectRatio: ratio }" />
+    <TvImage v-if="!isMissing" :path="path" :width="thumbWidth" :ratio="fill ? 'auto' : ratio" :alt="item.name || path" />
+    <span v-else class="tv-img gone-ph" :style="{ aspectRatio: fill ? 'auto' : ratio }" />
 
     <span v-if="showSource && item.source" class="src">{{ item.source }}</span>
 

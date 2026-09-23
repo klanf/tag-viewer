@@ -33,6 +33,8 @@ import { useFavStore } from '@/stores/useFavStore.js'
 import { usePrefsStore } from '@/stores/usePrefsStore.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { api } from '@/utils/api.js'
 import { nfmt } from '@/utils/format.js'
 
@@ -42,6 +44,8 @@ const fav = useFavStore()
 const prefs = usePrefsStore()
 const lb = useLightboxStore()
 const ui = useUiStore()
+/** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
+const safety = useSafetyStore()
 const hist = useSearchHistory()
 
 /* ---------------- 筛选表单 ---------------- */
@@ -51,7 +55,8 @@ const match = ref('contains')
 const exclude = ref('')
 const nameFilter = ref('')   // 文件名子串过滤(如 "Anima-" 找 ComfyUI 生成的图)
 const excludeChar = ref(true)
-const sort = ref('random')
+/* 排序从 prefs 读、改完写回 —— 用户明确要求"记住排序", 每次进来不用重点一遍 */
+const sort = ref(prefs.sortHome)
 const pageSize = ref(60)
 const rndSeed = ref(Date.now())
 
@@ -100,7 +105,10 @@ const feed = useImageFeed({ infinite: true, pageSize: 60 })
  * 当前页的图片顺序 —— 传给大图预览, 它才知道「下一张」是谁(滚轮/箭头/方向键翻页)。
  * 少了这个, 光箱里 `count` 只有 1, 翻页相关的一切都不显示。
  */
-const imgPaths = computed(() => feed.results.value.map((i) => i.path).filter(Boolean))
+/* 安全模式开着时, 光箱的翻页序列必须和网格里看到的一致 —— 否则网格里已经被藏掉的
+ * 那张, 光箱还把它算在"下一张"里, 往后翻就翻到一张本该看不见的图。 */
+const shownResults = computed(() => safety.filterItems(feed.results.value))
+const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boolean))
 
 // 换页 / 换一批 / 收藏筛选后就地同步, 免得光箱还拿着上一批的顺序
 watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
@@ -247,7 +255,7 @@ watch(() => app.epoch, (n) => { if (n) initHome() })
 
 // 收藏筛选 / 排序 / 每页数量变化 -> 重搜
 watch(() => fav.onlyFav, () => doSearch())
-watch(sort, () => doSearch())
+watch(sort, (v) => { prefs.sortHome = v; doSearch() })
 // 打开预设弹窗时刷一下"自动 N"角标 —— 预设也可能是在别处(或上一轮)建的
 watch(showPresets, (v) => { if (v) refreshPresetCount() })
 watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
@@ -433,8 +441,9 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
           title="对当前结果的文件路径做子串匹配(大小写不敏感), 输入后自动生效"
           @enter="applyNameFilter"
         />
+        <TvSafetyToggle />
         <span class="spacer" />
-        <span class="muted nowrap">已加载 {{ nfmt(feed.results.value.length) }} / 共 {{ nfmt(feed.total.value) }} 张 · 滚到底自动加载</span>
+        <span class="muted nowrap">已加载 {{ nfmt(shownResults.length) }} / 共 {{ nfmt(feed.total.value) }} 张 · 滚到底自动加载</span>
       </div>
 
       <div class="grid-wrap">

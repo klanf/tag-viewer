@@ -195,6 +195,15 @@ export function ensureWorkDir({ quiet = false } = {}) {
   fs.writeFileSync(scanFolders, JSON.stringify({ version: 1, folders: [] }, null, 2), 'utf8')
   reset.push('scan_folders.json')
 
+  /* 安全模式的开关**必须每轮清零**(2026-09-23)。
+   * 它是一份跨轮复用的状态文件, 而 e2e 里专门有一段"打开开关 -> 网格里的图真的少了
+   * -> 再关掉"的用例: 万一那段在"开着"的时候就挂了(或者被 Ctrl-C 打断), 开关会以
+   * `on: true` 留在沙箱里 —— 下一轮**所有**卡数断言都会莫名其妙地少一半,
+   * 而且报错信息里半个字都看不出来跟安全模式有关。宁可每轮从"关"开始。 */
+  const safetyState = path.join(dataDir, 'safety.json')
+  fs.writeFileSync(safetyState, JSON.stringify({ on: false, level: 'core' }, null, 2), 'utf8')
+  reset.push('safety.json(开关清零, 防上一轮的 on:true 泄漏到下一轮)')
+
   // 登记表(folders)现在住在 tags.db 里, 而沙箱库是**跨轮复用**的
   //   (首轮导入 7 万条之后就靠指纹跳过, 所以第二轮起启动快得多)。
   //   测试会在扫描页加/删文件夹 —— 那些行留在库里, 下一轮的

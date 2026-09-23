@@ -8,12 +8,18 @@
  * 主进程**读数据集时一次算好**的，前端只做数值比较 —— 于是切开关、切档位
  * 都不需要重载八万行数据，库里的一行也不会变。关掉立刻全回来。
  *
+ * **库外图（扫描页）没有那个标记**：它们的标签是现场从 PNG 元数据解析的，库里没有
+ * 对应行。所以这里还对"没有 unsafe 字段"的 item 用前端镜像规则**现算**一遍
+ * （见 utils/safetyMatch.js）—— 这样"能看到图片的地方"就都能过滤，不只在库内页面。
+ * 逐张现算会有开销（一张图约 40 个标签），用 WeakMap 按"标签数组引用 + 规则代次"记忆。
+ *
  * 默认是**关闭**：实测 core 档会藏掉 58% 的图，这种东西不能默认开。
  */
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { call } from '@/utils/api.js'
 import { hiddenBySafety } from '@/utils/format.js'
+import { compileRules, unsafeOfTags } from '@/utils/safetyMatch.js'
 import { useAppStore } from './useAppStore.js'
 
 export const useSafetyStore = defineStore('safety', () => {
@@ -25,6 +31,12 @@ export const useSafetyStore = defineStore('safety', () => {
   const core = ref([])             // core 段的标签(界面展示)
   const edge = ref([])             // edge 段的标签
   const loaded = ref(false)
+
+  /** 编译后的规则(库外图现算用) + 代次(规则一变, 记忆就作废) */
+  const matcher = computed(() => ({ core: compileRules(core.value), edge: compileRules(edge.value) }))
+  let gen = 0
+  let tagsMemo = new WeakMap()
+  watch([core, edge], () => { gen++; tagsMemo = new WeakMap() })
 
   function apply(d) {
     if (!d) return
@@ -80,14 +92,42 @@ export const useSafetyStore = defineStore('safety', () => {
   const hiddenCount = computed(() => (level.value === 'edge' ? edgeHit.value : coreHit.value))
   const hiddenPct = computed(() => (total.value ? (hiddenCount.value / total.value) * 100 : 0))
 
-  /** 一张图在当前设置下是否该隐藏；卡片直接调它 */
+  /**
+   * 一张图的敏感级别 0/1/2。
+   *  - 库内记录: 直接用主进程算好的 `unsafe`（读数据集时一次算好，切档只做数值比较）
+   *  - 库外图(扫描页): 没有这个字段 -> 用前端镜像规则按它的标签现算
+   */
+  function unsafeOf(item) {
+    if (!item) return 0
+    if (typeof item.unsafe === 'number') return item.unsafe
+    const tags = item.tags
+    if (!Array.isArray(tags) || !tags.length) return 0
+    const hit = tagsMemo.get(tags)
+    if (hit && hit.gen === gen) return hit.u
+    const u = unsafeOfTags(tags, matcher.value)
+    tagsMemo.set(tags, { gen, u })
+    return u
+  }
+
+  /** 一张图在当前设置下是否该隐藏；卡片/视图都调它 */
   function isHidden(item) {
     if (!on.value || !item) return false
-    return hiddenBySafety(item.unsafe, level.value)
+    return hiddenBySafety(unsafeOf(item), level.value)
+  }
+
+  /**
+   * 过滤一个列表。**关闭时原样返回同一个数组引用**（不是副本）——
+   * 各视图把它包在 computed 里，返回同一引用才不会被下游误判成"数据变了"。
+   */
+  function filterItems(list) {
+    const arr = Array.isArray(list) ? list : []
+    if (!on.value || !arr.length) return arr
+    return arr.filter((it) => !isHidden(it))
   }
 
   return {
     on, level, coreHit, edgeHit, total, core, edge, loaded,
-    load, set, loadText, saveText, toggleTag, hiddenCount, hiddenPct, isHidden,
+    load, set, loadText, saveText, toggleTag, hiddenCount, hiddenPct,
+    isHidden, unsafeOf, filterItems,
   }
 })

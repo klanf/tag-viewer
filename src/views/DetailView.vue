@@ -20,6 +20,8 @@ import { usePrefsStore } from '@/stores/usePrefsStore.js'
 import { useFavStore } from '@/stores/useFavStore.js'
 import { useCharCart } from '@/composables/useCharCart.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { api } from '@/utils/api.js'
 import { normTags } from '@/utils/format.js'
 
@@ -28,6 +30,8 @@ const router = useRouter()
 const prefs = usePrefsStore()
 const fav = useFavStore()
 const ui = useUiStore()
+/** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
+const safety = useSafetyStore()
 const charCart = useCharCart()
 
 const path = computed(() => String(route.query.path || ''))
@@ -149,6 +153,7 @@ function runCopy(key) {
         :active="isFav"
         @click="toggleFav"
       >{{ isFav ? '★ 已收藏' : '☆ 收藏' }}</TvButton>
+      <TvSafetyToggle />
     </div>
 
     <div class="main">

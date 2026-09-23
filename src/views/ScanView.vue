@@ -29,6 +29,10 @@ import TvEntityCard from '@/components/series/TvEntityCard.vue'
 import TvState from '@/components/base/TvState.vue'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { usePrefsStore } from '@/stores/usePrefsStore.js'
+import { useJustifiedRows } from '@/composables/useJustifiedRows.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { useFloatBack } from '@/composables/useFloatBack.js'
 import { api, onPush } from '@/utils/api.js'
 import { nfmt } from '@/utils/format.js'
@@ -39,6 +43,9 @@ const SCAN_HIST_KEY = LS.searchHistoryScan.key
 
 const lb = useLightboxStore()
 const ui = useUiStore()
+const prefs = usePrefsStore()
+/** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
+const safety = useSafetyStore()
 const route = useRoute()
 
 /* ---------------- 一级: 文件夹库 ---------------- */
@@ -59,7 +66,37 @@ const opening = ref(false)
 const rescanning = ref(false)
 const page = ref(1)
 const pageSize = ref(120)
-const sortBy = ref('name')
+const sortBy = ref(prefs.sortScan)
+
+/* 排序可选值 —— 全在前端排(扫描的是**库外图片**, 库里没有它们的行, 后端排不了)。
+ * 时间/大小要的数据由后端 scan.js 的 item 带过来(它本来就 statSync 过, 白捡的)。 */
+const SORT_OPTIONS = [
+  { value: 'name', label: '文件名 A-Z' },
+  { value: 'name_desc', label: '文件名 Z-A' },
+  { value: 'folder', label: '按子文件夹' },
+  { value: 'time_desc', label: '修改时间 新→旧' },
+  { value: 'time_asc', label: '修改时间 旧→新' },
+  { value: 'size_desc', label: '大小 大→小' },
+  { value: 'size_asc', label: '大小 小→大' },
+  { value: 'tags_desc', label: '标签数 多→少' },
+]
+/* 文件名比较用带 numeric 的 Collator: 默认的字符串比较下 "10.png" 排在 "2.png" 前面,
+ * 0001..9999 这种命名看着就是乱的。Collator 建一次复用, 别在比较函数里反复 new。 */
+const nameColl = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+const byName = (a, b) => nameColl.compare(a.name || '', b.name || '')
+/* 主键相同的再按文件名兜底 —— 否则同 mtime/同大小的一批图每次刷新都换顺序, 像在跳 */
+function cmpOf(mode) {
+  switch (mode) {
+    case 'name_desc': return (a, b) => byName(b, a)
+    case 'folder': return (a, b) => (a.folder || '').localeCompare(b.folder || '') || byName(a, b)
+    case 'time_desc': return (a, b) => (b.mtime || 0) - (a.mtime || 0) || byName(a, b)
+    case 'time_asc': return (a, b) => (a.mtime || 0) - (b.mtime || 0) || byName(a, b)
+    case 'size_desc': return (a, b) => (b.size || 0) - (a.size || 0) || byName(a, b)
+    case 'size_asc': return (a, b) => (a.size || 0) - (b.size || 0) || byName(a, b)
+    case 'tags_desc': return (a, b) => (b.tags || []).length - (a.tags || []).length || byName(a, b)
+    default: return byName
+  }
+}
 const error = ref('')
 /* 图片卡上的角色/独有标签 -> 中文(批量查一次, 全页共用) */
 const scanZh = ref({})
@@ -116,10 +153,10 @@ const sortedItems = computed(() => {
       return tk.every((w) => ts.some((t) => t.toLowerCase().includes(w)))
     })
   }
-  if (sortBy.value === 'name_desc') arr.sort((a, b) => b.name.localeCompare(a.name))
-  else if (sortBy.value === 'folder') arr.sort((a, b) => (a.folder || '').localeCompare(b.folder || '') || a.name.localeCompare(b.name))
-  else arr.sort((a, b) => a.name.localeCompare(b.name))
-  return arr
+  arr.sort(cmpOf(sortBy.value))
+  /* 安全模式也管扫描页: 这些图是库外的, 没有主进程算好的敏感标记, 由 useSafetyStore
+     按标签**现算**(见 utils/safetyMatch.js)。放在排序之后 —— 过滤不影响排序结果。 */
+  return safety.filterItems(arr)
 })
 
 const totalPages = computed(() => Math.max(1, Math.ceil(sortedItems.value.length / pageSize.value)))
@@ -128,6 +165,10 @@ const totalPages = computed(() => Math.max(1, Math.ceil(sortedItems.value.length
 const pagedItems = computed(() => sortedItems.value.slice(0, page.value * pageSize.value))
 /** 光箱翻页用全量顺序(不只当前页) */
 const imgPaths = computed(() => sortedItems.value.map((it) => it.path))
+/* 自适应行高: 每行按真实比例铺满、行高自适应(与首页/系列页/标签页同一套)。
+ * 用 pagedItems(增量显示到第 page 页)而不是 sortedItems —— 必须和**实际渲染的内容**
+ * 一致, 否则行会被还没显示出来的图撑变形。 */
+const { wrapEl: rowsEl, rows: scanRows } = useJustifiedRows(pagedItems, { base: 150 })
 
 /* 网格顺序变了(删除/移动联动剔除、改排序)就同步给光箱 —— 与首页 / 系列 / 标签三页一致。
  * 少了这一步, 光箱里那份 list 就只是"打开那一刻的快照": 网格已经把某张剔掉了,
@@ -305,6 +346,7 @@ function loadMore() {
   page.value++
 }
 watch([sortBy, pageSize], () => {
+  prefs.sortScan = sortBy.value
   page.value = 1
   document.querySelector('.result')?.scrollTo({ top: 0 })
 })
@@ -450,6 +492,8 @@ onActivated(() => {
 
         <div class="bar2">
           <TvInput v-model="kw" size="sm" placeholder="🔍 过滤文件夹(名字 / 路径)" class="kw" />
+          <!-- 也放在这里一份: 图要"进了文件夹"才看得到, 但开关不该被藏在里面 -->
+          <TvSafetyToggle />
           <TvButton size="sm" variant="secondary" :loading="loadingList" @click="loadFolders">🔄 刷新列表</TvButton>
         </div>
 
@@ -561,16 +605,13 @@ onActivated(() => {
               <template v-else>已加载 {{ nfmt(pagedItems.length) }} / 共 {{ nfmt(sortedItems.length) }} 张 · 滚到底自动加载</template>
             </span>
             <span class="spacer" />
+            <TvSafetyToggle />
             <TvSelect
               v-model="sortBy"
               size="sm"
               inline
               label="排序"
-              :options="[
-                { value: 'name', label: '文件名 A-Z' },
-                { value: 'name_desc', label: '文件名 Z-A' },
-                { value: 'folder', label: '按子文件夹' },
-              ]"
+              :options="SORT_OPTIONS"
             />
             <TvSelect
               v-model="pageSize"
@@ -591,22 +632,30 @@ onActivated(() => {
             :text="`这个文件夹里没有图片匹配「${tagKw.trim()}」`"
           />
 
-          <div v-else class="grid imgs">
-            <TvImageCard
-              v-for="it in pagedItems"
-              :key="it.path"
-              :item="it"
-              :thumb-width="400"
-              show-source
-              tag-mode="keys"
-              :tag-zh-map="scanZh"
-              footnote="name"
-              :tip-limit="24"
-              @open="openImage"
-              @hover="({ text, event }) => ui.showTip(text, event)"
-              @move="ui.moveTip"
-              @leave="ui.hideTip"
-            />
+          <div v-else ref="rowsEl" class="grid imgs jrows">
+            <div v-for="(row, ri) in scanRows" :key="ri" class="jrow">
+              <div
+                v-for="(c, ci) in row.cells"
+                :key="c.item.path || ci"
+                class="jcell"
+                :style="{ width: `${c.w}px`, '--img-h': `${row.h}px` }"
+              >
+                <TvImageCard
+                  :item="c.item"
+                  fill
+                  :thumb-width="400"
+                  show-source
+                  tag-mode="keys"
+                  :tag-zh-map="scanZh"
+                  footnote="name"
+                  :tip-limit="24"
+                  @open="openImage"
+                  @hover="({ text, event }) => ui.showTip(text, event)"
+                  @move="ui.moveTip"
+                  @leave="ui.hideTip"
+                />
+              </div>
+            </div>
           </div>
           <!-- 无限滚动哨兵: 进入视口(提前 400px)自动追加下一页 -->
           <div v-if="page < totalPages" ref="sentinel" class="load-sentinel">
@@ -677,13 +726,16 @@ onActivated(() => {
   transition: width .2s ease;
 }
 
-.grid {
+/* 只给**文件夹卡**用 —— 图片网格已经换成自适应行高(`.grid.imgs.jrows`, 见 tokens.css)。
+ * 原来这里有一条裸 `.grid` 规则, 与 tokens.css 的 `.grid.jrows` 撞车: 两条选择器权重
+ * 相同(本文件的 scoped 样式会带一个属性选择器), 谁生效只看打包顺序 —— 那是个隐蔽的
+ * 定时炸弹, 所以直接改名, 让图片网格只有一处定义。 */
+.grid.folders {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--grid-min), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 10px;
   align-content: start;
 }
-.grid.folders { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 
 .fmeta { display: flex; gap: 6px; font-size: 10px; color: var(--muted); padding: 0 8px; }
 .fbtns {
