@@ -17,7 +17,8 @@
  *   · 先跑 `npm run data:backup` 备份。
  *
  * 用法(默认 dry-run):
- *   node scripts/move-and-repath.mjs --from="F:/壁纸/桌面壁纸/待分类" --to="F:/壁纸/桌面壁纸/表世界"
+ *   node scripts/move-and-repath.mjs --from="F:/壁纸/桌面壁纸/待分类" --to="F:/壁纸/桌面壁纸/表世界"  (path-check-ignore: 用法示例)
+ *   (path-check-ignore: 上面的盘符路径只是用法示例, 不是预检要拦的硬编码)
  *   node scripts/move-and-repath.mjs --from=... --to=... --db=<库副本> --rehearse   (彩排改库)
  *   node scripts/move-and-repath.mjs --from=... --to=... --apply
  *
@@ -271,7 +272,7 @@ const failed = []
 for (const p of plan) {
   if (REHEARSE) { moved.push(p); continue }   // 彩排: 文件不动, 直接当搬成了
   try {
-    fs.renameSync(p.src, p.dest)   // 同盘(F:/ -> F:/)
+    fs.renameSync(p.src, p.dest)   // 同盘 rename(来源/目标都是命令行参数, 不预检) // path-check-ignore
     moved.push(p)
     if (moved.length % 500 === 0) console.log(`  ... 已搬 ${moved.length}`)
   } catch (e) {

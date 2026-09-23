@@ -140,7 +140,7 @@ function onCtx(e) {
     ref="rootEl"
     :class="['card', { selected, 'has-sel': selectable, 'last-viewed': isLastViewed, 'is-missing': isMissing }]"
     :title="isMissing ? '文件已不在原位置 —— 可能把图移走了; 收藏已保留, 打开收藏页时会按文件名自动找回' : (selectable ? '点击勾选/取消' : (isLastViewed ? '上次看到这张(红色呼吸框) · 点击预览大图与标签' : '点击预览大图与标签'))"
-    @click="emit('open', item)"
+    @click="emit('open', item, $event)"
     @contextmenu="onCtx"
     @mouseenter="emit('hover', { text: tipText, event: $event })"
     @mousemove="emit('move', $event)"

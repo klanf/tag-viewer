@@ -30,9 +30,12 @@ import TvState from '@/components/base/TvState.vue'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { usePrefsStore } from '@/stores/usePrefsStore.js'
+import { useFavStore } from '@/stores/useFavStore.js'
+import { useTrash } from '@/composables/useTrash.js'
 import { useJustifiedRows } from '@/composables/useJustifiedRows.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
+import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
 import { useFloatBack } from '@/composables/useFloatBack.js'
 import { api, onPush } from '@/utils/api.js'
 import { nfmt } from '@/utils/format.js'
@@ -46,6 +49,8 @@ const ui = useUiStore()
 const prefs = usePrefsStore()
 /** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
 const safety = useSafetyStore()
+const fav = useFavStore()
+const trash = useTrash()
 const route = useRoute()
 
 /* ---------------- 一级: 文件夹库 ---------------- */
@@ -305,6 +310,8 @@ async function openFolder(f, { refresh = false } = {}) {  if (!f.exists) { ui.wa
   if (refresh) result.value = null
   page.value = 1
   tagKw.value = ''      // 换了文件夹就是换了一批标签, 上一次的筛选词没有意义了
+  selectMode.value = false   // 换文件夹也换了一批图, 选择集没有延续的意义
+  clearSel()
   try {
     const d = await api.openFolder({ path: f.path, refresh })
     if (d?.error) { error.value = d.error; result.value = null; return }
@@ -331,9 +338,139 @@ function backToList() {
   cur.value = null
   result.value = null
   error.value = ''
+  selectMode.value = false
+  clearSel()
 }
 
 function openImage(it) { lb.open(it.path, { list: imgPaths.value }) }
+
+/* ---------------- 选择模式(批量移动 / 批量删除) ----------------
+ * 交互: 工具栏「选择」进出; 选择模式下点击=勾选, Shift=区间选(按当前排序),
+ * Ctrl+点击在浏览状态下也能直接勾(顺手进入选择模式); Ctrl+A 全选 / Esc 退出 /
+ * Del 批量删除。选择集按 path 记, 排序/筛选变化不影响已勾的。
+ * ( TvImageCard 自带 selectable/selected/勾选角标 —— 系列页选择模式同款。 ) */
+const selectMode = ref(false)
+const selected = ref(new Set())     // path 集合
+const moving = ref(false)           // 批量移动进行中(锁弹窗与按钮)
+const moveOpen = ref(false)         // 目标选择弹窗
+let lastSelIdx = -1                 // Shift 区间选的锚点(当前排序里的下标)
+
+function toggleSelectMode() {
+  selectMode.value = !selectMode.value
+  if (!selectMode.value) selected.value = new Set()
+  lastSelIdx = -1
+  ui.toast(selectMode.value ? '☑ 选择模式: 点击卡片勾选, Shift 点选是区间, Ctrl+A 全选' : '已退出选择模式', 'info', 1800)
+}
+
+function toggleSelect(it) {
+  const s = new Set(selected.value)
+  if (s.has(it.path)) s.delete(it.path)
+  else s.add(it.path)
+  selected.value = s
+}
+
+function selectAll() {
+  selected.value = new Set(sortedItems.value.map((it) => it.path))
+}
+
+function invertSel() {
+  const s = new Set()
+  for (const it of sortedItems.value) if (!selected.value.has(it.path)) s.add(it.path)
+  selected.value = s
+}
+
+function clearSel() {
+  selected.value = new Set()
+  lastSelIdx = -1
+}
+
+/** 卡片点击的唯一入口( TvImageCard @open 把原生事件也带出来了 ):
+ *  选择模式里点击=勾选 / Shift=区间; 浏览模式里 Ctrl=勾选并顺手进入选择模式。 */
+function onCardClick(it, ev) {
+  const idx = sortedItems.value.findIndex((x) => x.path === it.path)
+  if (selectMode.value) {
+    if (ev?.shiftKey && lastSelIdx >= 0 && idx >= 0) {
+      const [a, b] = lastSelIdx < idx ? [lastSelIdx, idx] : [idx, lastSelIdx]
+      const s = new Set(selected.value)
+      for (let i = a; i <= b; i++) s.add(sortedItems.value[i].path)
+      selected.value = s
+    } else {
+      toggleSelect(it)
+      lastSelIdx = idx
+    }
+    return
+  }
+  if (ev && (ev.ctrlKey || ev.metaKey)) {
+    selectMode.value = true
+    toggleSelect(it)
+    lastSelIdx = idx
+    return
+  }
+  openImage(it)
+}
+
+/* ---------------- 批量删除(复用 useTrash: 确认弹窗显示 N 张, tv:trashed 联动剔除) ---------------- */
+function batchDelete() {
+  const paths = [...selected.value]
+  if (!paths.length) return
+  trash.request(paths).then((trashedList) => {
+    // 删成的从选择集里摘掉, 失败的留着可以再试
+    const done = new Set(trashedList || [])
+    selected.value = new Set([...selected.value].filter((p) => !done.has(p)))
+  })
+}
+
+/* ---------------- 批量移动 ---------------- */
+function openMove() {
+  if (!selected.value.size) { ui.warn('先勾选至少一张图'); return }
+  moveOpen.value = true
+}
+
+async function doMove(target) {
+  if (!target?.path || moving.value) return
+  const paths = [...selected.value]
+  moving.value = true
+  try {
+    const r = await api.moveImages(paths, target.path)
+    if (r?.error) { ui.err('移动失败: ' + r.error); return }
+    const movedFrom = (r.moved || []).map((m) => m.from)
+    // 收藏跟随改写到新位置(与右键单张移动同款), 失败的不动
+    for (const m of r.moved || []) fav.onMoved(m.from, m.to)
+    if (movedFrom.length) {
+      // 广播 tv:moved: 本页 onGone 把卡从网格剔除, 光箱把翻页序列同步掉
+      window.dispatchEvent(new CustomEvent('tv:moved', { detail: { paths: movedFrom, dest: r.dest || '' } }))
+    }
+    if (r.failed?.length) ui.err(`${r.failed.length} 张移动失败(${r.failed[0]?.error || '未知原因'})`, 3600)
+    if (movedFrom.length) ui.ok(`📤 已移动 ${movedFrom.length} 张到「${r.destName}」`, 'ok', 2600)
+    if (r.sync?.started) ui.toast('后台正在把新位置入库并排队反推…', 'info', 2600)
+    // 失败的留在选择集里, 成功的清掉; 弹窗关掉
+    selected.value = new Set((r.failed || []).map((f) => f.path))
+    moveOpen.value = false
+  } catch (e) {
+    ui.err('移动失败: ' + e.message)
+  } finally {
+    moving.value = false
+  }
+}
+
+/** Esc 退出选择 / Ctrl+A 全选 / Del 批量删除 —— 只在本页、二级网格、非光箱时接管。
+ *  ⚠️ 本视图在 KeepAlive 白名单里, 监听器卸载前一直在 —— 必须先判 route.name,
+ *  否则在别的页面按 Esc/Ctrl+A 会被这里抢走。 */
+function onScanKey(e) {
+  if (route.name !== 'scan' || level.value !== 'folder') return
+  if (lb.visible || moveOpen.value) return                 // 光箱/弹窗自己管键盘
+  if (!selectMode.value) return
+  const k = e.key?.toLowerCase()
+  if ((e.ctrlKey || e.metaKey) && k === 'a') {
+    e.preventDefault()
+    selectAll()
+  } else if (e.key === 'Escape') {
+    selectMode.value = false
+    clearSel()
+  } else if (e.key === 'Delete') {
+    batchDelete()
+  }
+}
 
 function gotoPage(p) {
   page.value = Math.max(1, Math.min(p, totalPages.value))
@@ -426,11 +563,13 @@ onMounted(() => {
   window.addEventListener('tv:trashed', onGone)
   window.addEventListener('tv:moved', onGone)
   window.addEventListener('tv:lb-closed', onLbClosed)
+  window.addEventListener('keydown', onScanKey)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('tv:trashed', onGone)
   window.removeEventListener('tv:moved', onGone)
   window.removeEventListener('tv:lb-closed', onLbClosed)
+  window.removeEventListener('keydown', onScanKey)
   offScanProg()
   gridOb?.disconnect()
 })
@@ -565,6 +704,14 @@ onActivated(() => {
             <span class="now">{{ cur?.name || '' }}</span>
           </div>
           <span class="spacer" />
+          <TvButton
+            size="sm"
+            :variant="selectMode ? 'primary' : 'secondary'"
+            data-test="scan-select-toggle"
+            @click="toggleSelectMode"
+          >
+            ☑ {{ selectMode ? '退出选择' : '选择' }}
+          </TvButton>
           <TvButton size="sm" variant="secondary" :loading="rescanning" @click="openFolder(cur, { refresh: true })">
             🔄 重扫这个文件夹
           </TvButton>
@@ -632,6 +779,30 @@ onActivated(() => {
             <TvButton size="sm" variant="ghost" :disabled="page >= totalPages" @click="gotoPage(totalPages)">⏭</TvButton>
           </div>
 
+          <!-- 批量操作条: 选择模式下出现(置顶常驻, 滚动也看得见) -->
+          <div v-if="selectMode" class="batch-bar" data-test="scan-batch-bar">
+            <span class="bcnt">已选 <b data-test="scan-sel-count">{{ selected.size }}</b> 张</span>
+            <TvButton size="sm" variant="ghost" data-test="scan-sel-all" @click="selectAll">全选</TvButton>
+            <TvButton size="sm" variant="ghost" data-test="scan-sel-invert" @click="invertSel">反选</TvButton>
+            <TvButton size="sm" variant="ghost" :disabled="!selected.size" data-test="scan-sel-clear" @click="clearSel">清空</TvButton>
+            <span class="spacer" />
+            <TvButton
+              size="sm"
+              variant="primary"
+              :disabled="!selected.size"
+              :loading="moving"
+              data-test="scan-batch-move"
+              @click="openMove"
+            >📤 移动到…</TvButton>
+            <TvButton
+              size="sm"
+              variant="danger"
+              :disabled="!selected.size"
+              data-test="scan-batch-trash"
+              @click="batchDelete"
+            >🗑 删除</TvButton>
+          </div>
+
           <TvState
             v-if="!sortedItems.length"
             state="empty"
@@ -655,7 +826,10 @@ onActivated(() => {
                   :tag-zh-map="scanZh"
                   footnote="name"
                   :tip-limit="24"
-                  @open="openImage"
+                  :selectable="selectMode"
+                  :selected="selected.has(c.item.path)"
+                  @open="onCardClick"
+                  @toggle-select="toggleSelect"
                   @hover="({ text, event }) => ui.showTip(text, event)"
                   @move="ui.moveTip"
                   @leave="ui.hideTip"
@@ -669,6 +843,14 @@ onActivated(() => {
           </div>
         </template>
       </div>
+
+      <MoveTargetModal
+        v-model="moveOpen"
+        :count="selected.size"
+        :folders="folders"
+        :busy="moving"
+        @pick="doMove"
+      />
     </template>
   </div>
 </template>
@@ -718,6 +900,16 @@ onActivated(() => {
 /* 筛选框: 可伸缩但别把右边的排序/分页挤走 */
 .pager-bar .tag-filter { flex: 1 1 300px; max-width: 360px; margin-right: 4px; }
 .pager-bar .hit { color: var(--accent); font-size: 13px; }
+
+/* 批量操作条(选择模式) */
+.batch-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 12px; padding: 7px 10px;
+  border-radius: var(--r-sm); background: var(--panel3);
+  border: 1px solid var(--accent-soft, transparent);
+}
+.batch-bar .bcnt { font-size: 12px; color: var(--muted); margin-right: 4px; }
+.batch-bar .bcnt b { color: var(--accent); font-size: 14px; }
 .load-sentinel { display: flex; justify-content: center; padding: 18px 0; }
 
 /* 扫描元数据进度条(opening 期间, worker 解析进度) */

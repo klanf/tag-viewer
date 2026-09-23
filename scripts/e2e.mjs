@@ -3234,6 +3234,111 @@ async function main() {
       (ratioOf('wide.png') || 0) > (ratioOf('tall.png') || 9) * 2,
       `横 ${ratioOf('wide.png')} vs 竖 ${ratioOf('tall.png')} · 全长 ${JSON.stringify(dimRatio)}`)
 
+    /* ---------------- 11h. 扫描页批量选择 + 批量移动 + 批量删除(2026-09-23) ----------------
+     * 复用 11g 的尺寸夹具(3 张: wide/tall/sq), 不动 a1-a5 那批的任何计数。
+     * 走**全 UI 路径**: 选择开关 -> 点卡勾选 -> Shift 区间 -> 反选/全选 -> 目标弹窗
+     * (快速预设) -> 移动后卡片剔除 -> 再勾剩下的批量删除到回收站。
+     * 原生 Menu 在 CDP 里点不到(README 坑 18), 目标选择器因此做成应用内 DOM ——
+     * 这也是这条链路能被端到端测到的前提。预设/目标目录用 tv.invoke 现场准备。 */
+    const BATCH_OUT = path.join(path.dirname(SCAN_DIR), 'scan-batch-out')
+    fs.mkdirSync(BATCH_OUT, { recursive: true })
+    const quickAdd = await cdp.eval(
+      `return await window.tv.invoke('app:quickFolders:add', { path: ${JSON.stringify(BATCH_OUT)} })`)
+    check('批量: 预设目录已注入(与右键菜单同一份 settings)', quickAdd?.ok === true,
+      JSON.stringify(quickAdd))
+
+    await cdp.eval(`__t.click('[data-test="scan-select-toggle"]'); return true`)
+    await waitFor(cdp, `!!document.querySelector('[data-test="scan-batch-bar"]')`,
+      { label: '批量操作条出现', timeout: 10000 })
+    const sel0 = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
+    check('批量: 进入选择模式, 操作条出现且计数 = 0', sel0 === 0, `计数 ${sel0}`)
+
+    /* 点两张卡(选择模式下点击 = 勾选) */
+    await cdp.eval(`
+      const cards = document.querySelectorAll('.scan-view .grid.imgs .card')
+      cards[0].click(); cards[1].click()
+      return true
+    `)
+    const sel2 = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
+    check('批量: 点击两张卡后计数 = 2', sel2 === 2, `计数 ${sel2}`)
+
+    /* Shift 区间选: 锚点是上一张点过的 cards[1], Shift 点 cards[2] -> 补上 [1,2] 区间 = 3 张 */
+    await cdp.eval(`
+      const cards = document.querySelectorAll('.scan-view .grid.imgs .card')
+      cards[2].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))
+      return true
+    `)
+    const sel3 = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
+    check('批量: Shift 区间选后计数 = 3', sel3 === 3, `计数 ${sel3}`)
+
+    await cdp.eval(`__t.click('[data-test="scan-sel-invert"]'); return true`)
+    const selInv = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
+    check('批量: 反选后计数 = 0', selInv === 0, `计数 ${selInv}`)
+    await cdp.eval(`__t.click('[data-test="scan-sel-all"]'); return true`)
+    await cdp.eval(`
+      document.querySelectorAll('.scan-view .grid.imgs .card')[0].click()
+      return true
+    `)
+    const selMove = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
+    check('批量: 全选再点掉一张 -> 计数 = 2(准备只搬两张)', selMove === 2, `计数 ${selMove}`)
+
+    /* 打开目标弹窗, 点「scan-batch-out」快速预设 -> 真的搬 */
+    await cdp.eval(`__t.click('[data-test="scan-batch-move"]'); return true`)
+    await waitFor(cdp, `!!document.querySelector('.mt-body')`, { label: '移动目标弹窗', timeout: 10000 })
+    await cdp.eval(`
+      const hit = [...document.querySelectorAll('.mt-body .row')]
+        .find((r) => (r.textContent || '').includes('scan-batch-out'))
+      if (!hit) throw new Error('快速预设行没找到')
+      hit.click()
+      return true
+    `)
+    await waitFor(cdp, `__t.count('.scan-view .grid.imgs .card') === 1`,
+      { label: '移动后网格剩 1 张', timeout: 20000 })
+    const diskMoved = {
+      wide: fs.existsSync(path.join(BATCH_OUT, 'wide.png')),
+      tall: fs.existsSync(path.join(BATCH_OUT, 'tall.png')),
+    }
+    check('批量移动: 两张图真的落到了目标文件夹',
+      diskMoved.wide && diskMoved.tall, JSON.stringify(diskMoved))
+    /* toast 在 moveMany 返回时就弹了, 但 TvModal 的离场过渡比 toast 存活期(2.6s)长
+     * —— 先抓 toast, 再等弹窗关完, 顺序反了 toast 早就过期了(r2 踩到)。 */
+    await waitFor(cdp, `(document.querySelector('.toast')||{}).textContent?.includes('已移动 2 张')`,
+      { label: '移动 toast', timeout: 3000 })
+    await waitFor(cdp, `!document.querySelector('.mt-body')`,
+      { label: '移动弹窗关闭', timeout: 5000 })
+    const afterMove = await cdp.eval(`
+      return {
+        count: +document.querySelector('[data-test="scan-sel-count"]').textContent,
+        modal: !!document.querySelector('.mt-body'),
+      }
+    `)
+    check('批量移动: 计数归 0 且弹窗已关', afterMove.count === 0 && !afterMove.modal,
+      `计数 ${afterMove.count} · 弹窗 ${afterMove.modal}`)
+
+    /* 剩下 sq 一张: 全选 -> 批量删除 -> 确认弹窗(全局单例, 显示 N 张) -> 删除 */
+    await cdp.eval(`__t.click('[data-test="scan-sel-all"]'); return true`)
+    await cdp.eval(`__t.click('[data-test="scan-batch-trash"]'); return true`)
+    await waitFor(cdp, `[...document.querySelectorAll('.mask .box .q')].some((q) => q.textContent.includes('1 张图片'))`,
+      { label: '删除确认弹窗显示 1 张', timeout: 10000 })
+    await cdp.eval(`__t.clickText('.mask .box .foot button', '删除'); return true`)
+    await waitFor(cdp, `__t.count('.scan-view .grid.imgs .card') === 0`,
+      { label: '删除后网格清空', timeout: 20000 })
+    check('批量删除: 磁盘上的 sq.png 已不在原位(进了回收站)',
+      !fs.existsSync(path.join(DIM_DIR, 'sq.png')), '')
+    /* ⚠️ 全删空时, 二级模板整个切到「没有可显示的图片」分支 —— 批量条会随之收起,
+     * scan-sel-count 不存在。所以这里断「操作条收起 或 计数归 0」, 两者都算清空。 */
+    const afterTrash = await cdp.eval(`
+      return {
+        bar: !!document.querySelector('[data-test="scan-batch-bar"]'),
+        count: document.querySelector('[data-test="scan-sel-count"]')
+          ? +document.querySelector('[data-test="scan-sel-count"]').textContent
+          : 0,
+      }
+    `)
+    check('批量删除: 选择集已清空(计数归 0; 全删空时操作条整个收起也算)',
+      !afterTrash.bar || afterTrash.count === 0,
+      `操作条 ${afterTrash.bar} · 计数 ${afterTrash.count}`)
+
     const NOISE = /favicon|ERR_FILE_NOT_FOUND.*favicon|sandboxed_renderer\.bundle\.js|binding\.startupData/i
     const errs = []
     let selfMovedN = 0

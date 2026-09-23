@@ -16,7 +16,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 const CHANNELS = new Set([
   // 应用 / 数据集
   'app:status', 'app:reload', 'app:config', 'app:pickDataDir', 'app:openPath', 'app:revealPath',
-  'app:ctxMenu',
+  'app:ctxMenu', 'app:quickFolders', 'app:quickFolders:add',
   // 统计 / 搜索
   'stats:get', 'search:do',
   // 系列 / 角色
@@ -41,8 +41,8 @@ const CHANNELS = new Set([
   'ingest:status', 'ingest:run', 'ingest:pause',
   // WD14 反推(消费 tag_queue)
   'tagger:status', 'tagger:config', 'tagger:run', 'tagger:pause',
-  // 图片删除(移入回收站)
-  'image:trash',
+  // 图片删除(移入回收站) / 批量移动(扫描页选择模式)
+  'image:trash', 'image:moveMany',
   // 收藏找回(按文件名搜已知目录)
   'fav:resolve',
   'dims:forPaths',

@@ -168,6 +168,13 @@ export const api = {
   // 图片删除(移入系统回收站)
   trashImages: (paths) => call('image:trash', { paths }),
 
+  // 批量移动(扫描页选择模式)。同名自动改名; 返回 { moved:[{from,to,name}], failed:[{path,error}], destName }
+  moveImages: (paths, target) => call('image:moveMany', { paths, target }),
+
+  // 「移动到」预设文件夹(主进程 settings.json, 与右键菜单同一份)
+  quickFolders: () => call('app:quickFolders'),
+  addQuickFolder: (path) => call('app:quickFolders:add', { path }),
+
   // 文件夹登记表 —— 扫描夹与看板来源**共用一份**(真源是 tags.db 的 folders 表)。
   // folders(opts) 的 usage: 'scan'(默认, 扫描页) / 'source'(看板来源) / 'all'(全部登记过的)
   folders: (opts) => call('folders:list', opts),

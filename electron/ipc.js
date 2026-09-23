@@ -134,6 +134,22 @@ function addQuickFolderAndReturn(dirPath) {
   return { action: 'quick-added', result: { ok: true, name } }
 }
 
+/**
+ * 目录路径 -> 它所属(或就是)的登记文件夹记录; 没命中返回 null。
+ * 用于 image:moveMany: 图搬进某个登记来源后要后台补同步。
+ * 匹配规则: 盘符大小写/斜杠方向都归一, 目标 = 登记路径本身或其子目录。
+ */
+function findFolderByDir(dir) {
+  const clean = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const want = clean(dir)
+  if (!want) return null
+  const rows = listFolders({ usage: 'all' }).folders || []
+  return rows.find((f) => {
+    const fp = clean(f.path)
+    return fp && (want === fp || want.startsWith(`${fp}/`))
+  }) || null
+}
+
 /** 扫描元数据解析进度 -> 渲染端进度条(ScanView 订阅) */
 function pushScanProgress(p) {
   mainWindow()?.webContents.send('scan:progress', p)
@@ -610,6 +626,46 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       }
       if (trashed.length) purgeScanCachePaths(trashed)
       return { ok: trashed.length > 0, trashed, failed }
+    }),
+
+    // ---------------- 批量移动(扫描页选择模式) ----------------
+    /* 循环复用 moveFile: 同盘 rename / 跨盘 copy+删 / **同名自动改名**(uniqueDestination,
+       与单张右键移动同一条硬规则 —— 绝不静默覆盖)。逐张容错: 一张失败不拖累整批。
+       收尾 purgeScanCachePaths 作废扫描缓存(否则 5 分钟内重开文件夹还会列出已搬走的图)。
+       目标目录命中某个登记来源时, 后台补一次增量同步+反推 —— kickAutoSync 自己看
+       folder.auto_tag 与 TV_INGEST 总闸, 测试/dev 里不会偷跑(2026-09-23 拍板)。 */
+    'image:moveMany': safe(async ({ paths, target } = {}) => {
+      const list = (Array.isArray(paths) ? paths : [paths]).filter((p) => typeof p === 'string' && p)
+      if (!list.length || !target) return { error: '参数不完整' }
+      const moved = []
+      const failed = []
+      for (const raw of list) {
+        // 磁盘操作走反斜杠(toNativePath, 同 image:trash 的规矩);
+        // **回执的 from 用调用方原文** —— 渲染层靠这些字符串从网格/光箱里剔除, 改写就对不上号。
+        const p = toNativePath(raw)
+        const r = await moveFile(p, target)
+        if (r.ok) moved.push({ from: raw, to: r.dest, name: r.name })
+        else failed.push({ path: raw, error: r.error })
+      }
+      if (moved.length) purgeScanCachePaths(moved.map((m) => m.from))
+      let sync = null
+      if (moved.length) {
+        const folder = findFolderByDir(target)
+        if (folder) sync = kickAutoSync(folder, onIngestDone)
+      }
+      return { ok: moved.length > 0, moved, failed, dest: target, destName: path.basename(target), sync }
+    }),
+
+    // ---------------- 移动目标选择器的数据源(快速预设) ----------------
+    /* 右键菜单的预设文件夹在主进程 settings.json 里, 渲染层的移动弹窗也要用同一份。
+       addQuickFolderAndReturn 是右键菜单那条路的收尾函数, 直接复用(按路径去重, 上限 50)。 */
+    'app:quickFolders': safe(() => ({
+      quickFolders: Array.isArray(getSettings().quickFolders) ? getSettings().quickFolders : [],
+    })),
+    'app:quickFolders:add': safe(({ path: dir } = {}) => {
+      if (!dir) return { error: 'no path' }
+      const r = addQuickFolderAndReturn(dir)
+      return r.result || { ok: false, error: '未知错误' }
     }),
 
     // ---------------- 剪贴板 ----------------
