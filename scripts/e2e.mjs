@@ -2214,6 +2214,168 @@ async function main() {
 
     await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
 
+    /* ---------------- 11b-3. 空显示名的来源 & 「移出来源 = 从看板隐藏」(2026-09-23) ----------------
+     * 用户报的两个现象:
+     *   ① 新加的目录在扫描页显示成「表世界」, 看板的来源条里却**没有它** —— 它入库的 2970 张
+     *      挤进一个名字为空串的分组: 计进「全部」, 却筛不到也藏不掉。
+     *      根因: `folders.label` 是空串(扫描页「添加文件夹」根本不传 label, 界面上那个名字
+     *      是 decorate() 用 basename 临时合成的, 所以 DB 里的空值在界面上看不出来),
+     *      而 sourceNameList 的 SQL 写的是 `AND label <> ''` —— 被静默滤掉。
+     *      label 同时是看板分组的键(readRecords 把它填进 record.source), 空串即隐身。
+     *   ② 已经移出来源的目录(桌面壁纸)仍以来源身份留在来源条上 —— src 表兜底完全不看
+     *      as_source, 把 txt 时代的老名字又补了回来。
+     *
+     * 修法是**读侧兜底 + 收窄可见性, 一行 images 都不改**:
+     *   · 来源名 = label || 文件夹名(store.js 的 folderBaseName/folderNameMap, 两边同口径);
+     *   · 可见性 = gone=0 且目录的 as_source 不是 0 —— 即用户选的
+     *     「移出来源 = 从看板隐藏, 打回来立刻恢复」。
+     *
+     * 全部断言只动沙箱库, 跑完把开关复原(不留残留给下一轮)。
+     */
+    const emptyLabelCtx = await cdp.eval(`
+      const d = await window.tv.invoke('folders:list', { usage: 'all' })
+      const f = (d.folders || []).find((x) => !x.label && x.as_scan && /\\.e2e-work/i.test(x.path))
+      return f ? { path: f.path, name: f.name, label: f.label } : null
+    `)
+    check('来源管理: 有一个 label 为空串的沙箱目录可测"空显示名"', !!emptyLabelCtx,
+      emptyLabelCtx ? `${emptyLabelCtx.name} · label=${JSON.stringify(emptyLabelCtx.label)}` : '找不到')
+
+    if (emptyLabelCtx) {
+      const ep = JSON.stringify(emptyLabelCtx.path)
+      const en = JSON.stringify(emptyLabelCtx.name)
+      const on = await cdp.eval(`
+        await window.tv.invoke('folders:update', { path: ${ep}, as_source: true, auto_tag: false })
+        await window.tv.invoke('app:reload', {})
+        const st = await window.tv.invoke('stats:get', {})
+        const hit = (st.sources || []).find((s) => s.name === ${en})
+        await window.tv.invoke('folders:update', { path: ${ep}, as_source: false, auto_tag: true })
+        await window.tv.invoke('app:reload', {})
+        const st2 = await window.tv.invoke('stats:get', {})
+        return { hit: hit || null, stillThere: (st2.sources || []).some((s) => s.name === ${en}) }
+      `)
+      check('来源管理: label 为空串的目录登记为来源后, 来源条里查得到它(名字落到文件夹名上)',
+        !!on.hit && on.hit.name === emptyLabelCtx.name, JSON.stringify(on.hit))
+      check('来源管理: 再注销掉它就从来源条里消失(不留空壳胶囊)', on.stillThere === false,
+        `还在=${on.stillThere}`)
+    }
+
+    const hideCtx = await cdp.eval(`
+      const d = await window.tv.invoke('folders:list', { usage: 'all' })
+      const f = (d.folders || []).find((x) => x.as_source && x.images > 0)
+      return f ? { path: f.path, name: f.name, rows: f.images } : null
+    `)
+    check('来源管理: 有一个有图的来源目录, 可测「移出即从看板隐藏」', !!hideCtx,
+      hideCtx ? `${hideCtx.name} · 库内 ${hideCtx.rows} 行` : '找不到')
+
+    if (hideCtx) {
+      const hp = JSON.stringify(hideCtx.path)
+      const hn = JSON.stringify(hideCtx.name)
+      const before = await cdp.eval(`
+        const st = await window.tv.invoke('stats:get', {})
+        const s = (st.sources || []).find((x) => x.name === ${hn})
+        return { total: st.total_images, mine: s ? s.images : 0 }
+      `)
+      const off = await cdp.eval(`
+        await window.tv.invoke('folders:update', { path: ${hp}, as_source: false })
+        await window.tv.invoke('app:reload', {})
+        const st = await window.tv.invoke('stats:get', {})
+        const d = await window.tv.invoke('folders:list', { usage: 'all' })
+        const f = (d.folders || []).find((x) => x.path === ${hp})
+        return {
+          total: st.total_images,
+          hasChip: (st.sources || []).some((s) => s.name === ${hn}),
+          rows: f ? f.images : -1,
+        }
+      `)
+      check('来源管理: 移出来源后那些图从看板隐藏(「全部」的数字正好少了该来源的张数)',
+        off.total === before.total - before.mine && before.mine > 0,
+        `${before.total} -> ${off.total} (该来源在册 ${before.mine} 张)`)
+      check('来源管理: 移出来源后它不再出现在来源条上', off.hasChip === false, `还在=${off.hasChip}`)
+      check('来源管理: 但库里的图片记录一行没少(这才是"打回开关即恢复"的前提)',
+        off.rows === hideCtx.rows, `库里 ${off.rows} 行`)
+
+      const back = await cdp.eval(`
+        await window.tv.invoke('folders:update', { path: ${hp}, as_source: true, auto_tag: false })
+        await window.tv.invoke('folders:update', { path: ${hp}, auto_tag: true })
+        await window.tv.invoke('app:reload', {})
+        const st = await window.tv.invoke('stats:get', {})
+        return { total: st.total_images, hasChip: (st.sources || []).some((s) => s.name === ${hn}) }
+      `)
+      check('来源管理: 打回来源后图与来源胶囊一起回来(可逆, 不是一次性破坏)',
+        back.total === before.total && back.hasChip === true,
+        `total=${back.total} · chip=${back.hasChip}`)
+    }
+
+    /* ③ 扫描页的卡片上要能分清两种"标签": 图内嵌的提示词 vs 库里存的图/反推结果。
+     * 用户看「表世界」时以为"反推白跑了" —— 其实反推只写库、不写回 PNG, 而扫描页卡片
+     * 那行显示的是**图内元数据**(裸图当然是 0)。补一行「库内 N 张 · 已反推 M」才分得清。
+     *
+     * 这一段顺带钉住扫描页的**列表刷新**(2026-09-23 补): ScanView 在 keep-alive 白名单里,
+     * onMounted 一辈子只跑一次 —— 别处(来源页)改了用途开关, 切回扫描页看到的还是老清单,
+     * 用户会以为"加了没用"。现在 onActivated 会重查一次, 所以下面**不点**「🔄 刷新列表」,
+     * 直接断言"那张卡片自己出现了" —— 断言的就是这层刷新。 */
+    const scanCtx = await cdp.eval(`
+      const d = await window.tv.invoke('folders:list', { usage: 'all' })
+      const f = (d.folders || []).find((x) => x.as_source && x.images > 0)
+      if (!f) return null
+      await window.tv.invoke('folders:update', { path: f.path, as_scan: true })
+      return { path: f.path, name: f.name, rows: f.images }
+    `)
+    check('扫描页: 有一个"有图 + 已登记来源"的目录可挂成扫描夹', !!scanCtx,
+      scanCtx ? `${scanCtx.name} · 库内 ${scanCtx.rows} 张` : '找不到')
+
+    if (scanCtx) {
+      await cdp.eval(`location.hash = '#/scan'; return true`)
+      await waitFor(cdp, `!!document.querySelector('.scan-view')`, { label: '扫描页', timeout: 20000 })
+      /* 扫描页在 KeepAlive 白名单里: 上一段测试进来过并停在**二级**(某个文件夹的图片
+         列表), 现在切回来会原样恢复 —— 一级的文件夹网格压根不在 DOM 里, 直接等它必然
+         超时。所以先退回一级(面包屑那个「全部文件夹」)。 */
+      await cdp.eval(`
+        if (!document.querySelector('.scan-view .grid.folders')) {
+          const back = document.querySelector('.scan-view .crumb .link')
+          if (back) back.click()
+        }
+        return true
+      `)
+      await waitFor(cdp, `!!document.querySelector('.scan-view .grid.folders')`,
+        { label: '扫描页文件夹网格(一级)', timeout: 20000 })
+
+      const wanted = JSON.stringify(scanCtx.name)
+      /* 等卡片出现用**轮询**而不是 waitFor: waitFor 超时是抛异常, 会把整轮 e2e 打断;
+         而"卡片没出现"恰恰是这里要判定的一件事, 该由 check 记成失败、然后继续往下跑。 */
+      let appeared = false
+      for (let i = 0; i < 50 && !appeared; i++) {
+        appeared = await cdp.eval(`
+          return [...document.querySelectorAll('.scan-view .grid.folders .ecard .name')]
+            .some((n) => n.textContent.trim() === ${wanted})
+        `)
+        if (!appeared) await sleep(200)
+      }
+      check('扫描页: 切回扫描页时列表已刷新(别处刚挂的扫描夹立刻可见, 不用手点刷新)',
+        appeared === true, `名叫「${scanCtx.name}」的卡片: ${appeared ? '找到了' : '没找到'}`)
+
+      const scanCard = await cdp.eval(`
+        const cards = [...document.querySelectorAll('.scan-view .grid.folders .ecard')]
+        const c = cards.find((x) => (x.querySelector('.name')?.textContent || '').trim() === ${wanted})
+        if (!c) return null
+        return [...c.querySelectorAll('.fmeta')].map((m) => m.textContent.replace(/\\s+/g, ' ').trim())
+      `)
+      const libLine = (scanCard || []).find((t) => t.includes('库内')) || ''
+      const libNum = Number(((libLine.match(/库内 ([\d,]+) 张/) || [])[1] || '').replace(/,/g, '') || NaN)
+      check('扫描页: 卡片把「图内提示词」与「库内图片/已反推」分开显示(不再像"没有标签")',
+        libNum === scanCtx.rows,
+        `卡片上写着「${libLine}」 · 库里 ${scanCtx.rows} 行`)
+
+      await cdp.eval(`
+        await window.tv.invoke('folders:update', { path: ${JSON.stringify(scanCtx.path)}, as_scan: false })
+        return true
+      `)
+    }
+
+    /* 收尾: 回首页 —— 下面 11c 是"从首页卡片上点标签", 若停在这儿(扫描页)它一条都跑不到
+     * (2026-09-23 二跑里标签跳转整段 11 条失败, 根因就是这里没回家)。 */
+    await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
+
     /* ---------------- 11c. 点标签跳去该标签的图片列表(2026-09-20 需求) ----------------
      * 光箱 / 详情页的标签: 点**标签本体** = 跳转, 点标签上的 📋 = 只复制那一个。
      *

@@ -28,7 +28,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { dataFile } from './workspace.js'
 import { scanFolder, invalidateScanCache } from './scan.js'
-import { openDb, normalizeImagePath, upsertFolder, folderRows } from './store.js'
+import { openDb, normalizeImagePath, upsertFolder, folderRows, folderBaseName, folderNameMap } from './store.js'
 
 /** 兼容期的文件名 —— 现在由 paths.js 的 DATA_ROUTE 路由到 user/folders.json */
 const NAME = 'scan_folders.json'
@@ -88,7 +88,10 @@ function decorate(row) {
     id: Number(row.id),
     path: row.path,
     label: row.label || '',
-    name: row.label || path.basename(row.path) || row.path,
+    // 显示名: 优先调用方给的名字(列表走 folderNameMap, 带重名消歧), 否则 label,
+    // 再否则文件夹名。**必须与 store.js 的来源名同口径** —— 界面上叫「表世界」、
+    // 看板来源条里却没有它, 就是这个口径曾经分叉造成的。
+    name: row.name || folderBaseName(row.path, row.label),
     as_source: !!row.as_source,
     as_scan: !!row.as_scan,
     auto_tag: !!row.auto_tag,
@@ -99,6 +102,7 @@ function decorate(row) {
     note: row.note || '',
     stats: row.stats_json ? safeParse(row.stats_json) : null,
     images: Number(row.images || 0),          // 库内已有的图片记录数
+    tagged: Number(row.tagged || 0),          // 其中由 WD14 反推来的(tags_src='wd14')
     exists: isDir(row.path),
   }
 }
@@ -125,9 +129,12 @@ function hasTable(db, name) {
  */
 export function listFolders({ usage = 'scan' } = {}) {
   const db = openDb()
+  // 名字整表算一次再发下去: 重名消歧要看到**全部**目录才判得准(只看当前 usage
+  // 的子集, 同一个文件夹名在两个列表里会得到两个名字)。
+  const nameOf = folderNameMap(db)
   return {
     file: dataFile(NAME),
-    folders: folderRows(db, { usage }).map(decorate),
+    folders: folderRows(db, { usage }).map((r) => decorate({ ...r, name: nameOf.get(Number(r.id)) })),
   }
 }
 

@@ -222,6 +222,51 @@ console.log('\n[8] 边界: 不存在的目录 / 空路径 / 未登记')
   eq('移出未登记的目录 -> not in list', d.error, 'not in list')
 }
 
+/* --------------------------------------- [9] 空显示名 / 注销来源 */
+
+console.log('\n[9] 空显示名的来源 & 「移出来源 = 从看板隐藏」')
+{
+  const baseA = path.basename(DIR_A)
+
+  /* 扫描页「添加文件夹」不传 label, 于是库里的 label 就是空串 —— 这是**合法状态**,
+     界面上的名字由 decorate() 用 basename 合成。守的是"空 label 也照样能当来源"。
+     2026-09-23 的线上现象: 「表世界」登记成来源后, 看板的来源条里没有它, 2970 张图
+     挤进一个名字为空串的隐形分组 —— 既计进「全部」, 又筛不到、藏不掉。 */
+  const up = folders.updateFolder({ path: DIR_A, as_source: true })
+  eq('不传 label 也能登记为来源', up.folder.as_source, true)
+  eq('label 保持空串(空 = 用文件夹名, 不强行落库)', up.folder.label, '')
+  eq('显示名落到了文件夹名上', up.folder.name, baseA)
+
+  const names = store.sourceNameList()
+  eq('空 label 的来源也进来源名单', names.includes(baseA), true)
+
+  const db = store.openDb()
+  const fidA = db.prepare('SELECT id FROM folders WHERE path = ?').get(norm(DIR_A)).id
+  db.prepare(`INSERT INTO images (path, src_id, folder_id, tags, tags_src)
+              VALUES (?,0,?,?,'wd14')`).run(norm(path.join(DIR_A, 'p0.png')), fidA, '1girl,solo')
+
+  const mine = () => {
+    const out = []
+    store.readRecords((r) => out.push(r))
+    return out.filter((r) => r.path.startsWith(norm(DIR_A)))
+  }
+  eq('入库的图能被读到', mine().length, 1)
+  eq('记录的 source 与来源名同口径(不是空串)', mine()[0] && mine()[0].source, baseA)
+  eq('卡片上的「已反推」数算得出来',
+    listScan().find((f) => f.path === norm(DIR_A)).tagged, 1)
+
+  /* 移出来源 = 从看板隐藏: images 一行都不改, 只在读取时收窄。
+     所以它是非破坏、可逆的, 也不会和 gone 那套"文件不见了"的语义打架。 */
+  folders.updateFolder({ path: DIR_A, as_source: false })
+  eq('移出后来源名单里没有它', store.sourceNameList().includes(baseA), false)
+  eq('图从看板消失(readRecords 不再返回)', mine().length, 0)
+  eq('但库里的记录一张没少(这才是"可恢复"的前提)',
+    db.prepare('SELECT COUNT(*) n FROM images WHERE folder_id = ?').get(fidA).n, 1)
+
+  folders.updateFolder({ path: DIR_A, as_source: true })
+  eq('打回来源: 图立刻回到看板', mine().length, 1)
+}
+
 /* ---------------------------------------------------------- 收尾 */
 
 // 必须显式关库: store.js 的句柄是模块级单例, 持有它就删不掉沙箱目录

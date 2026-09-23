@@ -401,13 +401,64 @@ export function folderRows(db, { usage = 'all' } = {}) {
       : ''
   return db.prepare(`
     SELECT f.*,
-           COALESCE(c.n, 0) AS images
+           COALESCE(c.n, 0) AS images,
+           COALESCE(c.tagged, 0) AS tagged
       FROM folders f
-      LEFT JOIN (SELECT folder_id, COUNT(*) AS n FROM images GROUP BY folder_id) c
-             ON c.folder_id = f.id
+      LEFT JOIN (
+        SELECT folder_id, COUNT(*) AS n,
+               SUM(CASE WHEN tags_src = 'wd14' THEN 1 ELSE 0 END) AS tagged
+        FROM images GROUP BY folder_id
+      ) c ON c.folder_id = f.id
       ${where}
      ORDER BY f.id
   `).all()
+}
+
+/**
+ * 目录的**基础显示名**: label 优先, 留空则用文件夹名。
+ *
+ * 为什么必须有这层兜底 —— label 不只是"备注", 它同时是**看板分组的键**:
+ * readRecords 把它填进 record.source, sourceNameList 把它当来源名。而"空 label"
+ * 是完全合法的一种状态(扫描页「添加文件夹」就不传 label, 界面上的名字是
+ * folders.js 的 decorate() 用 basename 临时合成的), 于是 DB 里的空串在界面上
+ * **看不出来**。少了这层兜底, 新登记的目录会拿到一个空来源名: 图在库里、也计进
+ * 「全部」, 却没有任何来源胶囊能筛到它 —— 2026-09-23 实测, 「表世界」的 2970 张
+ * 就这么隐身了(它们全挤在一个名为空串的隐形分组里)。
+ */
+export function folderBaseName(path, label) {
+  const l = String(label ?? '').trim()
+  if (l) return l
+  const s = String(path || '').replace(/[\\/]+$/, '')
+  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'))
+  return (i >= 0 ? s.slice(i + 1) : s) || s
+}
+
+/**
+ * folders.id -> 显示名。**一次算全表**, 让 sourceNameList 与 readRecords 拿到
+ * 同一份名字 —— 两边算法只要不一致, record.source 就会对不上任何来源名。
+ *
+ * 重名要消歧: `x/桌面壁纸` 与 `x/桌面壁纸/桌面壁纸` 的 basename 都是「桌面壁纸」。
+ * 来源名是筛选的键, 重复键会让两批图共用一个胶囊(选中一个等于选了两个)。
+ * 先用父目录名区分, 再撞就缀上 id。
+ */
+export function folderNameMap(db) {
+  const rows = db.prepare('SELECT id, path, label FROM folders ORDER BY id').all()
+  const base = rows.map((r) => folderBaseName(r.path, r.label))
+  const dup = new Map()
+  for (const b of base) dup.set(b, (dup.get(b) || 0) + 1)
+  const out = new Map()
+  const taken = new Set()
+  rows.forEach((r, i) => {
+    let n = base[i]
+    if (dup.get(n) > 1) {
+      const parent = folderBaseName(String(r.path).replace(/[\\/][^\\/]*$/, ''), '')
+      n = parent ? `${n} (${parent})` : n
+      if (taken.has(n)) n = `${n} #${r.id}`
+    }
+    taken.add(n)
+    out.set(Number(r.id), n)
+  })
+  return out
 }
 
 /**
@@ -428,11 +479,27 @@ export function folderRows(db, { usage = 'all' } = {}) {
  */
 export function sourceNameList(db = null) {
   const d = db || openDb()
-  const names = d.prepare("SELECT label FROM folders WHERE as_source = 1 AND label <> '' ORDER BY id")
-    .all().map((r) => String(r.label))
+  const nameOf = folderNameMap(d)
+  const names = d.prepare('SELECT id FROM folders WHERE as_source = 1 ORDER BY id')
+    .all().map((r) => nameOf.get(Number(r.id)))
+    .filter((n) => !!n)
   if (names.length) {
-    for (const r of d.prepare('SELECT name, records FROM src ORDER BY id').all()) {
-      if (Number(r.records || 0) > 0 && !names.includes(String(r.name))) names.push(String(r.name))
+    /* src 表的兜底: 只补**还有可见记录**的老来源。
+       它的原意是「有 src 行、没有 folders 行」的遗留来源别凭空消失, 但 2026-09-23
+       发现它会把**已经注销掉来源的目录**又拉回列表 —— 「桌面壁纸」被移出后仍然
+       以来源身份出现(它的图也还在看板里), 用户看到的就是"移出没生效"。
+       现在的判据: 该 src 名下的图, 是不是还有落在 as_source=1 的目录里(或压根
+       没有目录行的遗留)。全被注销了就不再出现在来源条上 —— 语义与 readRecords
+       的可见性判据严格一致, 免得出现"胶囊在、点进去 0 张"的空壳。 */
+    const aliveSrcIds = new Set(d.prepare(`
+      SELECT DISTINCT i.src_id AS id
+      FROM images i LEFT JOIN folders f ON f.id = i.folder_id
+      WHERE i.src_id > 0 AND (f.id IS NULL OR f.as_source = 1)
+    `).all().map((r) => Number(r.id)))
+    for (const r of d.prepare('SELECT id, name, records FROM src ORDER BY id').all()) {
+      if (Number(r.records || 0) <= 0) continue
+      if (!aliveSrcIds.has(Number(r.id))) continue
+      if (!names.includes(String(r.name))) names.push(String(r.name))
     }
     return [...new Set(names)]
   }
@@ -765,19 +832,28 @@ export function readRecords(onRecord, onProgress = () => {}) {
   const db = openDb()
   const srcNames = new Map(db.prepare('SELECT id, name FROM src').all().map((r) => [Number(r.id), r.name]))
   // 来源名兜底: 增量入库进来的记录不属于任何 txt 源(src_id=0),
-  // 它们的来源应该由 folders.label 决定。少了这一层, 看板的来源列表里
-  // 会冒出一组空名字, 而那些图既筛不到也藏不掉。
-  const folderNames = new Map(
-    db.prepare('SELECT id, label FROM folders').all().map((r) => [Number(r.id), String(r.label || '')]),
-  )
+  // 它们的来源应该由**目录显示名**决定(label 留空则用文件夹名, 见 folderBaseName)。
+  // 少了这一层, 看板的来源列表里会冒出一组空名字, 而那些图既筛不到也藏不掉。
+  const folderNames = folderNameMap(db)
+
+  /* 可见性: 图还在库里(gone=0), 但它的目录已经把「看板来源」这个用途注销了 ——
+     那就不再看板出现。这就是「移出来源 = 从看板隐藏, 打回开关即恢复」的实现:
+     **一行 images 都不改**(所以是非破坏、可逆的, 也不与 gone 那套"文件不见了"
+     的语义打架), 只在这里收窄一次。
+     folder_id 为 0/NULL 的老记录不受影响 —— 那些是直接解析 txt 进来的遗留,
+     根本没有目录行, 拿 as_source 判它们没有意义。 */
+  const offIds = db.prepare('SELECT id FROM folders WHERE as_source = 0').all().map((r) => Number(r.id))
+  const vis = offIds.length
+    ? ` AND (i.folder_id IS NULL OR i.folder_id NOT IN (${offIds.map(() => '?').join(',')}))`
+    : ''
   const chunk = db.prepare(`
     SELECT i.id AS id, i.path AS path, i.src_id AS src_id, i.folder_id AS folder_id, i.tags AS tags
-    FROM images i WHERE i.id > ? AND i.gone = 0 ORDER BY i.id LIMIT ?
+    FROM images i WHERE i.id > ? AND i.gone = 0${vis} ORDER BY i.id LIMIT ?
   `)
   let lastId = 0
   let n = 0
   for (;;) {
-    const rows = chunk.all(lastId, READ_CHUNK)
+    const rows = chunk.all(lastId, ...offIds, READ_CHUNK)
     if (!rows.length) break
     for (const r of rows) {
       lastId = Number(r.id)

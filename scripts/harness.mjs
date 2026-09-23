@@ -203,9 +203,23 @@ export function ensureWorkDir({ quiet = false } = {}) {
   //   复位方式: 还原成"由配置推导出来的状态" —— 沙箱配置里的
   //   data_files_dir 只有 tags_*.txt(没有 scan_folders.json 的登记),
   //   于是正确的初始态就是"每个有记录的 src 一行 as_source=1 / as_scan 全 0"。
-  //   顺序很重要: **先按 src 把 as_source 打回来, 再删剩下的**
-  //   —— 来源页/扫描页的子测试会因为中途失败而留下"已移出(as_source=0)"的行,
-  //   若先删就把这条登记整行删掉了, 下一轮沙箱会少一整个来源。
+  //
+  //   ⚠️ 2026-09-23 改过一次, 两条规则都是踩出来的:
+  //
+  //   ① **目录已不在磁盘的, 不能被拉回来当来源**。
+  //      原来只按 `label IN (SELECT name FROM src ...)` 打回 as_source, 完全不管
+  //      那个目录还在不在 —— 用户的 `桌面壁纸/桌面壁纸` 早已移走(实测磁盘上
+  //      MISSING), 沙箱库里却每轮都当来源, 它那 7751 行死图被看板随机抽到 → 缩略图
+  //      404 → 把「运行期无 JS 异常」这条总闸**整片**顶红(实测 96 条)。
+  //      这不是测试噪声, 是沙箱状态与用户真实状态脱节: 用户那边这条早已 as_source=0。
+  //
+  //   ② **有图片记录的"已移出"行不能删**。
+  //      原来最后一句是无条件 `DELETE FROM folders WHERE as_source = 0`,
+  //      删掉登记行会让它的图片变成**没有登记行的孤儿** —— 而看板的可见性判据是
+  //      "folder_id 落在 as_source=0 的行里就隐藏", 孤儿不匹配这一条, 于是那些死图
+  //      **反而重新可见**, 404 立刻回来。所以只删"没有图片记录"的残留行(测试自己加的夹)。
+  //
+  //   顺序很重要: 先把 as_source 打回复位, 再按"目录在不在磁盘"降级, 最后才删。
   //   库不存在(第一次跑, 还没建) 时跳过。
   const sandboxDb = path.join(dataDir, 'tags.db')
 
@@ -251,13 +265,37 @@ export function ensureWorkDir({ quiet = false } = {}) {
     try {
       const db = new DatabaseSync(sandboxDb)
       db.exec('PRAGMA busy_timeout = 5000')
-      const off = db.prepare('UPDATE folders SET as_scan = 0 WHERE as_scan <> 0').run()
-      const back = db.prepare(`UPDATE folders SET as_source = 1
-                                WHERE as_source = 0
-                                  AND label IN (SELECT name FROM src WHERE records > 0)`).run()
-      const del = db.prepare('DELETE FROM folders WHERE as_source = 0').run()
+      const srcNames = new Set(
+        db.prepare('SELECT name FROM src WHERE records > 0').all().map((r) => String(r.name)))
+      const hasImg = db.prepare('SELECT 1 FROM images WHERE folder_id = ? LIMIT 1')
+      const rows = db.prepare('SELECT id, path, label, as_source, as_scan FROM folders').all()
+      const setFlag = db.prepare('UPDATE folders SET as_source = ?, as_scan = 0 WHERE id = ?')
+      const dropRow = db.prepare('DELETE FROM folders WHERE id = ?')
+      let offScan = 0, revived = 0, demoted = 0, dropped = 0, kept = 0
+      db.exec('BEGIN')
+      try {
+        for (const r of rows) {
+          let src = !!r.as_source
+          if (!fs.existsSync(r.path)) {
+            // ① 目录不在磁盘上 -> 一律不当来源(行保留, 见文件头注释的 ①②)
+            if (src) { src = false; demoted++ } else kept++
+          } else if (!src && srcNames.has(String(r.label || ''))) {
+            src = true; revived++          // 中途失败留下的"已移出" -> 按 src 名单打回
+          } else if (!src) {
+            // 磁盘上还在、又不在 src 名单里 = 测试自己加的夹; 有图的留着(删了会成孤儿)
+            if (hasImg.get(r.id)) kept++
+            else { dropRow.run(r.id); dropped++; continue }
+          }
+          if (r.as_scan) offScan++
+          setFlag.run(src ? 1 : 0, r.id)
+        }
+        db.exec('COMMIT')
+      } catch (e) {
+        try { db.exec('ROLLBACK') } catch { /* 忽略 */ }
+        throw e
+      }
       db.close()
-      reset.push(`tags.db:folders(复位扫描 ${off.changes} 行, 找回来源 ${back.changes} 行, 删除测试夹 ${del.changes} 行)`)
+      reset.push(`tags.db:folders(复位扫描 ${offScan} 行, 找回来源 ${revived} 行, 降级失效目录 ${demoted} 行, 保留已移出 ${kept} 行, 删除测试夹 ${dropped} 行)`)
     } catch (e) {
       // 复位失败不该让整轮测试挂掉 —— 但要吭声, 否则下一轮的空列表断言失败
       // 会变成"莫名其妙"(实测过这类: 现象在断言, 原因在准备阶段)。

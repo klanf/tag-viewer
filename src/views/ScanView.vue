@@ -399,6 +399,9 @@ onBeforeRouteLeave(() => {
   const box = document.querySelector(level.value === 'folder' ? '.scan-body' : '.list-panel')
   if (box) savedScroll[level.value] = box.scrollTop
 })
+/* 首次激活是紧跟在 onMounted 之后的(KeepAlive 组件的正常行为) —— 那时列表刚加载过,
+   再查一次纯属白跑, 用一个开关跳过它。 */
+let firstActivate = true
 onActivated(() => {
   nextTick(() => {
     const sel = level.value === 'folder' ? '.scan-body' : '.list-panel'
@@ -406,6 +409,14 @@ onActivated(() => {
     const top = savedScroll[level.value] || 0
     if (box && top) box.scrollTo({ top })
   })
+  /* 「切回来要刷新列表」—— KeepAlive 保住了状态, 代价是 **onMounted 一辈子只跑一次**。
+   * 而这份列表的上游( folders 登记表 )现在是**来源页与扫描页共用的一张表**: 在来源页
+   * 把某个目录勾成「扫描夹」、或者在那边「移出/恢复」, 回到扫描页看到的还是老清单 ——
+   * 用户会以为"加了没用"(2026-09-23 实测: e2e 里先改开关再切回来, 页面压根没刷新)。
+   * loadFolders() 是整体替换 folders.value, 不会重复追加, 也不动 level/分页/滚动,
+   * 所以每次激活重查一遍是安全的; 代价只有一条 folders:list 查询。 */
+  if (firstActivate) { firstActivate = false; return }
+  loadFolders()
 })
 </script>
 
@@ -475,6 +486,14 @@ onActivated(() => {
             <div class="fmeta">
               <span>含提示词 {{ nfmt(f.stats?.with_prompt || 0) }}</span>
               <span v-if="f.stats?.shared_count">· 共用 {{ f.stats.shared_count }}</span>
+            </div>
+            <!-- 上面那行是「**图里**嵌了多少提示词」(扫描页的图是库外图片, 标签现场
+                 从 PNG 元数据解析); 这一行是「**库里**存了多少张 / 其中多少张来自 WD14
+                 反推」。两个"标签"不是一回事 —— 表世界那批裸图图内元数据是 0, 反推却
+                 实打实跑了 2970 张。少了这行, 反推跑完扫描页看着还像"没有标签"。 -->
+            <div v-if="f.images" class="fmeta">
+              <span>库内 {{ nfmt(f.images) }} 张</span>
+              <span v-if="f.tagged">· 已反推 {{ nfmt(f.tagged) }}</span>
             </div>
             <div class="fmeta faint">上次扫描 {{ fmtTime(f.last_scan) }}</div>
             <div class="fbtns">
