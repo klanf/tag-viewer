@@ -135,9 +135,14 @@ async function saveText() {
       </div>
 
       <div class="stat">
-        当前档位会隐藏
+        当前档位在<b>整个库</b>里会隐藏
         <b>{{ nfmt(safety.hiddenCount) }}</b> / {{ nfmt(safety.total) }} 张
         <span class="faint">（{{ pct }}）</span>
+      </div>
+      <!-- 这里的口径刻意是"整个库"(改集合看的是全局影响); 各页面工具栏上那个
+           数字是"当前列表"的 —— 两者不是一回事, 所以把它写出来, 免得对不上时困惑。 -->
+      <div class="tip-mini">
+        工具栏上那个 −N 是<b>当前页面 / 当前来源</b>会隐藏的张数，跟这里的全库数字不同。
       </div>
 
       <section>
@@ -217,6 +222,9 @@ async function saveText() {
 .stat { font-size: 13px; color: var(--text); }
 .stat b { color: var(--warn); font-size: 15px; }
 .faint { color: var(--faint); font-size: 11px; margin-left: 6px; }
+/* 说明"工具栏那个数字是当前范围、这里是全库"那一行 —— 独占一行, 不跟着 .faint 的左缩进 */
+.tip-mini { margin-top: 4px; font-size: 11px; color: var(--faint); line-height: 1.55; }
+.tip-mini b { color: var(--muted); font-weight: 600; }
 section h4 {
   margin: 0 0 6px; font-size: 11px; font-weight: 600; color: var(--muted);
 }

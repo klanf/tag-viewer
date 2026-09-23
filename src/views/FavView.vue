@@ -36,15 +36,22 @@ const ready = ref(false)
 const tagFilter = ref('')
 
 /** 展示列表: 按收藏时间倒序(旧迁移数据 at=0 沉底), 再套标签过滤, 打上失效标记 */
-const displayList = computed(() => {
+/** 过滤后(还没过安全模式)的列表 —— 安全模式的**计数与展示共用这一份**, 抽出来 */
+const favRaw = computed(() => {
   const q = tagFilter.value.trim().toLowerCase()
   const sorted = fav.list.slice().sort((a, b) => (b.at || 0) - (a.at || 0))
-  const hit = sorted
+  return sorted
     .filter((r) => !q || (r.tags || []).some((t) => t.toLowerCase().includes(q)))
     .map((r) => (missingSet.value.has(r.path) ? { ...r, _missing: true } : r))
+})
+
+/** 开关上那个数字: 是"收藏里会隐藏多少张", 不是整个库的 */
+const favHits = computed(() => safety.countHits(favRaw.value))
+
+const displayList = computed(() => {
   /* 安全模式: 收藏记录里带着**收藏那一刻的标签快照**, 所以库外/失效的收藏也判得出来
      (见 useSafetyStore.unsafeOf —— 没有 unsafe 字段就按标签现算)。 */
-  return safety.filterItems(hit)
+  return safety.filterItems(favRaw.value)
 })
 
 /** 传给光箱的翻页列表: 当前过滤结果(标灰的也能开 —— 光箱自己会显示加载失败) */
@@ -82,7 +89,7 @@ onMounted(async () => {
         placeholder="按标签过滤收藏(子串匹配)"
         spellcheck="false"
       >
-      <TvSafetyToggle />
+      <TvSafetyToggle :counts="favHits" />
     </header>
 
     <TvImageGrid

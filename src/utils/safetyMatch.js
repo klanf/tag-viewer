@@ -58,3 +58,31 @@ export function unsafeOfTags(tags, matcher) {
   for (const t of arr) if (hitOne(String(t).toLowerCase(), edge)) return 2
   return 0
 }
+
+/**
+ * 一个列表里**两档各会隐藏多少张** → `{ core, edge }`。
+ *
+ * 口径必须与主进程的 `coreHit` / `edgeHit` **逐字一致**（见 safety.js 的 hiddenAt）：
+ *   · core = 只命中 core 段的条数（core 档会藏这么多）
+ *   · edge = edge 档会藏的总数（= core + 仅命中 edge 的 —— core 段在 edge 档照样藏）
+ * 这两个数是"安全模式开关上那个 −N"的来源，算错了不会崩，只会**骗人**：
+ * 开关上写着 −3、实际藏掉 5 张。所以 test:visual 里拿 `hiddenBySafety` 逐条对了一遍。
+ *
+ * 刻意收一个 `unsafeOf` 取值函数而不是直接读 `item.unsafe`：库内记录是数值直读，
+ * 库外图（扫描页 / 收藏快照）得按标签现算 —— 两种取值方式共用这一份计数逻辑。
+ *
+ * @param {Array} list
+ * @param {(item:any)=>number} unsafeOf 取一张图的敏感级别 0/1/2
+ * @returns {{core:number, edge:number}}
+ */
+export function countHits(list, unsafeOf) {
+  const arr = Array.isArray(list) ? list : []
+  let core = 0
+  let edge = 0
+  for (const it of arr) {
+    const u = unsafeOf(it)
+    if (u === 1) core++
+    else if (u === 2) edge++
+  }
+  return { core, edge: core + edge }
+}

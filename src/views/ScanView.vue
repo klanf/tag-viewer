@@ -122,6 +122,12 @@ const shownFolders = computed(() => {
 
 const rawItems = computed(() => result.value?.items || [])
 
+/** 安全模式开关上那个数字 —— 是**这个文件夹**(= 当前所在来源)里会隐藏多少张,
+ *  不是整个库的。用 rawItems 而不是 sortedItems: 这里回答的是"这个来源藏了多少",
+ *  上面那个标签筛选改变的是"当前在看什么", 不该让这个数字跟着缩。
+ *  (扫描页的图是库外图, 没有 feed 可用, 只能前端按标签现算 —— unsafeOf 里有记忆。) */
+const scanHits = computed(() => safety.countHits(rawItems.value))
+
 /* ---------------- 标签筛选 ----------------
  * 扫描页的图是**库外图片**(标签从 PNG 元数据现场解析), 所以筛选只能在前端做,
  * 而且筛选条件本身也得来自这一批图 —— 搜索框的补全用当前文件夹的标签池,
@@ -605,7 +611,7 @@ onActivated(() => {
               <template v-else>已加载 {{ nfmt(pagedItems.length) }} / 共 {{ nfmt(sortedItems.length) }} 张 · 滚到底自动加载</template>
             </span>
             <span class="spacer" />
-            <TvSafetyToggle />
+            <TvSafetyToggle :counts="scanHits" />
             <TvSelect
               v-model="sortBy"
               size="sm"

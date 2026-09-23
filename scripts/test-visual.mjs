@@ -338,6 +338,50 @@ const mirrorOf = (m) => ({ core: compileRules(m.core.raw), edge: compileRules(m.
   eq('同一标签两侧一致(不误伤也是两边一致)', safety.unsafeLevelOf(['penetration_test'], m), unsafeOfTags(['penetration_test'], mi))
 }
 
+/* ============================================================
+ *  安全模式开关上那个数字的口径 (2026-09-23)
+ * ============================================================
+ * 用户: "这边的数字能不能根据不同的来源显示被隐藏的数字" +
+ *       "这个数字我不点这个按钮好像就默认是 0"。
+ * 于是数字从"整个库的统计"改成"传进来的那批图里会隐藏多少张"。
+ *
+ * 数字算错**不会崩, 只会骗人** —— 开关上写着 −3、网格里实际少掉 5 张, 而用户没有
+ * 任何办法自查。所以这里拿主进程的 hiddenAt 逐条跑一遍, 把两处口径钉死:
+ *   core 档藏 unsafe=1; edge 档藏 unsafe=1 和 2(core 段在 edge 档照样藏)。
+ */
+const { countHits } = await load('src/utils/safetyMatch.js')
+{
+  const mixed = [
+    { unsafe: 0 }, { unsafe: 1 }, { unsafe: 2 }, { unsafe: 1 }, { unsafe: 0 }, { unsafe: 2 },
+  ]
+  const byNum = (it) => it.unsafe
+  const h = countHits(mixed, byNum)
+  eq('计数: core 档 == 逐条 hiddenAt(core)',
+    h.core, mixed.filter((i) => safety.hiddenAt(i.unsafe, 'core')).length)
+  eq('计数: edge 档 == 逐条 hiddenAt(edge)',
+    h.edge, mixed.filter((i) => safety.hiddenAt(i.unsafe, 'edge')).length)
+  eq('计数: core 只数 unsafe=1', h.core, 2)
+  eq('计数: edge 是两档合并(=1 与 =2 都算)', h.edge, 4)
+  eq('计数: 干净的一批', JSON.stringify(countHits([{ unsafe: 0 }], byNum)), '{"core":0,"edge":0}')
+  eq('计数: 空列表不炸', JSON.stringify(countHits([], byNum)), '{"core":0,"edge":0}')
+  eq('计数: 非数组入参不炸', JSON.stringify(countHits(null, byNum)), '{"core":0,"edge":0}')
+
+  /* 库外图(扫描页 / 收藏快照)没有 unsafe 字段 —— 同一个计数函数喂"按标签现算"的
+     取值函数也要出同样的数。守住"两种取值方式共用一份计数逻辑"。
+     (此时 safety_tags.txt 已被上面那段换成 [core]*_penetration / [edge]*_lingerie*) */
+  const m2 = safety.safetyMatcher()
+  const mi2 = mirrorOf(m2)
+  const items = [
+    { tags: ['x_penetration', '1girl'] },   // 命中 core -> 1
+    { tags: ['1girl', 'smile'] },           // 干净 -> 0
+    { tags: ['white_lingerie_set'] },       // 只命中 edge -> 2
+  ]
+  const byTag = countHits(items, (it) => unsafeOfTags(it.tags, mi2))
+  const byTagMain = countHits(items, (it) => safety.unsafeLevelOf(it.tags, m2))
+  eq('计数(库外图): 前端镜像与主进程同数', JSON.stringify(byTag), JSON.stringify(byTagMain))
+  eq('计数(库外图): 命中 core 1 张 / edge 档共 2 张', JSON.stringify(byTag), '{"core":1,"edge":2}')
+}
+
 /* ---------------------------------------------------------- 收尾 */
 
 closeDb()

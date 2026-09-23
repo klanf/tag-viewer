@@ -16,6 +16,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { crc32 } from 'node:zlib'
 import { findElectron, electronEnv } from './electron-path.mjs'
 import { freePort, clearPageState, ensureWorkDir, sleep, ROOT } from './harness.mjs'
 
@@ -2992,6 +2993,153 @@ async function main() {
     const bad = await cdp.eval(`return { v: __sortNow(), n: __t.count('.scan-view .grid.imgs .card') }`)
     check('扫描排序: 坏值(手改 localStorage)回落默认, 不把列表搞空',
       bad.v === 'name' && bad.n === 5, `${bad.v} · ${bad.n} 张`)
+
+    /* ---------------- 11f. 安全模式开关上的数字(2026-09-23) ----------------
+     * 用户两条反馈:
+     *   "这边的数字能不能根据不同的来源显示被隐藏的数字"
+     *   "然后这个数字我不点这个按钮好像就默认是 0"
+     * 改法: 数字从"整个库的统计"变成"**当前所在文件夹**(= 当前来源)里会隐藏多少张",
+     *       而且**开关关着也显示**(淡色 —— 预览"打开会少几张")。
+     *
+     * 夹具自己造 —— 现成 scan-test 那几张的提示词**全是干净的**(masterpiece/1girl/…),
+     * 拿它们验数字恒为 0, 测了跟没测一样。这里复制 3 张、把其中一张的提示词从
+     * `smile` 改成 `nude`(沙箱 safety_tags.txt 的 core 段第一位就是 nude), 于是:
+     *
+     *   · 正确实现 = 开关上显示 **1**。若还是"整个库"的统计, 沙箱库里是**四万多** ——
+     *     不可能是 1 ⇒ "显示 1"这一条本身就证明了数字跟着当前来源走;
+     *   · **关着的时候数字也在** —— 以前是 `v-if="safety.on"`, 关掉数字直接消失,
+     *     用户看到的就是"不点这个按钮它就像 0";
+     *   · 换到另一个**干净**的文件夹 -> 数字整个消失(0 不渲染), 再证一次它跟着来源变。
+     *
+     * ⚠️ 改 PNG 里的文本块必须**重算长度与 CRC32** —— 直接改字节会得到一个坏 PNG,
+     * 缩略图加载失败反而把下面那条控制台断言顶红。node:zlib 自带 crc32(≥20.15)。
+     * 夹具的判定结果事先离线验过一次(.e2e-work/verify-safety-fixture.mjs):
+     * promptToTags 会把 masterpiece 洗掉, 但 nude 留得住, unsafe 确实是 1。
+     */
+    const SAFE_DIR = path.join(path.dirname(SCAN_DIR), 'safety-fixture')
+    const SAFE_FIX = path.basename(SAFE_DIR)
+    const pngChunk = (type, data) => {
+      const len = Buffer.alloc(4); len.writeUInt32BE(data.length)
+      const t = Buffer.from(type, 'latin1')
+      const c = Buffer.alloc(4); c.writeUInt32BE(crc32(Buffer.concat([t, data])) >>> 0)
+      return Buffer.concat([len, t, data, c])
+    }
+    /** 改掉 PNG 里 tEXt 块的文本, 其它块原样搬(还是那张图, 只是提示词换了) */
+    const rewritePngPrompt = (src, dst, fn) => {
+      const b = fs.readFileSync(src)
+      const out = [b.subarray(0, 8)]
+      let off = 8
+      while (off + 8 <= b.length) {
+        const len = b.readUInt32BE(off)
+        const type = b.toString('latin1', off + 4, off + 8)
+        out.push(type === 'tEXt'
+          ? pngChunk('tEXt', Buffer.from(fn(b.subarray(off + 8, off + 8 + len).toString('latin1')), 'latin1'))
+          : b.subarray(off, off + 12 + len))
+        off += 12 + len
+      }
+      fs.writeFileSync(dst, Buffer.concat(out))
+    }
+    const FIX_PNG = (n) => path.join(ROOT, 'test-fixtures', 'scan-test', n)
+    fs.rmSync(SAFE_DIR, { recursive: true, force: true })
+    fs.mkdirSync(SAFE_DIR, { recursive: true })
+    fs.copyFileSync(FIX_PNG('a1.png'), path.join(SAFE_DIR, 's1.png'))   // hoshino, 干净
+    fs.copyFileSync(FIX_PNG('a4.png'), path.join(SAFE_DIR, 's2.png'))   // shiroko, 干净
+    rewritePngPrompt(FIX_PNG('a1.png'), path.join(SAFE_DIR, 's3.png'), (t) => t.replace('smile', 'nude'))
+
+    /* 页面侧探针 —— 一律从 .pager-bar 里取: 文件夹列表层那个开关在 .bar2, 别串了 */
+    await cdp.eval(`
+      window.__safeOn = () => !!document.querySelector('.scan-view .pager-bar .safe-tog.on')
+      window.__safeNum = () => {
+        const e = document.querySelector('.scan-view .pager-bar .safe-tog .st-cnt')
+        if (!e) return -1            /* 没渲染 = 0 张(数字为 0 时刻意不显示) */
+        const d = String(e.textContent).replace(/[^0-9]/g, '')
+        return d ? Number(d) : -1
+      }
+      window.__safeClick = async () => {
+        const b = document.querySelector('.scan-view .pager-bar .safe-tog .st-btn')
+        if (!b) throw new Error('找不到安全模式开关')
+        b.click()
+        await new Promise((r) => setTimeout(r, 1000))
+        return true
+      }
+      return true
+    `)
+
+    const gotoSafeFixture = async () => {
+      await cdp.eval(`location.hash = '#/scan'
+        await new Promise((r) => setTimeout(r, 1300))
+        return true`)
+      await waitFor(cdp, `!!document.querySelector('.scan-view')`, { label: '安全数字: 扫描页', timeout: 30000 })
+      /* ScanView 在 KeepAlive 白名单里, 切回来会停在**离开时的层级** —— 先退回列表层,
+         否则连"添加框"都找不到(这一步 11e 那段也踩过)。 */
+      await cdp.eval(`
+        const back = document.querySelector('.scan-view .crumb .link')
+        if (back) { back.click(); await new Promise((r) => setTimeout(r, 800)) }
+        return true
+      `)
+      await waitFor(cdp, `!!document.querySelector('.scan-view .tv-input')`, { label: '安全数字: 列表层', timeout: 30000 })
+      await cdp.eval(`__t.setInput('.scan-view .tv-input', ${JSON.stringify(SAFE_DIR)})
+        await new Promise((r) => setTimeout(r, 150))
+        __t.pressEnter('.scan-view .tv-input')
+        return true`)
+      const cardReady = `[...document.querySelectorAll('.scan-view .grid.folders .ecard')]
+        .some((c) => (c.textContent || '').toLowerCase().includes(${JSON.stringify(SAFE_FIX.toLowerCase())}))`
+      await waitFor(cdp, cardReady, { label: '安全数字: 夹具卡片', timeout: 60000 })
+      await cdp.eval(`
+        const hit = [...document.querySelectorAll('.scan-view .grid.folders .ecard')]
+          .find((c) => (c.textContent || '').toLowerCase().includes(${JSON.stringify(SAFE_FIX.toLowerCase())}))
+        if (!hit) throw new Error('没找到夹具卡片')
+        hit.click()
+        return true
+      `)
+      await waitFor(cdp, `__t.count('.scan-view .grid.imgs .card') === 3`, { label: '安全数字: 夹具 3 张', timeout: 60000 })
+    }
+    await gotoSafeFixture()
+
+    /* 规则表是 store 自己拉的(useSafetyStore.ensureLoaded), 而上面 11e 段刚 reload 过一次 ——
+       那一次加载还在路上。等它落地再读数, 否则读到的是"还没有规则"时的 0。
+       这条等待本身就兼当那个 bug 的哨兵: 修好之前它会一直等到超时。 */
+    try {
+      await waitFor(cdp, `__safeNum() > 0`, { label: '安全数字: 规则表已加载', timeout: 10000 })
+    } catch { /* 没等到也往下走 —— 让下面几条断言把真实值报出来, 比在这儿中断信息量大 */ }
+
+    /* 起点必须是"关着" —— 下面第一条断言验的就是"关着也有数字" */
+    if (await cdp.eval(`return __safeOn()`)) await cdp.eval(`await __safeClick(); return true`)
+    const cntClosed = await cdp.eval(`return __safeNum()`)
+    check('安全模式数字: 开关**关着**的时候数字也在(以前关掉就消失, 用户看到的"像 0"就是它)',
+      cntClosed === 1, cntClosed === -1 ? '没有数字' : String(cntClosed))
+    check('安全模式数字: 是**当前文件夹**的数字而非整个库的(整库四万多, 不可能是 1)',
+      cntClosed > 0 && cntClosed < 100, String(cntClosed))
+
+    await cdp.eval(`await __safeClick(); return true`)
+    await sleep(700)
+    const cardsOpen = await cdp.eval(`return __t.count('.scan-view .grid.imgs .card')`)
+    check('安全模式数字: 打开后网格正好少掉数字上写的那么多张(数字不撒谎)',
+      cntClosed > 0 && cardsOpen === 3 - cntClosed, `${cardsOpen} 张 / 数字 ${cntClosed}`)
+    const cntOpen = await cdp.eval(`return __safeNum()`)
+    check('安全模式数字: 打开后数字不变(它是"会隐藏多少", 不是"已经藏了多少"的累加)',
+      cntClosed > 0 && cntOpen === cntClosed, `${cntClosed} -> ${cntOpen}`)
+
+    /* 换到一个**干净**的文件夹: 数字应整个消失 —— 这条才是"跟着来源变"的直接证据 */
+    await cdp.eval(`
+      const back = document.querySelector('.scan-view .crumb .link')
+      if (back) { back.click(); await new Promise((r) => setTimeout(r, 900)) }
+      return true
+    `)
+    await waitFor(cdp, `!!document.querySelector('.scan-view .grid.folders .ecard')`,
+      { label: '安全数字: 回列表', timeout: 30000 })
+    await cdp.eval(OPEN_FOLDER)
+    await waitFor(cdp, `__t.count('.scan-view .grid.imgs .card') === 5`,
+      { label: '安全数字: 排序夹具 5 张', timeout: 60000 })
+    const cntClean = await cdp.eval(`return __safeNum()`)
+    check('安全模式数字: 换到干净的文件夹后数字整个消失(确是跟着来源变, 不是全库常量)',
+      cntClosed === 1 && cntClean === -1,
+      cntClean === -1 ? `没有数字(= 0 张) · 夹具夹那边读到 ${cntClosed}` : String(cntClean))
+
+    /* 段尾复位: 别把"开着"留给后面的段(控制台健康度那段还要渲染一堆图) */
+    if (await cdp.eval(`return __safeOn()`)) await cdp.eval(`await __safeClick(); return true`)
+    const resetOk = (await cdp.eval(`return __safeOn()`)) === false
+    check('安全模式数字: 段尾把开关复位, 不留给后面的段', resetOk, resetOk ? '已关' : '还是开着')
 
 
     const NOISE = /favicon|ERR_FILE_NOT_FOUND.*favicon|sandboxed_renderer\.bundle\.js|binding\.startupData/i

@@ -19,7 +19,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { call } from '@/utils/api.js'
 import { hiddenBySafety } from '@/utils/format.js'
-import { compileRules, unsafeOfTags } from '@/utils/safetyMatch.js'
+import { compileRules, unsafeOfTags, countHits as countHitsOf } from '@/utils/safetyMatch.js'
 import { useAppStore } from './useAppStore.js'
 
 export const useSafetyStore = defineStore('safety', () => {
@@ -57,6 +57,26 @@ export const useSafetyStore = defineStore('safety', () => {
       console.error('[safety] 读取安全模式配置失败:', e)
     }
   }
+
+  /* **规则表必须自己拉一次** —— 别把"加载"这件事交给某个弹窗。
+   *
+   * 2026-09-23 踩到: load() 原来只在 TvSafetyModal 打开时调用。于是**没打开过设置台**
+   * 的用户手里是 core=[] / edge=[]，`compileRules([])` 得到的是**空规则** ——
+   * 库外图（扫描页那些 / 收藏里的标签快照）的安全判定**恒为 0**：开关看着能开能关、
+   * toast 也报，实际对那批图毫无作用，且不报任何错。库内图不受影响（它们用主进程算好的
+   * `unsafe` 字段），所以问题只藏在"前端镜像判定"这条路上，特别难发现 ——
+   * 是 e2e 里"关着也显示的数字应该是 1、结果读到 0"把它翻出来的。
+   * 顺带修掉另一个: 重启后 `on` / `level`（存在 safety.json 里）也读不出来。
+   *
+   * 并发调用只发一次请求。 */
+  let pending = null
+  function ensureLoaded() {
+    if (loaded.value) return Promise.resolve()
+    if (!pending) pending = load().finally(() => { pending = null })
+    return pending
+  }
+  // store 第一次被某个组件拿到时就发请求(不等 await —— 谁需要谁 await ensureLoaded)
+  ensureLoaded()
 
   /** 改开关 / 档位（写主进程的 safety.json，并同步本地镜像）
    *  —— **不需要**重查列表: 记录的 unsafe 标记没变, 只是这里的 on/level 变了,
@@ -125,9 +145,26 @@ export const useSafetyStore = defineStore('safety', () => {
     return arr.filter((it) => !isHidden(it))
   }
 
+  /**
+   * 一个列表里**两档各会隐藏多少张** → `{ core, edge }`。
+   *
+   * 与 `filterItems` 的关键区别：**不看 `on`**。开关关着也算 —— 这正是用户要的
+   * "我还没打开这个开关的时候，也应该看得到打开会少多少张"（以前关掉时开关上的
+   * 数字直接消失，看着就像 0）。口径与主进程的 coreHit/edgeHit 逐字一致：
+   *   · core = 只命中 core 段的条数（core 档会藏这么多）
+   *   · edge = edge 档会藏的总数（= core + 仅命中 edge 的，因为 core 段在 edge 档也藏）
+   *
+   * 一次遍历同时出两个数：切档位时不用重算（视图里把它包 computed，只有列表
+   * 引用变 / 规则变才重跑）。判定走 `unsafeOf` —— 库内记录是数值直读，
+   * 库外图（扫描页/收藏快照）才现算标签，且有 WeakMap 记忆。
+   */
+  function countHits(list) {
+    return countHitsOf(list, unsafeOf)
+  }
+
   return {
     on, level, coreHit, edgeHit, total, core, edge, loaded,
-    load, set, loadText, saveText, toggleTag, hiddenCount, hiddenPct,
-    isHidden, unsafeOf, filterItems,
+    load, ensureLoaded, set, loadText, saveText, toggleTag, hiddenCount, hiddenPct,
+    isHidden, unsafeOf, filterItems, countHits,
   }
 })

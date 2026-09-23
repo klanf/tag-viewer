@@ -130,7 +130,7 @@ function toggleFav(item) {
         <span class="hint">条匹配</span>
         <span class="hint faint">点大图里的标签可以继续往下跳 · 悬停标签点 📋 只复制这一个</span>
         <span class="spacer" />
-        <TvSafetyToggle />
+        <TvSafetyToggle :counts="feed.unsafe.value" />
         <TvSelect
           v-model="imgSort"
           size="sm"

@@ -441,7 +441,7 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
           title="对当前结果的文件路径做子串匹配(大小写不敏感), 输入后自动生效"
           @enter="applyNameFilter"
         />
-        <TvSafetyToggle />
+        <TvSafetyToggle :counts="feed.unsafe.value" />
         <span class="spacer" />
         <span class="muted nowrap">已加载 {{ nfmt(shownResults.length) }} / 共 {{ nfmt(feed.total.value) }} 张 · 滚到底自动加载</span>
       </div>

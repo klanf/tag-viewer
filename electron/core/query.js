@@ -56,6 +56,37 @@ function topN(map, n) {
 
 // ---------------------------------------------------------------- 搜索
 
+/**
+ * 当前结果集里两档各会隐藏多少张 —— 给安全模式开关上那个数字用(2026-09-23)。
+ *
+ * 为什么非得在后端算: 看板 / 系列 / 标签图片三页走的是**分页**的 feed
+ * (useImageFeed), 前端手里只有已加载的那几十张。拿它算出来的数字会随着往下滚
+ * 不断变大, 看着像在跳。而这里 `results` 是**筛选 + 排序后的全量**, 一次遍历就准。
+ *
+ * 计数与 offset/limit 无关, 但每次翻页都会再调一次 doSearch —— 所以按"结果数组
+ * 引用"用 WeakMap 记忆: `searchCached` 命中时返回的是同一个数组, 翻页就白捡;
+ * `applySort` 是 in-place 的, 引用也不变。只有带文件名过滤时会 filter 出新数组
+ * (少数路径), 那种情况多扫一遍也就是一次线性遍历。
+ *
+ * 口径与 ipc 的 `coreHit` / `edgeHit` 逐字一致(见 safety.js 的 hiddenAt):
+ *   core = 只命中 core 段的条数; edge = edge 档会隐藏的总数(= core + 仅命中 edge 的)。
+ */
+const unsafeMemo = new WeakMap()
+function unsafeCountOf(results) {
+  let v = unsafeMemo.get(results)
+  if (v) return v
+  let core = 0
+  let edge = 0
+  for (const r of results) {
+    const u = r.unsafe
+    if (u === 1) core++
+    else if (u === 2) edge++
+  }
+  v = { core, edge: core + edge }
+  unsafeMemo.set(results, v)
+  return v
+}
+
 export function doSearch(raw = {}) {
   const p = parseQuery(raw)
   const offset = clampInt(raw.offset, 0, 0, 10_000_000)
@@ -80,6 +111,9 @@ export function doSearch(raw = {}) {
     returned: page.length,
     results: page,
     sort: p.sort,
+    /* 当前条件(来源 / 搜索 / 标签 / 文件名过滤)下两档各会隐藏多少张。
+       注意它与 offset/limit **无关** —— 前端翻页时这个数不会变, 数字才不会跳。 */
+    unsafe: unsafeCountOf(results),
   }
 }
 

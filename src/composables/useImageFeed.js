@@ -24,6 +24,9 @@ export function useImageFeed(opts = {}) {
 
   const results = shallowRef([])
   const total = ref(0)
+  /* 当前查询范围内两档各会隐藏多少张 —— 后端算好的(见 core/query.js 的 unsafeCountOf)。
+     刻意与 offset/limit 无关: 翻页时这个数不变, 安全模式那个数字才不会随滚动跳。 */
+  const unsafe = ref({ core: 0, edge: 0 })
   const offset = ref(0)
   const page = ref(1)
   const loading = ref(false)
@@ -55,11 +58,13 @@ export function useImageFeed(opts = {}) {
       const d = await api.search(params(0))
       results.value = d.results || []
       total.value = d.total || 0
+      unsafe.value = d.unsafe || { core: 0, edge: 0 }
       loadedOnce.value = true
     } catch (e) {
       error.value = e.message
       results.value = []
       total.value = 0
+      unsafe.value = { core: 0, edge: 0 }
     } finally {
       loading.value = false
     }
@@ -82,6 +87,7 @@ export function useImageFeed(opts = {}) {
       const d = await api.search(params(offset.value))
       results.value = d.results || []
       total.value = d.total || 0
+      unsafe.value = d.unsafe || { core: 0, edge: 0 }
     } catch (e) {
       error.value = e.message
     } finally {
@@ -99,6 +105,8 @@ export function useImageFeed(opts = {}) {
       const d = await api.search(params(next))
       results.value = [...results.value, ...(d.results || [])]
       total.value = d.total || 0
+      /* 追加页也会带这个数 —— 它与 offset 无关, 值跟第一页一样, 所以数字不会跳 */
+      unsafe.value = d.unsafe || unsafe.value
     } catch (e) {
       ui.err('加载更多失败: ' + e.message)
     } finally {
@@ -116,6 +124,7 @@ export function useImageFeed(opts = {}) {
   function reset() {
     results.value = []
     total.value = 0
+    unsafe.value = { core: 0, edge: 0 }
     offset.value = 0
     page.value = 1
     loadedOnce.value = false
@@ -129,7 +138,7 @@ export function useImageFeed(opts = {}) {
   }
 
   return {
-    infinite, pageSize, results, total, offset, page, loading, error, loadedOnce,
+    infinite, pageSize, results, total, unsafe, offset, page, loading, error, loadedOnce,
     totalPages, hasMore,
     search, setQuery, goto, loadMore, shuffle, reset, refresh,
     /** 暴露只读查询快照, 导出时要用同一套参数 */

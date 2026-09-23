@@ -324,7 +324,7 @@ watch(() => route.query.series, async (name) => {
       <!-- 放在**顶栏**而不是图片流的工具栏里: 系列页有"系列/角色/图片"三层,
            只有"图片"那层有图 —— 放工具栏的话, 用户在系列列表那一屏就找不到开关。
            顶栏是三层都在的, 一份就够。 -->
-      <TvSafetyToggle />
+      <TvSafetyToggle :counts="imgFeed.unsafe.value" />
     </div>
 
     <div class="panel body">
