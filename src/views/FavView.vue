@@ -73,6 +73,12 @@ onMounted(async () => {
   if (gone.length) missingSet.value = new Set([...missingSet.value, ...gone])
   const moved = (updates || []).filter((u) => u.found).length
   if (moved) ui.ok(`🔗 已按文件名找回 ${moved} 张移动过的收藏图`, 'ok', 3200)
+  /* 补像素尺寸: 收藏记录是收藏那一刻的快照, 里面没有尺寸 -> 网格会回落 9/16,
+     横图被裁成竖条(与扫描页同一个 bug)。必须在 ready=true **之前**跑完 ——
+     否则会先按 9/16 渲染一帧、尺寸到了再整体重排, 看着像闪一下。
+     跑完即写回记录并持久化, 以后打开不再请求(见 useFavStore.ensureDims)。 */
+  const dimmed = await fav.ensureDims()
+  if (dimmed) ui.ok(`📐 已量好 ${dimmed} 张收藏图的尺寸(横图不再被裁成竖条)`, 'info', 2600)
   ready.value = true
 })
 </script>

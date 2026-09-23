@@ -23,11 +23,12 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { Worker } from 'node:worker_threads'
+import { parseInWorker, sizeInWorker } from './imgWorker.js'
 import { extractImagePrompt, SCAN_IMG_EXTS } from './png.js'
 import { promptToTags, dedupeTags } from './prompt.js'
 import { isCharacterTag, seriesName } from './dataset.js'
 import { dataFile } from './workspace.js'
+import { dimsForPaths } from './dims.js'
 
 const CONCURRENCY = 8
 /** 新增/变化文件超过这个数就走 worker 线程解析(小批次原地跑, 起线程的固定开销不值得) */
@@ -196,44 +197,10 @@ export async function statAll(files) {
 
 /* ---------------------------------------------------------------- worker 解析 */
 
-/**
- * 把「逐张解析」挪到 worker 线程。
- * extractImagePrompt/promptToTags 是纯 CPU 同步代码, 主进程里跑几千张就会把
- * 事件循环占死(所有 IPC 卡住 = 界面卡死); worker 里跑则主进程照常响应,
- * 进度消息实时回来, 转发给渲染端画进度条。
- * @returns {Promise<Array<{tags:string[], source:string}>>} 与 files 下标一一对应
- */
-export function parseInWorker(files, onProgress, kind = 'meta') {
-  return new Promise((resolve, reject) => {
-    const w = new Worker(new URL('./scanWorker.js', import.meta.url), {
-      workerData: { files, kind },
-    })
-    w.on('message', (m) => {
-      if (m?.type === 'progress') {
-        try { onProgress(m) } catch { /* 进度回调出错不影响扫描 */ }
-      } else if (m?.type === 'done') {
-        w.unref()
-        resolve(m.results || [])
-      } else if (m?.type === 'error') {
-        reject(new Error(m.message || 'scan worker error'))
-      }
-    })
-    w.on('error', reject)
-    w.on('exit', (code) => {
-      if (code !== 0) reject(new Error(`scan worker 异常退出(code=${code})`))
-    })
-  })
-}
-
-/**
- * 只读尺寸的批量入口 —— ingest 给老库懒回填 px_w/px_h 走这条。
- * 与 parseInWorker 共用同一个 worker 文件(靠 kind='size' 分支), 不占主进程。
- * @returns {Promise<Array<{w:number,h:number}|null>>} 与 files 下标一一对应。
- *   null = 文件读不到 / 格式认不出 —— 调用方**保留旧值**, 别写 0 冒充尺寸。
- */
-export function sizeInWorker(files, onProgress) {
-  return parseInWorker(files, onProgress, 'size')
-}
+/* parseInWorker / sizeInWorker 挪到了 imgWorker.js (2026-09-23) —— dims.js 也要用它,
+   留在这里会形成 scan -> dims -> scan 的循环引用。这里原样再导出, 于是
+   ingest.js 的 `import { parseInWorker, sizeInWorker } from './scan.js'` 一行都不用改。 */
+export { parseInWorker, sizeInWorker } from './imgWorker.js'
 
 /* ---------------------------------------------------------------- 主流程 */
 /**
@@ -401,6 +368,52 @@ export async function scanFolder(raw = {}, onProgress = null) {
     scanned_at: Date.now(),
   }
 
+  /* ---- 像素尺寸: 网格按真实比例排版的**必须项**(2026-09-23 下午补) ----
+   *
+   * 漏了它就是这个 bug: **横图显示为竖图**。前端拿不到 px_w/px_h 会回落 9/16,
+   * 于是每个格子都按竖图算宽, 横图被 `object-fit: cover` 裁成竖条 —— 而且
+   * **一个错都不报**(尺寸是"有就用、没有就回落", 静默的)。上一版这里只带了
+   * path/name/tags/source/folder/mtime/size, 正好把尺寸漏了。
+   *
+   * 尺寸从哪来（见 core/dims.js）: 先查内存数据集(库里已登记的图, 零 I/O),
+   * 再批量读文件头。这里额外做两件事:
+   *   · **已有的从持久缓存白捡** —— w/h 和 mtime/size 一起失效, 所以"同一个文件
+   *     只读一次头", 重开/重扫目录不再读盘;
+   *   · 读到的写回 entries + 标 changed, 让下一轮扫描变纯内存。
+   *
+   * 只对**将要返回的那批**做: 超过 limit 被截掉的图前端根本看不到, 不白读。
+   * 实测口径（用户真库 8,599 张的目录）: 首扫读一遍, 之后重扫是 0 次读盘。
+   */
+  const needDims = []
+  for (const it of out.items) {
+    const c = entries[normFilePath(it.path)]
+    if (c && c.w > 0 && c.h > 0) {
+      it.px_w = c.w
+      it.px_h = c.h
+    } else {
+      needDims.push(it)
+    }
+  }
+  if (needDims.length) {
+    const dims = await dimsForPaths(needDims.map((it) => it.path), {
+      // 带 phase —— 前端据此把进度条文案从"正在扫描元数据"切成"正在读取图片尺寸",
+      // 否则读尺寸那几秒会顶着"元数据"的字样, 看着像卡住了。
+      onProgress: onProgress
+        ? ({ done, total }) => onProgress({ done, total, phase: 'dims' })
+        : undefined,
+    })
+    for (let i = 0; i < needDims.length; i++) {
+      const d = dims[i]
+      if (!d) continue                   // 读不到 -> 保持无尺寸, 前端回落 9/16
+      const it = needDims[i]
+      it.px_w = d.w
+      it.px_h = d.h
+      const c = entries[normFilePath(it.path)]
+      if (c) { c.w = d.w; c.h = d.h; changed = true }
+    }
+  }
+
+  if (changed) schedulePersistSave()
   if (items.length <= CACHE_MAX_ITEMS) SCAN_CACHE.set(key, { at: Date.now(), result: out })
   return out
 }

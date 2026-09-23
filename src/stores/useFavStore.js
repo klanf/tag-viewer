@@ -36,6 +36,11 @@ function migrate(a) {
           name: r.name || baseName(r.path),
           tags: Array.isArray(r.tags) ? r.tags : [],
           at: Number(r.at) || 0,
+          /* 像素尺寸(2026-09-23 补)。**必须在这里带上** —— migrate 是
+             「读 localStorage -> 新对象」的唯一入口, 少抄一个字段就等于每次
+             重启都把尺寸丢掉, 于是每次打开收藏页都要重新补一次。 */
+          px_w: Number(r.px_w) || 0,
+          px_h: Number(r.px_h) || 0,
         }
       }
       return null
@@ -79,9 +84,12 @@ export const useFavStore = defineStore('fav', () => {
   }
   /**
    * 切换收藏。tags 是可选的标签快照(光箱/卡片手里有就传进来)。
+   * src 是可选的来源记录 —— **手里有 item 就整条传进来**, 尺寸会顺手存下
+   * (2026-09-23 加: 收藏记录没有尺寸, 收藏页网格就会回落 9/16, 横图被裁成竖条
+   *  —— 与扫描页同一个 bug)。不传也行, 收藏页会调 dims:forPaths 补齐, 只是多一次 IPC。
    * 已收藏(含文件名兜底命中) -> 取消; 否则新增。
    */
-  function toggle(path, tags) {
+  function toggle(path, tags, src) {
     const i = indexOf(path)
     if (i >= 0) {
       list.value.splice(i, 1)
@@ -93,6 +101,8 @@ export const useFavStore = defineStore('fav', () => {
       name: baseName(path),
       tags: Array.isArray(tags) ? tags.slice() : [],
       at: Date.now(),
+      px_w: Number(src?.px_w) || 0,
+      px_h: Number(src?.px_h) || 0,
     })
     persist()
     return true
@@ -151,5 +161,46 @@ export const useFavStore = defineStore('fav', () => {
   }
   function clear() { list.value = []; persist() }
 
-  return { list, onlyFav, count, paths, isFav, toggle, onMoved, resolveMissing, resolving, clear, setAll, indexOf }
+  /**
+   * 补收藏记录的**像素尺寸** —— 与扫描页同一个 bug, 同一个修法(见 core/dims.js)。
+   *
+   * 收藏记录是"收藏那一刻"的快照 `{path,name,tags,at}`, 里面**没有尺寸**, 于是
+   * 收藏页的网格回落 9/16, 横图被 `object-fit: cover` 裁成竖条(与扫描页一模一样,
+   * 而且都是**静默**的)。这里按路径批量补一次, 结果**写回记录并持久化** ——
+   * 以后打开收藏页不再请求第二次。
+   *
+   * 为什么在 FavView 的 onMounted 里 await 它: 那一处本来就是"找回失效收藏跑完才
+   * ready、才渲染卡片"(见 ready)。排在一起就不会出现"先按 9/16 渲染一帧、尺寸到了
+   * 再整体重排"的跳动。
+   *
+   * 失败不影响任何功能: 卡片回落 9/16(改动前的样子), 只是横图会被裁。
+   * @returns {Promise<number>} 补成功几条
+   */
+  async function ensureDims() {
+    const need = list.value.filter((r) => !(r.px_w > 0 && r.px_h > 0))
+    if (!need.length) return 0
+    try {
+      const r = await call('dims:forPaths', { paths: need.map((x) => x.path) })
+      const dims = Array.isArray(r?.dims) ? r.dims : []
+      let filled = 0
+      need.forEach((rec, i) => {
+        const d = dims[i]
+        if (d && d.w > 0 && d.h > 0) {
+          rec.px_w = d.w
+          rec.px_h = d.h
+          filled++
+        }
+      })
+      if (filled) persist()
+      return filled
+    } catch (e) {
+      console.error('[fav] 补图片尺寸失败(卡片回落 9/16, 其它功能不受影响):', e)
+      return 0
+    }
+  }
+
+  return {
+    list, onlyFav, count, paths, isFav, toggle, onMoved, resolveMissing, resolving,
+    clear, setAll, indexOf, ensureDims,
+  }
 })

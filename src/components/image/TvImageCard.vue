@@ -126,6 +126,10 @@ function onCtx(e) {
     name: props.item.name,
     favable: props.favable,
     favorited: props.favorited,
+    /* 右键收藏也要带上尺寸 —— 收藏记录没有尺寸的话, 收藏页网格会回落 9/16
+       把横图裁成竖条(与扫描页同一个 bug, 2026-09-23) */
+    px_w: props.item.px_w,
+    px_h: props.item.px_h,
   })
 }
 </script>

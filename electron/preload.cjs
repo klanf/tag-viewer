@@ -45,6 +45,7 @@ const CHANNELS = new Set([
   'image:trash',
   // 收藏找回(按文件名搜已知目录)
   'fav:resolve',
+  'dims:forPaths',
   // 文件夹登记表(扫描夹 + 看板来源 共用一份, 真源是 tags.db 的 folders 表)
   'folders:list', 'folders:add', 'folders:remove', 'folders:update',
   'folders:rescan', 'folders:open', 'folders:prune',

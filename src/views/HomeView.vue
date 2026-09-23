@@ -226,9 +226,11 @@ function pickExport(withPath) {
 }
 
 /* ---------------- 收藏 ---------------- */
-/* 收藏按钮现在发整个 item —— tags 存进收藏记录当快照(收藏页要用) */
+/* 收藏按钮现在发整个 item —— tags 存进收藏记录当快照(收藏页要用),
+   item 一起传进去是为了让收藏记录**顺便带上像素尺寸**(收藏页的网格要按真实
+   比例排版, 没尺寸就会把横图裁成竖条)。 */
 function toggleFav(item) {
-  const added = fav.toggle(item?.path || item, item?.tags)
+  const added = fav.toggle(item?.path || item, item?.tags, item)
   ui.ok(added ? '★ 已收藏' : '已取消收藏', 'info', 1200)
   if (fav.onlyFav) doSearch()
 }

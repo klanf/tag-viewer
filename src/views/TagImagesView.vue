@@ -108,7 +108,8 @@ useFloatBack(() => {
 })
 
 function toggleFav(item) {
-  const added = fav.toggle(item?.path || item, item?.tags)
+  /* 第三个参数是整条 item —— 让收藏记录带上像素尺寸(收藏页网格按真实比例排版) */
+  const added = fav.toggle(item?.path || item, item?.tags, item)
   ui.ok(added ? '★ 已收藏' : '已取消收藏', 'info', 1200)
 }
 </script>

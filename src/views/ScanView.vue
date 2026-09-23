@@ -580,7 +580,7 @@ onActivated(() => {
         <TvState
           v-if="opening"
           state="loading"
-          :text="scanProg ? `正在扫描元数据 ${scanProg.done} / ${scanProg.total} (${scanPct}%)` : '正在扫描并读取元数据, 请稍候...'"
+          :text="scanProg ? `${scanProg.phase === 'dims' ? '正在读取图片尺寸' : '正在扫描元数据'} ${scanProg.done} / ${scanProg.total} (${scanPct}%)` : '正在扫描并读取元数据, 请稍候...'"
         />
         <div v-if="opening && scanProg" class="scan-prog">
           <div class="sp-bar"><div class="sp-fill" :style="{ width: scanPct + '%' }" /></div>

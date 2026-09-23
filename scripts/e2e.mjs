@@ -19,6 +19,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { crc32 } from 'node:zlib'
 import { findElectron, electronEnv } from './electron-path.mjs'
 import { freePort, clearPageState, ensureWorkDir, sleep, ROOT } from './harness.mjs'
+import { makePng } from './testpng.mjs'
 
 /** 工作目录里的路径在 main() 开头由 ensureWorkDir() 定下来(全部落在项目内, 见 harness.mjs) */
 let SHOTS = ''
@@ -3141,6 +3142,97 @@ async function main() {
     const resetOk = (await cdp.eval(`return __safeOn()`)) === false
     check('安全模式数字: 段尾把开关复位, 不留给后面的段', resetOk, resetOk ? '已关' : '还是开着')
 
+
+    /* ---------------- 11g. 扫描页网格按**每张图自己的**比例排版(2026-09-23 用户报的 bug) ----------------
+     *
+     * 现象: "现在的网格布局方案有bug, 横图会显示为竖图"。
+     * 根因**不在布局算法**(算法有 test:visual 的几何断言 + 上面 11d 那条看板上的
+     * 真实几何量测守着), 而在**数据**: 扫描页的对象全是**库外图**(库里没有行),
+     * 而 scan.js 组装 item 时只带了 path/name/tags/..., 独独漏了 px_w/px_h。
+     * 前端拿不到尺寸就回落 9/16 -> 每个格子都按竖图算宽 -> 横图被 `object-fit: cover`
+     * 裁成竖条, 而且**一个错都不报**(尺寸是"有就用、没有就回落", 静默的)。
+     * 所以这一条**必须量扫描页**, 拿看板上的量测代替不了它。
+     *
+     * 夹具: 现编码 3 张"真的有横有竖"的 PNG(11e 那批是 1x1 的占位图, 横竖都验不出来;
+     * 也不能只改 IHDR 的宽高 —— 那会造出坏图, 缩略图加载失败反而把控制台断言顶红)。
+     * 见 scripts/testpng.mjs。
+     *
+     * 量的是**页面上的真实几何**: 每张卡图片框的宽高比 == 它自己文件头里的比例。
+     * 一个**常量**比例(9/16 也好、别的也好)不可能同时满足这三种 —— 最后一条断言
+     * 就是专门堵这个的, 所以这几条是**不可伪造**的。
+     */
+    const DIM_DIR = path.join(path.dirname(SCAN_DIR), 'scan-dims')
+    const DIM_CASES = [
+      { file: 'wide.png', w: 320, h: 180 },     // 1.778
+      { file: 'tall.png', w: 180, h: 320 },     // 0.563
+      { file: 'sq.png', w: 256, h: 256 },       // 1.000
+    ]
+    fs.mkdirSync(DIM_DIR, { recursive: true })
+    for (const c of DIM_CASES) {
+      fs.writeFileSync(path.join(DIM_DIR, c.file), makePng(c.w, c.h, { prompt: '1girl, smile' }))
+    }
+
+    /* 加一个扫描夹并进去 —— 11e 那套(OPEN_FOLDER/gotoScanAndAdd)是为排序夹具写死的,
+       这里参数化复用同一套动作。等待条件同样**必须认目标那一张卡**, 不能写"卡片数>0"
+       (列表里本来就有别的文件夹, 会被立刻满足然后报"没找到卡片")。 */
+    const addAndOpenScanFolder = async (dir, want) => {
+      const name = path.basename(dir).toLowerCase()
+      const cardReady = `!![...document.querySelectorAll('.scan-view .grid.folders .ecard')]`
+        + `.some((c) => (c.textContent || '').toLowerCase().includes(${JSON.stringify(name)}))`
+      await cdp.eval(`location.hash = '#/scan'
+        await new Promise((r) => setTimeout(r, 1400))
+        return true`)
+      await waitFor(cdp, `!!document.querySelector('.scan-view')`, { label: '扫描页(尺寸夹具)', timeout: 30000 })
+      // ScanView 在 KeepAlive 白名单里: 切回来会停在离开时那一层。上一段(11f)停在
+      // "文件夹里", 那一层没有添加框也没有文件夹卡 —— 先退回列表层。
+      await cdp.eval(`
+        const back = document.querySelector('.scan-view .crumb .link')
+        if (back) { back.click(); await new Promise((r) => setTimeout(r, 700)) }
+        return true
+      `)
+      await waitFor(cdp, `!!document.querySelector('.scan-view .tv-input')`, { label: '扫描页列表层(尺寸夹具)', timeout: 30000 })
+      await cdp.eval(`
+        __t.setInput('.scan-view .tv-input', ${JSON.stringify(dir)})
+        await new Promise((r) => setTimeout(r, 150))
+        __t.pressEnter('.scan-view .tv-input')
+        return true
+      `)
+      await waitFor(cdp, cardReady, { label: '尺寸夹具夹卡片', timeout: 90000 })
+      await cdp.eval(`
+        const hit = [...document.querySelectorAll('.scan-view .grid.folders .ecard')]
+          .find((c) => (c.textContent || '').toLowerCase().includes(${JSON.stringify(name)}))
+        if (!hit) throw new Error('没找到文件夹卡片: ' + ${JSON.stringify(name)})
+        hit.click()
+        return true
+      `)
+      await waitFor(cdp, `__t.count('.scan-view .grid.imgs .card') === ${want}`,
+        { label: '尺寸夹具 3 张', timeout: 60000 })
+    }
+    await addAndOpenScanFolder(DIM_DIR, DIM_CASES.length)
+
+    /* 每张卡的**图片框**宽高比 —— 用 .tv-img 的实际几何, 不看样式里写了什么:
+       现在卡片传的是 `fill`(高度由行高给、比例由单元格宽度体现), 样式里根本没有
+       aspect-ratio 可读, 只有量出来才算数。 */
+    const dimRatio = await cdp.eval(`
+      return [...document.querySelectorAll('.scan-view .grid.imgs .jcell')].map((c) => {
+        const box = c.querySelector('.tv-img')
+        const b = box.getBoundingClientRect()
+        const foot = c.querySelector('.foot')
+        const raw = (foot && (foot.getAttribute('title') || foot.textContent)) || ''
+        return { name: String(raw).split(/[\\\\/]/).pop(), ratio: +(b.width / b.height).toFixed(3) }
+      })
+    `)
+    const ratioOf = (n) => (dimRatio.find((d) => d.name === n) || {}).ratio
+    const near = (a, b, tol = 0.05) => typeof a === 'number' && Math.abs(a - b) <= tol
+    check('扫描页真实比例: 横图 320x180 渲染成**宽**格子(不再是 9/16 的竖条)',
+      near(ratioOf('wide.png'), 320 / 180), `实测 ${ratioOf('wide.png')} · 期望 ${(320 / 180).toFixed(3)}`)
+    check('扫描页真实比例: 竖图 180x320 渲染成竖格子',
+      near(ratioOf('tall.png'), 180 / 320), `实测 ${ratioOf('tall.png')} · 期望 ${(180 / 320).toFixed(3)}`)
+    check('扫描页真实比例: 方图 256x256 渲染成正方形',
+      near(ratioOf('sq.png'), 1), `实测 ${ratioOf('sq.png')}`)
+    check('扫描页真实比例: 横图明显比竖图宽(一个**常量**比例不可能同时满足三张)',
+      (ratioOf('wide.png') || 0) > (ratioOf('tall.png') || 9) * 2,
+      `横 ${ratioOf('wide.png')} vs 竖 ${ratioOf('tall.png')} · 全长 ${JSON.stringify(dimRatio)}`)
 
     const NOISE = /favicon|ERR_FILE_NOT_FOUND.*favicon|sandboxed_renderer\.bundle\.js|binding\.startupData/i
     const errs = []

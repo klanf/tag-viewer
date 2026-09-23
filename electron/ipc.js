@@ -53,6 +53,7 @@ import { moveFile } from './core/fileTransfer.js'
 import { charLibDiag } from './core/charlib.js'
 import { translateInfo } from './core/translate.js'
 import { resolveFavorites } from './core/favResolve.js'
+import { dimsForPaths } from './core/dims.js'
 import { flog } from './core/filelog.js'
 
 const log = (...a) => console.log('[ipc]', ...a)
@@ -622,6 +623,15 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     // (扫描文件夹/预设文件夹/数据目录/原父目录)里搜, 命中即改写。
     // 见 core/favResolve.js —— 收藏页打开时调用, 尽力而为、限深限时。
     'fav:resolve': safe(({ items }) => resolveFavorites(Array.isArray(items) ? items : [])),
+
+    // ---------------- 像素尺寸(网格按真实比例排版的前提) ----------------
+    /* 收藏页的网格和扫描页一样是**库外图**: 收藏记录是 `{path,name,tags,at}` 的
+       快照, 里面没有尺寸 -> 卡片回落 9/16 -> 横图被裁成竖条(与扫描页同一个 bug)。
+       这里按路径批量补, 先查内存数据集(收藏里绝大多数图都登记过, 零 I/O),
+       再批量读文件头(worker, 见 core/dims.js)。返回与入参**同序**。 */
+    'dims:forPaths': safe(async ({ paths } = {}) => ({
+      dims: await dimsForPaths(Array.isArray(paths) ? paths : []),
+    })),
 
     // ---------------- 维护 / 诊断 ----------------
     'diag:stats': safe(() => ({

@@ -382,6 +382,102 @@ const { countHits } = await load('src/utils/safetyMatch.js')
   eq('计数(库外图): 命中 core 1 张 / edge 档共 2 张', JSON.stringify(byTag), '{"core":1,"edge":2}')
 }
 
+/* ---------------------------------------------------------- 扫描页的图片尺寸 */
+
+/**
+ * 2026-09-23 用户报「横图显示为竖图」（网格布局的 bug）。
+ *
+ * 根因不在布局算法 —— 算法有 test:visual 的那几条几何断言守着 —— 而在**数据**:
+ * 扫描页的对象全是**库外图**（库里根本没有行），而 scan.js 组装 item 时只带了
+ * path/name/tags/source/folder/mtime/size，**独独漏了 px_w/px_h**。前端拿不到尺寸
+ * 就回落 9/16，于是每个格子都按竖图算宽，横图被 `object-fit: cover` 裁成竖条,
+ * 而且**一个错都不报**（尺寸是"有就用、没有就回落"，静默的）。
+ *
+ * 这一节钉住三件事:
+ *   ① 尺寸的来源优先级：**库里已登记的图走内存数据集**（零 I/O），库外的才读文件头；
+ *   ② 扫描结果里每张图**都带着真实尺寸**（这就是修法的全部）；
+ *   ③ 尺寸**只读一次**、写进 scan_cache.json 的持久条目 —— 不然"首扫慢"会变成
+ *      "每次扫都慢"。
+ */
+{
+  const { dimsForPaths } = await load('electron/core/dims.js')
+  const { scanFolder } = await load('electron/core/scan.js')
+  const { ds, recordByPath } = await load('electron/core/dataset.js')
+  const testpng = await load('scripts/testpng.mjs')
+
+  /* 夹具: 真的有横有竖（test-fixtures/scan-test 那批是 1x1 的占位图, 横竖都验不出来,
+     所以这里现编码几张真 PNG —— 见 scripts/testpng.mjs） */
+  const SDIR = path.join(WORK, 'scan-dims')
+  fs.mkdirSync(SDIR, { recursive: true })
+  fs.writeFileSync(path.join(SDIR, 'wide.png'), testpng.makePng(320, 180, { prompt: '1girl, smile' }))
+  fs.writeFileSync(path.join(SDIR, 'tall.png'), testpng.makePng(180, 320, { prompt: '1girl, smile' }))
+  // 扩展名像图片、内容不是 -> 尺寸必须解析失败, 回落 9/16, 而不是猜一个数
+  fs.writeFileSync(path.join(SDIR, 'broken.png'), Buffer.from('这不是 PNG', 'utf8'))
+  fs.writeFileSync(path.join(SDIR, 'note.txt'), 'x')          // 不是图片扩展名, 不该被枚举
+
+  /* ① 数据集优先 —— 造一条"文件根本不存在"的记录: 尺寸还能拿到, 就只能是走了内存
+        数据集这条零 I/O 的路（顺带证明路径规范化: 传进去的大小写/斜杠都不同）。
+        路径里那个盘符是**编造的**(盘上根本没有, 也不打算访问) —— 判据要的就是一个
+        "肯定读不到文件"的路径, 用来证明"根本没走读盘那条路"。
+        path-check-ignore：这是判据用的假路径, 不是机器上的真实路径。 */
+  const FAKE = 'z:/__不存在的目录__/x.png'
+  const FAKE_ALT = 'Z:\\__不存在的目录__\\x.png'          // 同一路径的另一种写法(大写盘符 + 反斜杠)
+  ds.records.push({ path: FAKE, tags: [], ltags: [], source: 'x', px_w: 1234, px_h: 567, unsafe: 0 })
+  ds.byPath.set(FAKE, ds.records.length - 1)
+  const viaDs = await dimsForPaths([FAKE_ALT])
+  eq('尺寸: 库里已登记的图走内存数据集(文件不存在也拿得到 = 零 I/O)',
+    JSON.stringify(viaDs[0]), '{"w":1234,"h":567}')
+  eq('尺寸: 路径大小写/斜杠不影响命中', recordByPath(FAKE)?.px_w, 1234)
+  ds.records.pop()
+  ds.byPath.delete(FAKE)
+
+  /* ② 库外的读文件头; 认不出的给 null(调用方回落 9/16), 绝不猜 */
+  const viaFile = await dimsForPaths([
+    path.join(SDIR, 'wide.png'), path.join(SDIR, 'tall.png'),
+    path.join(SDIR, 'broken.png'), path.join(SDIR, '根本没有这个文件.png'),
+  ])
+  eq('尺寸: 库外图读文件头 —— 横图 320x180', JSON.stringify(viaFile[0]), '{"w":320,"h":180}')
+  eq('尺寸: 库外图读文件头 —— 竖图 180x320', JSON.stringify(viaFile[1]), '{"w":180,"h":320}')
+  eq('尺寸: 内容不是图片 -> null(不许猜)', JSON.stringify(viaFile[2]), 'null')
+  eq('尺寸: 文件不存在 -> null', JSON.stringify(viaFile[3]), 'null')
+  eq('尺寸: 空入参不炸', JSON.stringify(await dimsForPaths([])), '[]')
+
+  /* ③ 扫描结果**必须**带尺寸 —— 这条就是用户报的 bug 的回归网 */
+  const scan = await scanFolder({ path: SDIR, force: true })
+  const byName = new Map((scan.items || []).map((it) => [it.name, it]))
+  eq('扫描: 只枚举图片扩展名(note.txt 不算)', scan.items.length, 3)
+  eq('扫描: 横图带着 320x180(修好"横图显示为竖图"的那一行)',
+    `${byName.get('wide.png')?.px_w}x${byName.get('wide.png')?.px_h}`, '320x180')
+  eq('扫描: 竖图带着 180x320',
+    `${byName.get('tall.png')?.px_w}x${byName.get('tall.png')?.px_h}`, '180x320')
+  eq('扫描: 解析不出来的图不给尺寸(前端回落 9/16, 而不是按 0 算比例)',
+    !(byName.get('broken.png')?.px_w > 0), true)
+
+  /* ④ 尺寸要**持久化** —— 不然"首扫读一遍"变成"每次扫都读一遍"。
+       scan_cache 的写盘是 2 秒防抖(见 scan.js 的 schedulePersistSave), 所以等一下。
+       ⚠️ 持久缓存写在 <dataDir>/cache/ 下(subdir 由应用启动时创建) —— 这个临时
+       workspace 是裸建的, 得自己补上, 否则写盘报 ENOENT(只打日志, 不抛错, 很安静)。 */
+  fs.mkdirSync(path.join(DATA, 'cache'), { recursive: true })
+  await new Promise((r) => setTimeout(r, 2300))
+  let cached = null
+  try {
+    const raw = JSON.parse(fs.readFileSync(dataFile('scan_cache.json'), 'utf8'))
+    for (const f of Object.values(raw.folders || {})) {
+      for (const e of Object.values(f.entries || {})) {
+        if (e && e.w === 320 && e.h === 180) cached = e
+      }
+    }
+  } catch (e) { cached = { err: e.message } }
+  eq('尺寸: 写进 scan_cache 的条目里(和 mtime/size 一起失效 -> 同一张图只读一次头)',
+    cached ? `${cached.w}x${cached.h}` : `未找到(${cached?.err || ''})`, '320x180')
+
+  /* ⑤ 重扫一次: 尺寸仍然对(这回是从持久缓存里白捡的) */
+  const again = await scanFolder({ path: SDIR, force: true })
+  const againWide = (again.items || []).find((it) => it.name === 'wide.png')
+  eq('扫描: 重扫一次尺寸仍正确(第二次是走缓存, 不再读盘)',
+    `${againWide?.px_w}x${againWide?.px_h}`, '320x180')
+}
+
 /* ---------------------------------------------------------- 收尾 */
 
 closeDb()

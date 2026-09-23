@@ -39,7 +39,7 @@ export function useImageCtxMenu() {
       })
       const action = r?.action
       if (action === 'toggle-fav') {
-        const added = fav.toggle(ctx.path, Array.isArray(ctx.tags) ? ctx.tags : [])
+        const added = fav.toggle(ctx.path, Array.isArray(ctx.tags) ? ctx.tags : [], ctx)
         ui.ok(added ? '★ 已收藏' : '已取消收藏', 'ok', 1200)
       } else if (action === 'trash') {
         // 删除到回收站: 确认弹窗(useTrash)负责, 删完 'tv:trashed' 事件通知各视图
