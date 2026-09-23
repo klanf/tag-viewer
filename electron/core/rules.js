@@ -15,6 +15,7 @@ const cache = {
   blacklist: { path: '', mtime: -1, value: null },
   replace: { path: '', mtime: -1, value: null },
   bg: { path: '', mtime: -1, value: null },
+  view: { path: '', mtime: -1, value: null },
 }
 
 const BL_NAME = 'export_blacklist.txt'
@@ -58,61 +59,150 @@ export function isBlocked(tag, rules) {
 }
 
 /**
- * 快速匹配器: 把规则拆成 exact 集合 + 前缀/后缀/包含元组。
+ * 快速匹配器共用的编译: 规则拆成 exact 集合 + 前缀/后缀/包含元组 + 合并正则。
  * 全量标签(约 1 万个)逐个跑 isBlocked 是 O(n×m); 拆开之后
  * 精确命中走 Set、通配走 startswith(tuple)/endswith(tuple), 快数倍。
  */
+function compileFast(rules) {
+  const exact = new Set()
+  const pre = []
+  const suf = []
+  const con = []
+  const parts = []
+  for (const r of rules) {
+    if (!r.includes('*')) {
+      exact.add(r)
+    } else if (r.startsWith('*') && r.endsWith('*') && r.length > 2) {
+      const c = r.slice(1, -1)
+      con.push(c)
+      parts.push(escapeRe(c))
+    } else if (r.startsWith('*')) {
+      const s = r.slice(1)
+      suf.push(s)
+      parts.push(escapeRe(s) + '$')
+    } else {
+      const s = r.slice(0, -1)
+      pre.push(s)
+      parts.push('^' + escapeRe(s))
+    }
+  }
+  return {
+    rules,
+    exact,
+    pre, suf, con,
+    regex: parts.length ? new RegExp(parts.map((x) => `(?:${x})`).join('|')) : null,
+  }
+}
+
 export function blacklistMatcher() {
   const p = dataFile(BL_NAME)
   const mt = mtimeOf(p)
   if (cache.blacklist.path !== p || cache.blacklist.mtime !== mt) {
-    const rules = rawBlacklistRules()
-    const exact = new Set()
-    const pre = []
-    const suf = []
-    const con = []
-    const parts = []
-    for (const r of rules) {
-      if (!r.includes('*')) {
-        exact.add(r)
-      } else if (r.startsWith('*') && r.endsWith('*') && r.length > 2) {
-        const c = r.slice(1, -1)
-        con.push(c)
-        parts.push(escapeRe(c))
-      } else if (r.startsWith('*')) {
-        const s = r.slice(1)
-        suf.push(s)
-        parts.push(escapeRe(s) + '$')
-      } else {
-        const s = r.slice(0, -1)
-        pre.push(s)
-        parts.push('^' + escapeRe(s))
-      }
-    }
-    cache.blacklist = {
-      path: p, mtime: mt,
-      value: {
-        rules,
-        exact,
-        pre, suf, con,
-        regex: parts.length ? new RegExp(parts.map((x) => `(?:${x})`).join('|')) : null,
-      },
-    }
+    cache.blacklist = { path: p, mtime: mt, value: compileFast(rawBlacklistRules()) }
   }
   return cache.blacklist.value
 }
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
 
+/** compileFast 产物的单标签快速命中(不做空格/下划线归一, 调用方自己决定) */
+function fastHit(t, m) {
+  if (m.exact.has(t)) return true
+  for (let i = 0; i < m.pre.length; i++) if (t.startsWith(m.pre[i])) return true
+  for (let i = 0; i < m.suf.length; i++) if (t.endsWith(m.suf[i])) return true
+  for (let i = 0; i < m.con.length; i++) if (t.includes(m.con[i])) return true
+  return false
+}
+
 /** 用 blacklistMatcher() 的结果快速判断单条标签是否被 ban */
 export function isBlockedFast(tag, bl) {
   if (!bl) return false
-  const t = tag.toLowerCase()
-  if (bl.exact.has(t)) return true
-  for (let i = 0; i < bl.pre.length; i++) if (t.startsWith(bl.pre[i])) return true
-  for (let i = 0; i < bl.suf.length; i++) if (t.endsWith(bl.suf[i])) return true
-  for (let i = 0; i < bl.con.length; i++) if (t.includes(bl.con[i])) return true
-  return false
+  return fastHit(String(tag).toLowerCase(), bl)
+}
+
+// ---------------------------------------------------------------- 视角/机位词表
+
+const VIEW_NAME = 'export_view_tags.txt'
+
+/**
+ * 默认词表: 《随机机位交接文档》(2026-09-23) 第 3 节 —— bsk 相机控制(节点 405)
+ * 产出的全部分档 tag。提示词里写的空格形态(from behind)在库里是下划线形态,
+ * 匹配时两侧都试(isViewFast)。`left` 档输出的 tag 是 "from right", 不是笔误。
+ */
+export const DEFAULT_VIEW_TAGS = [
+  'from_front', 'from_behind', 'from_left', 'from_right',
+  'directly_above', 'from_above', 'aerial_view', 'high_angle', 'eye-level',
+  'low_angle', 'from_below', 'directly_below',
+  'extreme_close-up', 'close-up', 'medium_shot', 'full_body', 'wide_shot',
+  'dutch_angle',
+]
+
+function defaultViewText() {
+  return [
+    '# 导出剔除「视角/机位」标签 —— 词表',
+    '# ================================',
+    '# 勾选「导出剔除视角/机位标签」时, 命中这里任一条的标签不会出现在导出结果里。',
+    '# 每行一条(小写/下划线写法), 支持 * 通配, # 开头是注释; 改完保存即生效, 不用重启。',
+    '#',
+    '# 词表种子来自《随机机位交接文档》第 3 节(bsk 相机控制节点 405 的全部分档):',
+    '#   方位  from_front / from_behind / from_left / from_right',
+    '#   高度  directly_above / from_above / aerial_view / high_angle / eye-level',
+    '#         / low_angle / from_below / directly_below',
+    '#   景别  extreme_close-up / close-up / medium_shot / full_body / wide_shot',
+    '#   斜角  dutch_angle',
+    '# 注意: 机位插件 left 档输出的 tag 是 "from right"(相机在左=画面从右看), 没写错。',
+    '# 405 的 config 以后加了新分档/改了措辞, 这里(或交接文档)记得同步。',
+    '',
+    ...DEFAULT_VIEW_TAGS,
+    '',
+  ].join('\n')
+}
+
+/** 首次使用时写出去(带词表来源说明), 之后绝不覆盖用户的改动 */
+function ensureViewFile(p) {
+  if (fs.existsSync(p)) return
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true })
+    fs.writeFileSync(p, defaultViewText(), 'utf8')
+  } catch { /* 写不出去也不影响导出(读侧回落空规则) */ }
+}
+
+function rawViewRules() {
+  const p = dataFile(VIEW_NAME)
+  ensureViewFile(p)
+  const out = []
+  for (const line of readText(p).split('\n')) {
+    const s = line.trim().toLowerCase()
+    if (!s || s.startsWith('#')) continue
+    out.push(s)
+    // 词表里写空格形态("from behind")也认 —— 转成下划线形态再收一条
+    const u = s.replace(/ /g, '_')
+    if (u !== s) out.push(u)
+  }
+  return out
+}
+
+/** 视角/机位词表匹配器(与黑名单同一套编译, 独立缓存, mtime 变了自动重读) */
+export function viewTagMatcher() {
+  const p = dataFile(VIEW_NAME)
+  const mt = mtimeOf(p)
+  if (cache.view.path !== p || cache.view.mtime !== mt) {
+    cache.view = { path: p, mtime: mt, value: compileFast(rawViewRules()) }
+  }
+  return cache.view.value
+}
+
+/**
+ * 用 viewTagMatcher() 的结果快速判断单条标签是否命中视角词表。
+ * 比黑名单多一步: 提示词侧的标签可能带**空格**(meta 来源的图原样存了
+ * "from behind"), 词表是下划线形态 —— 空格转下划线再试一次。
+ */
+export function isViewFast(tag, vm) {
+  if (!vm) return false
+  const t = String(tag).toLowerCase()
+  if (fastHit(t, vm)) return true
+  const u = t.replace(/ /g, '_')
+  return u !== t && fastHit(u, vm)
 }
 
 /** { tag: {banned, rule} } —— 给 lightbox/详情页做灰态与 🚫 切换 */

@@ -10,7 +10,8 @@
  */
 import { recordsFor, frozenKey, isCharacterTag, isCopyrightTag } from './dataset.js'
 import { parseQuery, scopeRecords, searchCached } from './search.js'
-import { blacklistMatcher, isBlockedFast, loadReplaceRules, replaceTag, loadBgConfig, hasBgTagFast } from './rules.js'
+import { blacklistMatcher, isBlockedFast, loadReplaceRules, replaceTag, loadBgConfig, hasBgTagFast, viewTagMatcher, isViewFast } from './rules.js'
+import { safetyExportStripper } from './safety.js'
 
 export function buildExport(raw = {}) {
   const t0 = Date.now()
@@ -22,6 +23,10 @@ export function buildExport(raw = {}) {
   const useBg = !(raw.bg === '0' || raw.bg === false)
   // 剔除角色/系列标签(含无括号角色, 由角色库识别); 默认关闭, 与旧行为一致
   const stripChar = raw.strip_char === '1' || raw.strip_char === true
+  // 剔除视角/机位标签(词表: data/export_view_tags.txt, 种子来自随机机位交接文档); 默认关闭
+  const stripView = raw.strip_view === '1' || raw.strip_view === true
+  // 只导出安全模式的标签 —— 逐行剔除敏感tag(口径跟随 safety.json 的档位); 默认关闭
+  const safeOnly = raw.safe_only === '1' || raw.safe_only === true
 
   const records = scopeRecords(p.srcSet, p.favs)
   const results = searchCached(
@@ -37,12 +42,16 @@ export function buildExport(raw = {}) {
     const cfg = loadBgConfig()
     if (cfg.append.length) bg = cfg
   }
+  const vm = stripView ? viewTagMatcher() : null
+  const safeHit = safeOnly ? safetyExportStripper() : null
 
   const lines = []
   let blockedCount = 0
   let replacedCount = 0
   let bgAdded = 0
   let strippedCount = 0
+  let viewStripped = 0
+  let safeStripped = 0
 
   for (const r of results) {
     let tags = r.tags
@@ -51,6 +60,24 @@ export function buildExport(raw = {}) {
       const kept = []
       for (const t of tags) {
         if (isCharacterTag(t) || isCopyrightTag(t)) strippedCount++
+        else kept.push(t)
+      }
+      tags = kept
+    }
+
+    if (vm) {
+      const kept = []
+      for (const t of tags) {
+        if (isViewFast(t, vm)) viewStripped++
+        else kept.push(t)
+      }
+      tags = kept
+    }
+
+    if (safeHit) {
+      const kept = []
+      for (const t of tags) {
+        if (safeHit(t)) safeStripped++
         else kept.push(t)
       }
       tags = kept
@@ -99,6 +126,8 @@ export function buildExport(raw = {}) {
     replaced: replacedCount,
     bgAdded,
     stripped: strippedCount,
+    viewStripped,
+    safeStripped,
     ms: Date.now() - t0,
     suggestedName: `筛选_${nameCore}.txt`,
   }

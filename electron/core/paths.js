@@ -127,6 +127,7 @@ export const KNOWLEDGE_DIR_PREFIXES = ['weilin_data']
  */
 export const USER_FILES = [
   'export_blacklist.txt',   // 屏蔽标签
+  'export_view_tags.txt',   // 视角/机位剔除词表(种子来自随机机位交接文档)
   'export_replace.txt',     // 替换规则
   'export_bg.txt',          // 背景补全规则
   'user_meta.json',         // 用户元数据(收藏/备注)
@@ -202,9 +203,10 @@ export const DATA_ROUTE = Object.freeze({
   'export_presets.json': { kind: 'user' },
   // 登记表: 真源是 tags.db 的 folders 表, 这份 json 降级为「导出备份 + 首次导入源」
   'scan_folders.json': { kind: 'user', as: 'folders.json' },
-  // U 规则: 三个导出词表
+  // U 规则: 导出词表
   'export_bg.txt': { kind: 'rules' },
   'export_blacklist.txt': { kind: 'rules' },
+  'export_view_tags.txt': { kind: 'rules' },
   'export_replace.txt': { kind: 'rules' },
   // D 派生: 删了能重建, 但内含本机路径
   'scan_cache.json': { kind: 'derived' },

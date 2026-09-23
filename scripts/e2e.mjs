@@ -1078,6 +1078,57 @@ async function main() {
       presetDel?.removed === 1 && afterDel.n === cleaned.left,
       `删 ${presetDel?.removed} · 剩 ${afterDel.n}`)
 
+    /* ---------------- 7.55 导出剔除视角/机位 + 只导出安全标签 (2026-09-23) ----------------
+     * 两个新导出开关的管线断言。export:text 是「导出标签菜单」与「导出预设」共用的
+     * 同一条管线(buildExport), 在这里量就是量到了所有出口。
+     *   · strip_view — 词表 data/export_view_tags.txt(种子来自随机机位交接文档第 3 节)。
+     *     这里直接改写**沙箱**词表, 顺便验证「改完保存即生效」(mtime 缓存重读);
+     *   · safe_only  — 逐行剔除敏感 tag(行数不变), 口径跟随 safety.json 的档位。
+     * 沙箱库是真实库的副本, looking_at_viewer / nude 都是必然存在的标签。
+     */
+    const VIEW_FILE = path.join(DATA_DIR, 'rules', 'export_view_tags.txt')
+    const baseQ = {
+      source: '', mode: 'any', match: 'contains', exclude: '', exclude_match: 'contains', exclude_char: '1',
+      spaces: '1', blacklist: '0', replace: '0', bg: '0', strip_char: '0', with_path: '0',
+    }
+    /* ⚠️ 不能把 export:text 的 text 原样穿过 CDP 带回 Node —— q='looking_at_viewer'
+     * 的导出文本有 30+MB, Runtime.evaluate 回传这么大的字符串必超时(且一超时
+     * 同一 websocket 上后续所有 eval 全废, 整轮直接断掉, 见 cdp.send 的注释)。
+     * 所以 hasTag 在**页面里**算, 只把几个小结论带回来。 */
+    const expStats = (over) => cdp.eval(`
+      return await (async () => {
+        const r = await window.tv.invoke('export:text', ${JSON.stringify({ ...baseQ, ...over })})
+        const has = (tag) => String(r.text).split('\\n').some((l) => l.split(',').map((s) => s.trim()).includes(tag))
+        return {
+          count: r.count, viewStripped: r.viewStripped || 0, safeStripped: r.safeStripped || 0,
+          hasLooking: has('looking at viewer'), hasNude: has('nude'),
+        }
+      })()
+    `)
+    const baseExp = await expStats({ q: 'looking_at_viewer', strip_view: '0' })
+    check('导出剔除视角(基线): looking_at_viewer 正常导出(空格形态)',
+      baseExp.count > 0 && baseExp.hasLooking,
+      `count=${baseExp.count}`)
+
+    fs.mkdirSync(path.dirname(VIEW_FILE), { recursive: true })
+    fs.writeFileSync(VIEW_FILE, '# e2e\nlooking_at_viewer\nfrom_behind\n', 'utf8')
+    const afterView = await expStats({ q: 'looking_at_viewer', strip_view: '1' })
+    check('导出剔除视角: 勾上后词表命中的标签从导出内容里消失(剔除计数>0)',
+      !afterView.hasLooking && afterView.viewStripped > 0,
+      `viewStripped=${afterView.viewStripped}`)
+    const viewRestored = await expStats({ q: 'looking_at_viewer', strip_view: '0' })
+    check('导出剔除视角: 关掉开关内容恢复(开关可逆, 不动库)',
+      viewRestored.hasLooking, `count=${viewRestored.count}`)
+
+    const safeBase = await expStats({ q: 'nude', safe_only: '0' })
+    const safeExp = await expStats({ q: 'nude', safe_only: '1' })
+    check('只导出安全标签: 敏感tag(nude)从标签串里被剔除且剔除计数>0',
+      safeBase.hasNude && !safeExp.hasNude && safeExp.safeStripped > 0,
+      `剔除 ${safeExp.safeStripped} 个 · 行数 ${safeBase.count}→${safeExp.count}`)
+    check('只导出安全标签: 行数不变(只剔tag不剔行)',
+      safeBase.count === safeExp.count && safeExp.count > 0,
+      `${safeBase.count} vs ${safeExp.count}`)
+
     /* ---------------- 7.6 导出预设: 走**真实界面**存一次 (2026-09-22) ----------------
      * 为什么单开一节: 上面那些断言全是拿**纯对象**直接打 window.tv.invoke,
      * 压根不经过 Vue 的响应式状态 —— 于是"在界面里点保存"这条路坏了整整一轮也没被测出来。
@@ -1242,19 +1293,19 @@ async function main() {
     `)
     check('首页动作区: 「导出(带路径)」不再占独立按钮, 已并入下拉',
       homeBtns.pathBtnGone === true, `文字链 = ${(homeBtns.lnk || []).join('、')}`)
-    check('首页动作区: 分裂按钮下拉含两条导出方式 + 两个导出选项',
+    check('首页动作区: 分裂按钮下拉含两条导出方式 + 四个导出选项',
       homeBtns.caret === true && homeBtns.menuOpen === true
       && (homeBtns.items || []).length === 2
       && (homeBtns.items || []).join('').includes('带图片路径')
-      && (homeBtns.checks || []).length === 2 && homeBtns.emptyMenuBtn === true,
+      && (homeBtns.checks || []).length === 4 && homeBtns.emptyMenuBtn === true,
       `项 = ${(homeBtns.items || []).join(' / ')} · 选项 = ${(homeBtns.checks || []).join(' / ')}`)
     check('首页动作区: 下拉与整排同宽且不被侧栏裁切',
       homeBtns.sameWidthAsRow === true && homeBtns.insidePanel === true && homeBtns.inViewport === true,
       `同宽=${homeBtns.sameWidthAsRow} 在侧栏内=${homeBtns.insidePanel} 在视口内=${homeBtns.inViewport}`)
     check('首页动作区: 箭头随展开态翻转(菜单是向上开的)',
       homeBtns.caretRotated === true, `chev.up = ${homeBtns.caretRotated}`)
-    check('首页动作区: 两个导出开关挪进下拉后仍能切换',
-      (homeBtns.cbAfter || []).length === 2
+    check('首页动作区: 四个导出开关挪进下拉后仍能切换',
+      (homeBtns.cbAfter || []).length === 4
       && (homeBtns.cbAfter || []).every((v, i) => v !== (homeBtns.cbBefore || [])[i]),
       `${JSON.stringify(homeBtns.cbBefore)} → ${JSON.stringify(homeBtns.cbAfter)}`)
     check('首页动作区: 替换/预设导出降级为文字链, 且关下拉后不留遮罩',

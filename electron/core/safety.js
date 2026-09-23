@@ -201,6 +201,23 @@ export function hiddenAt(unsafe, level) {
   return u === 1 || level === 'edge'
 }
 
+/**
+ * 导出用的敏感标签剔除器 —— 口径**跟随 safety.json 的档位**
+ * (level=edge 时剔 core+edge 两段, 否则只剔 core)。与「安全模式」的展示过滤
+ * 共用同一份词表文件; 展示开关 on/off 不影响这里(档位本身始终存在)。
+ * 返回 (tag) => boolean, 供 exporter.js 逐标签调用。
+ */
+export function safetyExportStripper() {
+  const level = loadSafetyState().level === 'edge' ? 'edge' : 'core'
+  const m = safetyMatcher()
+  const parts = level === 'edge' ? [m.core, m.edge] : [m.core]
+  return (tag) => {
+    const t = String(tag).toLowerCase()
+    for (const p of parts) if (hitOne(t, p)) return true
+    return false
+  }
+}
+
 /* ------------------------------------------------------------ 开关与档位 */
 
 const DEFAULT_STATE = { on: false, level: 'core' }

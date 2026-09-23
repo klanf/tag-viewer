@@ -71,6 +71,8 @@ const exportMenu = ref(false)      // 「⬇ 导出标签 ▾」下拉是否展�
 const autoPresetCount = ref(0)     // 开了「黑名单变更后自动导出」的预设数(按钮上显示)
 const exporting = ref(0)      // 0=空闲 1=纯标签 2=带路径
 const stripCharExport = ref(true)  // 导出时剔除角色/系列标签(含无括号角色, 走角色库)
+const stripViewExport = ref(false) // 导出时剔除视角/机位标签(词表 data/export_view_tags.txt, 来自随机机位交接文档)
+const safeOnlyExport = ref(false)  // 导出时剔除敏感tag(只导出安全模式的标签, 口径跟随安全模式档位)
 
 /** 预设弹窗里「新建预设」的初值 = 首页当前筛选条件(建完之后就是快照, 不再联动) */
 const presetSnapshot = computed(() => ({
@@ -85,6 +87,8 @@ const presetSnapshot = computed(() => ({
   replace: true,
   bg: prefs.bgAuto,
   strip_char: stripCharExport.value,
+  strip_view: stripViewExport.value,
+  safe_only: safeOnlyExport.value,
   with_path: false,
 }))
 
@@ -204,11 +208,15 @@ async function doExport(withPath) {
     if (withPath) params.with_path = '1'
     params.bg = prefs.bgAuto ? '1' : '0'
     params.strip_char = stripCharExport.value ? '1' : '0'
+    params.strip_view = stripViewExport.value ? '1' : '0'
+    params.safe_only = safeOnlyExport.value ? '1' : '0'
     const r = await api.exportSave(params)
     if (r?.canceled) { ui.toast('已取消导出', 'info'); return }
     if (r?.error) { ui.err('导出失败: ' + r.error); return }
     const stripNote = stripCharExport.value && r.stripped ? `(已剔 ${nfmt(r.stripped)} 个角色/系列)` : ''
-    ui.ok(`✅ 已导出 ${nfmt(r.count)} 行${stripNote} → ${r.path}`, 3200)
+    const viewNote = stripViewExport.value && r.viewStripped ? `(已剔 ${nfmt(r.viewStripped)} 个视角/机位)` : ''
+    const safeNote = safeOnlyExport.value && r.safeStripped ? `(已剔 ${nfmt(r.safeStripped)} 个敏感tag)` : ''
+    ui.ok(`✅ 已导出 ${nfmt(r.count)} 行${stripNote}${viewNote}${safeNote} → ${r.path}`, 3200)
   } catch (e) {
     ui.err('导出失败: ' + e.message)
   } finally {
@@ -403,6 +411,20 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
                   v-model="stripCharExport"
                   label="导出剔除角色/系列标签"
                   title="导出结果里去掉角色标签(含 higuchi_madoka 这类无括号写法, 由角色库识别)和裸系列标签; 生成提示词通常需要"
+                />
+              </div>
+              <div class="mopt">
+                <TvCheckbox
+                  v-model="stripViewExport"
+                  label="导出剔除视角/机位标签"
+                  title="导出结果里去掉视角/机位类标签(from behind、high angle、dutch angle 等), 随机机位工作流会自己随机视角, 不需要图里带的; 词表在 data/export_view_tags.txt, 可自行增删"
+                />
+              </div>
+              <div class="mopt">
+                <TvCheckbox
+                  v-model="safeOnlyExport"
+                  label="只导出安全模式的标签(剔除敏感tag)"
+                  title="导出结果的每个标签串里去掉敏感标签(nude/sex 等), 行数不变; 敏感口径跟随安全模式的档位(core/edge), 词表即 data/safety_tags.txt"
                 />
               </div>
               <div class="mopt">
