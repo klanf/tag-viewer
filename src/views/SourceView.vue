@@ -336,6 +336,17 @@ onMounted(load)
               title="仅浏览: 扫描页能打开看图, 但不进库"
               @update:model-value="(v) => setUse(f, 'as_scan', v)"
             />
+            <!-- 第三个开关。只对「来源」有意义: 登记为来源那一下要不要自动补一次
+                 同步 + 反推(见 electron/ipc.js 的 kickAutoSync)。非来源时置灰 ——
+                 仍渲染是为了让它对每个目录都是同一套固定面板, 不随状态忽隐忽现。 -->
+            <TvCheckbox
+              :model-value="f.auto_tag"
+              :disabled="busy === f.path || !f.as_source"
+              is-switch
+              label="自动反推"
+              title="登记为来源时自动补一次同步并接上 WD14 反推(关掉则只在你点「同步」时跑)"
+              @update:model-value="(v) => setUse(f, 'auto_tag', v)"
+            />
           </div>
 
           <div class="cell num" title="库里属于这个目录的图片记录数">
@@ -441,7 +452,7 @@ onMounted(load)
 
 .row {
   display: grid;
-  grid-template-columns: minmax(150px, 1.1fr) minmax(220px, 2fr) 190px 84px 132px minmax(240px, auto);
+  grid-template-columns: minmax(150px, 1.1fr) minmax(220px, 2fr) 240px 84px 132px minmax(240px, auto);
   align-items: center;
   gap: 10px;
   padding: 9px 14px;
@@ -491,7 +502,7 @@ onMounted(load)
 .note-list code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
 
 @media (max-width: 1180px) {
-  .row { grid-template-columns: minmax(130px, 1.2fr) minmax(140px, 1.4fr) 170px 70px minmax(200px, auto); }
+  .row { grid-template-columns: minmax(130px, 1.2fr) minmax(140px, 1.4fr) 240px 70px minmax(200px, auto); }
   .time { display: none; }
 }
 </style>

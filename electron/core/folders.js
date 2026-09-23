@@ -235,13 +235,17 @@ export function updateFolder(raw = {}) {
   if (raw.auto_tag !== undefined) patch.auto_tag = raw.auto_tag !== false && raw.auto_tag !== '0'
   if (raw.as_source !== undefined) patch.as_source = raw.as_source !== false && raw.as_source !== '0'
   if (raw.as_scan !== undefined) patch.as_scan = raw.as_scan !== false && raw.as_scan !== '0'
+  // 改前快照: 调用方要靠它判"非来源 -> 来源"这个**跃迁**(ipc.js 的 folders:update
+  // 拿它决定要不要自动补一次同步)。只看改后的值分不出"刚被登记"和"本来就是来源、
+  // 这次只改了别的字段" —— 后者再去同步一遍纯属白扫盘。
+  const prev = decorate({ ...row, images: imagesOf(db, row.id) })
   upsertFolder(db, patch)
 
   // 从"扫描夹"这个用途里拿掉了 -> 那份扫描缓存没必要留着(它会挡住下次重扫)
   if (patch.as_scan === false) invalidateScanCache(p)
 
   const after = rowByPath(db, p)
-  return { ok: true, folder: decorate({ ...after, images: imagesOf(db, after.id) }) }
+  return { ok: true, folder: decorate({ ...after, images: imagesOf(db, after.id) }), prev }
 }
 
 /** 重新扫描(强制, 忽略缓存)并更新统计 */

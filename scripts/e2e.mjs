@@ -2011,8 +2011,54 @@ async function main() {
     check('来源管理: 顶栏里能进到「来源」页', srcPage.navLabel.includes('来源'), srcPage.navLabel)
     check('来源管理: 列出的行数 = 登记表里的目录数', srcPage.rows >= 7, `${srcPage.rows} 行`)
     check('来源管理: 计数文案报出「N 个来源」', /\d+ 个来源/.test(srcPage.cnt), srcPage.cnt)
-    check('来源管理: 每行两个独立用途开关(来源 / 扫描)', srcPage.switches === 2, `${srcPage.switches} 个`)
+    check('来源管理: 每行三个独立开关(来源 / 扫描 / 自动反推)', srcPage.switches === 3, `${srcPage.switches} 个`)
     check('来源管理: 行上有同步/重扫/移出 等动作', srcPage.acts >= 3, `${srcPage.acts} 个`)
+
+    /* 第三个开关的**可见性 + 几何**。三个开关横排后列宽必须跟着放宽, 否则会溢出到
+     * 相邻列或被裁掉一截 —— 这类视觉回归断言读不到, 所以直接量外接矩形。 */
+    const sw3 = await cdp.eval(`
+      const row = document.querySelector('.source-view .rows .row')
+      const group = row.querySelector('.uses')
+      const items = [...group.querySelectorAll('.tv-check')]
+      const last = items[items.length - 1]
+      const gr = group.getBoundingClientRect()
+      const lr = last.getBoundingClientRect()
+      const panel = document.querySelector('.source-view .list-panel')
+      return {
+        n: items.length,
+        label: last.textContent.replace(/\\s+/g, ''),
+        inGroup: lr.left >= gr.left - 1 && lr.right <= gr.right + 1,
+        panelOverflow: panel ? panel.scrollWidth > panel.clientWidth + 1 : false,
+      }
+    `)
+    check('来源管理: 第三个开关是「自动反推」', sw3.n === 3 && sw3.label.includes('自动反推'),
+      `${sw3.n} 个 · 末位=${sw3.label}`)
+    check('来源管理: 三个开关都落在本列内、整行没被撑出横向滚动(防"被裁掉半个")',
+      sw3.inGroup && !sw3.panelOverflow, `在列内=${sw3.inGroup} · 面板溢出=${sw3.panelOverflow}`)
+
+    // 界面点这个开关必须真写回库 —— auto_tag 此前是只读不用的死字段, 最易写成"只改界面"。
+    // 注意 TvCheckbox 走 is-switch 时**没有 <input>**, 状态在 .on 类上、点击在 <label> 上 ——
+    // 照搬"点 input.checked"那套会拿到 null(2026-09-23 踩过, 见本次提交说明)。
+    const flipAutoTag = `__t.clickText('.source-view .rows .row .uses .tv-check', '自动反推'); return true`
+    const readAutoTag = `
+      const row = document.querySelector('.source-view .rows .row')
+      const nm = row.querySelector('.nm').textContent.trim()
+      const items = [...row.querySelectorAll('.uses .tv-check')]
+      const d = await window.tv.invoke('folders:list', { usage: 'all' })
+      const f = (d.folders || []).find((x) => x.name === nm)
+      return { name: nm, ui: items[items.length - 1].classList.contains('on'), db: f ? !!f.auto_tag : null }
+    `
+    await cdp.eval(flipAutoTag)
+    await sleep(700)
+    const atOff = await cdp.eval(readAutoTag)
+    check('来源管理: 界面关掉「自动反推」真的写回库(不是只改界面)',
+      atOff.db === false && atOff.ui === false, `${atOff.name} · DB auto_tag=${atOff.db} · 界面=${atOff.ui}`)
+
+    await cdp.eval(flipAutoTag)
+    await sleep(700)
+    const atOn = await cdp.eval(readAutoTag)
+    check('来源管理: 再点回来能从库里读回 true(开关是双向的, 不是一次性)',
+      atOn.db === true && atOn.ui === true, `${atOn.name} · DB auto_tag=${atOn.db} · 界面=${atOn.ui}`)
     await cdp.shot('17-sources')
 
     // ① 「移出」= 用途开关归零, 登记行必须还在(图片记录也不掉)
@@ -2090,6 +2136,81 @@ async function main() {
     } catch { /* 没写出来 */ }
     check('来源管理: 导出备份把登记表写成了 json', exported.ok && exported.n >= 7,
       `${exportFile} · ${exported.n} 条`)
+
+    /* ---------------- 11b-2. 改来源自动接同步 + 反推(2026-09-23) ----------------
+     * 背景: 「把目录登记为来源」只是改个名字(folders.as_source=1), 它**不会**让图片进库 ——
+     * 入库在 ingest, 而 ingest 只遍历 as_source=1 的目录, 两条路中间没人踢一脚, 于是
+     * "改了来源但库里一张图都没多、反推队列恒为空"。`folders.auto_tag`(建表时就有、
+     * 此前全仓库没有任何消费点)就是给这个补位留的钩子。
+     *
+     * 这里守四件事 —— 全部只看**判定**, 不看真跑:
+     *   ① 非来源 -> 来源 且 auto_tag 开 => wanted=true;
+     *   ② 同一跃迁在测试环境必须**止步于 TV_INGEST=0 闸门**(started=false) ——
+     *      自动行为绝不能偷偷去 stat 用户真实盘符上的几万个文件, 这正是
+     *      electron-path.mjs 默认设 TV_INGEST=0 要防的事;
+     *   ③ 关掉 auto_tag 后同一跃迁不再 wanted;
+     *   ④ 本来就是来源(无跃迁)时压根不返回 autoSync —— 否则改个名也会白扫一次盘。
+     *
+     * 被测对象**刻意挑沙箱里那个"只当扫描夹"的目录**(路径含 .e2e-work): 即使闸门
+     * 将来失效, 最坏也只是扫了沙箱里那几张测试图, 不会碰用户的 F 盘。
+     * 最后一条是这组断言的**负向控制**: 若真跑起了 ingest, 它会立刻红。
+     */
+    const autoCtx = await cdp.eval(`
+      const d = await window.tv.invoke('folders:list', { usage: 'all' })
+      const all = d.folders || []
+      const scanOnly = all.find((f) => !f.as_source && f.as_scan && /\\.e2e-work/i.test(f.path))
+      const src = all.find((f) => f.as_source)
+      return { scanOnly: scanOnly ? scanOnly.path : '', src: src ? src.path : '' }
+    `)
+    check('来源管理: 环境里有一个"只当扫描夹"的沙箱目录, 可安全地测跃迁', !!autoCtx.scanOnly,
+      autoCtx.scanOnly || '找不到 —— 这条链路没法在不碰真实磁盘的前提下测')
+
+    if (autoCtx.scanOnly) {
+      const sp = JSON.stringify(autoCtx.scanOnly)
+
+      const t1 = await cdp.eval(`
+        const r = await window.tv.invoke('folders:update', { path: ${sp}, auto_tag: true, as_source: true })
+        await window.tv.invoke('folders:update', { path: ${sp}, as_source: false })
+        return { autoSync: r && r.autoSync ? r.autoSync : null, asSource: r && r.folder ? r.folder.as_source : null }
+      `)
+      check('来源管理: 登记为来源时自动接上同步(判定 wanted=true)', !!t1.autoSync && t1.autoSync.wanted === true,
+        `${JSON.stringify(t1.autoSync)} · as_source=${t1.asSource}`)
+      check('来源管理: 自动同步在测试环境止步于 TV_INGEST=0 闸门(没去扫真实磁盘)',
+        !!t1.autoSync && t1.autoSync.started === false && t1.autoSync.reason === 'ingest-gate',
+        JSON.stringify(t1.autoSync))
+
+      const t2 = await cdp.eval(`
+        await window.tv.invoke('folders:update', { path: ${sp}, auto_tag: false })
+        const r = await window.tv.invoke('folders:update', { path: ${sp}, as_source: true })
+        await window.tv.invoke('folders:update', { path: ${sp}, as_source: false, auto_tag: true })
+        return { autoSync: r && r.autoSync ? r.autoSync : null }
+      `)
+      check('来源管理: 关掉「自动反推」后同一跃迁不再补同步',
+        !!t2.autoSync && t2.autoSync.wanted === false && t2.autoSync.reason === 'auto-tag-off',
+        JSON.stringify(t2.autoSync))
+
+      const t3 = await cdp.eval(`
+        const r = await window.tv.invoke('folders:update', { path: ${JSON.stringify(autoCtx.src)}, as_source: true })
+        return { autoSync: r && r.autoSync ? r.autoSync : null }
+      `)
+      check('来源管理: 本来就是来源时不再触发(无跃迁即无 autoSync, 改个名不该白扫盘)',
+        t3.autoSync === null, JSON.stringify(t3.autoSync))
+
+      const ingestAfter = await cdp.eval(`return await window.tv.invoke('ingest:status')`)
+      check('来源管理: 上面几次跃迁没真跑起 ingest(负向控制: 闸门是实的)',
+        !ingestAfter.running && !ingestAfter.lastRunAt,
+        `running=${ingestAfter.running} · lastRunAt=${ingestAfter.lastRunAt}`)
+
+      // 收尾: 把那个扫描夹的 auto_tag 与用途复原(下一个断言/下一轮都依赖登记表原样)
+      const restoredFolder = await cdp.eval(`
+        const d = await window.tv.invoke('folders:list', { usage: 'all' })
+        const f = (d.folders || []).find((x) => x.path === ${sp})
+        return { as_source: !!f?.as_source, as_scan: !!f?.as_scan, auto_tag: !!f?.auto_tag }
+      `)
+      check('来源管理: 跃迁测试后目录状态已复原(不留残留给下一轮)',
+        restoredFolder.as_source === false && restoredFolder.as_scan === true && restoredFolder.auto_tag === true,
+        JSON.stringify(restoredFolder))
+    }
 
     await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
 

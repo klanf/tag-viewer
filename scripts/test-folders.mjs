@@ -126,6 +126,16 @@ console.log('\n[3] 用途开关: 扫描夹 <-> 看板来源')
   eq('as_scan 保持 1(追加用途, 不是替换)', r.folder.as_scan, true)
   eq('改名生效(列表里的 name 跟着变)', listSource()[0].name, '壁纸来源')
 
+  // prev = 改前快照。ipc.js 的 folders:update 靠它判"非来源 -> 来源"这个**跃迁**,
+  // 只有那一下才该自动补一次同步 —— 分不出跃迁就会"改个名也白扫一遍盘"。
+  eq('返回值里带改前快照 prev', !!r.prev, true)
+  eq('prev 记的是改前的 as_source=0(跃迁的判据就是这个 0 -> 1)', r.prev.as_source, false)
+
+  const again = folders.updateFolder({ path: DIR_B, as_source: true })
+  eq('再设一次同一个值: prev 已是 true —— 没有跃迁, 不该被当成"刚登记为来源"',
+    again.prev.as_source, true)
+  eq('这次空改动没有破坏来源名册', listSource().length, 1)
+
   const names = store.sourceNameList()
   eq('来源名单里有它', names.includes('壁纸来源'), true)
   eq('来源名单只有 1 个', names.length, 1)

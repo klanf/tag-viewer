@@ -143,6 +143,51 @@ function pushTaggerProgress(p) {
   mainWindow()?.webContents.send('tagger:progress', p)
 }
 
+/**
+ * 「刚被登记为看板来源」的目录, 自动补一次增量同步 —— 同步跑完反推就跟着起来。
+ *
+ * 为什么必须补这一步: 把目录登记为来源只是**改名**(folders.as_source=1), 它不会让
+ * 图片自动进库。真正的入库在 ingest, 而 ingest 只遍历 `as_source = 1` 的目录
+ * (ingest.js 的 SQL) —— 两条路各走各的, 中间没人踢一脚, 于是"改了来源但库里
+ * 一张图都没多、反推队列恒为空"。这正是 auto_tag 字段(建表时就有、一直没人消费)
+ * 预留的那个位置。
+ *
+ * 两道闸, 缺一不可:
+ *   · folder.auto_tag —— 用户可单独关掉"这个目录别自动反推";
+ *   · `TV_INGEST=0` —— 与后台同步**共用同一个总闸**(main.js 的 scheduleIngest 同款)。
+ *     这道必须留: 自动行为绝不能在测试/dev 里偷偷去 stat 用户真实盘符上的几万个文件,
+ *     那正是 electron-path.mjs 默认设 TV_INGEST=0 要防的事。
+ *
+ * **绝不 await**: 首次同步是分钟级(要枚举目录下全部文件), 挂在这里等会把
+ * 「改开关」这个动作卡住不返回。返回的是一个**同步判定**供调用方回执/断言,
+ * 真跑在后台, 结果由 onIngestDone 接走(= startLoad + scheduleTagging)。
+ */
+function kickAutoSync(folder, onIngestDone) {
+  if (folder.auto_tag === false) {
+    return { wanted: false, started: false, reason: 'auto-tag-off' }
+  }
+  if (process.env.TV_INGEST === '0') {
+    return { wanted: true, started: false, reason: 'ingest-gate' }
+  }
+  runIngest({
+    only: folder.id,
+    onProgress: pushIngestProgress,
+  })
+    .then((st) => {
+      if (!st || st.error) return
+      if (st.skipped) {
+        flog('auto-sync', `跳过(${st.reason || 'busy'}): ${folder.path}`)
+        return
+      }
+      // 即使这一轮没新增也照样走: 用户改来源的意图就是"纳进来并出标签", 队列里
+      // 可能还压着上一轮没跑完的裸图; onIngestDone 顺带把反推排上(scheduleTagging
+      // 自己会判队列空 -> 不拉模型), 代价只是几秒数据集重载。
+      onIngestDone?.()
+    })
+    .catch((e) => flog('auto-sync-err', `${e?.stack || e}`))
+  return { wanted: true, started: true, reason: '' }
+}
+
 export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
   // 自动导出的结果(成功/失败)由主进程推给渲染层弹 toast。
   // 注册一次即可: 防抖到期时主窗口可能已经不是同一个, 所以每次都现取。
@@ -460,7 +505,17 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     'folders:add': safe((raw) => addFolder(raw, pushScanProgress)),
     'folders:remove': safe((raw) => removeFolder(raw)),
     'folders:purge': safe((raw) => purgeFolder(raw)),
-    'folders:update': safe((raw) => updateFolder(raw)),
+    // 改用途开关/改名/改递归。**只有"非来源 -> 来源"这一个跃迁**会附带自动同步:
+    // 那是"把目录纳进标签库"的瞬间, 之后必须有人把 ingest 踢一脚(理由见 kickAutoSync)。
+    // 其余改动(改名、只动 as_scan、本来就是来源)一律纯打补丁。
+    'folders:update': safe((raw = {}) => {
+      const r = updateFolder(raw)
+      if (r?.error) return r
+      if (r.folder?.as_source === true && r.prev?.as_source === false) {
+        r.autoSync = kickAutoSync(r.folder, onIngestDone)
+      }
+      return r
+    }),
     'folders:rescan': safe((raw) => rescanFolder(raw, pushScanProgress)),
     'folders:open': safe((raw) => openFolder(raw, pushScanProgress)),
     'folders:prune': safe(() => pruneMissing()),
