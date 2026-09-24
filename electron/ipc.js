@@ -13,7 +13,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { ipcMain, dialog, clipboard, shell, BrowserWindow, Menu, nativeImage } from 'electron'
+import { ipcMain, dialog, clipboard, shell, BrowserWindow, Menu } from 'electron'
 import { getWorkspace, getSettings, saveSettings, dataFile } from './core/workspace.js'
 import { bootstrap, status, whenReady } from './core/app-state.js'
 import {
@@ -33,6 +33,7 @@ import {
   blacklistFingerprint, afterBlacklistChange, setAutoNotifier, flushAuto,
 } from './core/exportPresets.js'
 import { scanFolder, scanCacheStats, purgeScanCachePaths } from './core/scan.js'
+import { copyImageWithNotice, openWithDialog } from './core/clipboardImage.js'
 import { runIngest, ingestStatus, pauseIngest, ingestState, queueStats } from './core/ingest.js'
 import {
   runTagger, taggerStatus, pauseTagger, taggerConfig, taggerState,
@@ -270,9 +271,12 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
         label,
         click: () => {
           chosen = { action: id }
-          if (id === 'copy-image') {
-            try { clipboard.writeImage(nativeImage.createFromPath(imgPath)) } catch { /* 图片读不到就算了 */ }
-          } else if (id === 'open') { shell.openPath(imgPath) }
+          // ⚠️ 复制图像 / 打开方式**不在这里做**：
+          //   · 复制图像是同步冻主进程的活儿（大图 toPNG 实测 5 秒），必须先推一句
+          //     「正在复制…」再动手，而点击回调里没有机会让渲染层画一帧 —— 收尾放在
+          //     菜单关闭之后（见下面的 copy-image 分支）。
+          //   · 打开方式要另起进程，也想把成败回给渲染层弹提示。
+          if (id === 'open') { shell.openPath(imgPath) }
           else if (id === 'reveal') { shell.showItemInFolder(imgPath) }
           else if (id === 'copy-path') { copyText(imgPath) }
           else if (id === 'copy-name') { copyText(name || path.basename(imgPath)) }
@@ -307,6 +311,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       const template = [
         item('🖼️ 复制图片到剪贴板', 'copy-image'),
         item('🖥️ 用系统查看器打开', 'open'),
+        item('🗂️ 用其他程序打开…', 'open-with'),
         item('📁 打开图片所在位置', 'reveal'),
         { label: '📤 移动到', submenu: moveSub },
         { type: 'separator' },
@@ -339,8 +344,20 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
         await new Promise((resolve) => Menu.buildFromTemplate(template).popup({ window: win, callback: resolve }))
       }
 
-      // ---- 菜单关闭后的收尾动作(搬移/弹目录选择框), 结果返回给渲染层弹提示 ----
+      // ---- 菜单关闭后的收尾动作(搬移/弹目录选择框/复制图像), 结果返回给渲染层弹提示 ----
       const act = chosen?.action
+      if (act === 'copy-image') {
+        // 先把「正在复制图像（宽×高）…」推到界面上、让渲染层真的画一帧, 再进同步段。
+        // 直接点完就干活的话, 大图那 5 秒里屏幕上没有任何变化 —— 用户以为没响应,
+        // 这就是 2026-09-24 报的「点了没反应、粘贴不出来」的观感来源。
+        const result = await copyImageWithNotice(imgPath, (text) => {
+          mainWindow()?.webContents.send('app:toast', { text, tone: 'info', dur: 6000 })
+        })
+        return { action: 'copy-image', result, from: imgPath }
+      }
+      if (act === 'open-with') {
+        return { action: 'open-with', result: await openWithDialog(imgPath), from: imgPath }
+      }
       if (act === 'move' && chosen.target) {
         const r = await moveFile(imgPath, chosen.target)
         if (r.ok) purgeScanCachePaths([imgPath])
@@ -730,4 +747,4 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
 }
 
 /** 主进程主动推送的事件名(渲染进程用 tv.on 订阅) */
-export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress', 'tagger:progress', 'export:auto']
+export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress', 'tagger:progress', 'export:auto', 'app:toast']

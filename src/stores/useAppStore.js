@@ -109,6 +109,9 @@ export const useAppStore = defineStore('app', () => {
     // 黑名单变更后的自动导出结果 —— 订阅放在 app store 里(而不是首页):
     // ban 大多发生在标签页 / 光箱, 那时首页可能压根没挂载。
     onPush('export:auto', (payload) => notifyAutoExport(payload))
+    // 主进程主动要说的短句（目前只有右键「复制图片到剪贴板」动手前的那句进度：
+    // toPNG 是同步的，一进同步段主进程就发不出任何消息，所以必须**先说后干**）。
+    onPush('app:toast', (p) => ui.toast(p?.text || '', p?.tone || 'info', p?.dur ?? 1800))
 
     applyStatus(await api.status())
     // 主进程是页面 did-finish-load 之后才开始加载数据, 有可能这里已经 ready 了

@@ -42,8 +42,8 @@ npm start          :: 启动（等价于双击启动脚本）
 | `npm run check` | 静态预检：import 可解析 + IPC channel 两侧一致 + 启动脚本编码 + 模板绑定无遗漏 + **源码里没有硬编码绝对路径** |
 | `npm run build` | 预检 + 构建 |
 | `npm run smoke` | **30 秒冒烟**：起一个实例，报告落在哪个视图、首屏多少卡片、有无 JS 报错 |
-| `npm run e2e` | 预检 + 构建 + **219 条断言的端到端验证**（详见下文） |
-| `npm run test:ipc` | 主进程 IPC handler 单测（10 条，无需窗口） |
+| `npm run e2e` | 预检 + 构建 + **265 条断言的端到端验证**（详见下文） |
+| `npm run test:ipc` | 主进程 IPC handler 单测（23 条，无需窗口）：右键菜单 → 移动到 / 复制路径 / 预设增删 + **复制图片到剪贴板**（真的走 `write([ClipboardItem])`、**不再调不存在的 `writeImage`**、进度提示必须先于写入、回读不到要报失败、webp 要明确报错、write 被 reject / 永不返回各有断言）+ **「用其他程序打开…」**（子进程参数与 detached，单测用假 spawn，绝不真弹对话框） |
 | `npm run test:transfer` | 文件搬移逻辑单测（9 条） |
 | `npm run test:db-safety` | **数据安全**：空数据源绝不清空 `tags.db`（26 条） |
 | `npm run test:nodata` | **空数据目录启动降级**：不崩、不白屏、给出可操作引导（12 条，会弹一次窗口） |
@@ -60,7 +60,7 @@ npm start          :: 启动（等价于双击启动脚本）
 | `npm run test:folders` | 登记表单测：路径归一 / 用途开关互不干扰 / `prev` 改前快照 / 空 label 的来源名 / 移出即从看板隐藏且可恢复（62 条，无需窗口） |
 | `npm run test:ingest` | 增量同步单测：指纹跳过 / 裸图入队不入库 / 删图标 gone（46 条） |
 | `npm run test:tagger` | WD14 反推管道单测（59 条）。用 JSON-lines 桩替身，**不加载 1.27GB 模型** |
-| `npm run test:visual` | **图片像素尺寸解析 + 安全模式 + 自适应行高几何 + 扫描页尺寸链路**单测（91 条）：五种图片格式读文件头、认不出必须返回 `null`（绝不猜）、老库原地补列、缺尺寸回落、敏感标签判档、集合可增删、坏配置回落关闭、**前端镜像与主进程判定逐条一致**、**justified rows 的几何性质**（每行铺满 / 一张不裁 / 末行不拉伸 / 极宽全景图独占一行 / 缺尺寸回落 9/16）、**安全模式计数与 `hiddenAt` 逐条一致**（core/edge 两档、库内数值与库外按标签现算两种取值）。无需窗口 |
+| `npm run test:visual` | **图片像素尺寸解析 + 安全模式 + 自适应行高几何 + 扫描页尺寸链路 + 导出视角词表种子**单测（95 条）：五种图片格式读文件头、认不出必须返回 `null`（绝不猜）、老库原地补列、缺尺寸回落、敏感标签判档、集合可增删、坏配置回落关闭、**前端镜像与主进程判定逐条一致**、**justified rows 的几何性质**（每行铺满 / 一张不裁 / 末行不拉伸 / 极宽全景图独占一行 / 缺尺寸回落 9/16）、**安全模式计数与 `hiddenAt` 逐条一致**（core/edge 两档、库内数值与库外按标签现算两种取值）、**导出视角词表种子**（收齐随机机位交接文档第 3 节 18 条 + 补 `from_side`、无重复、全小写——种子只在首次使用时写一次，写错没有第二次机会）。无需窗口 |
 | `npm run folders:export` | 把登记表（`folders` 表）导出成 `folders.json` 备份 |
 | `npm run txt:archive` | **归档 `tags_*.txt`（默认干跑）**：列清单 + 与库逐项对账，对不上就拒跑 |
 | `npm run txt:archive:apply` | 同上，真正整批移进 `_legacy_归档_<日期>/`（同目录改名，可还原） |
@@ -825,6 +825,81 @@ e2e 为它造了个**专门的夹具夹**（3 张图，其中一张的提示词�
   必须等于它自己文件头里的比例。**一个常量比例不可能同时满足那三张**，
   最后一条断言就是专门堵「常量也能过」的，所以这几条不可伪造。
 
+## 2026-09-24 右键「复制图片到剪贴板」修复 + 「用其他程序打开…」
+
+**用户报的现象**：右键菜单里的「🖼️ 复制图片到剪贴板」**点了完全没反应，粘贴不出来**。
+
+**根因（实测，不是推测）**：Electron 44.3.0 的主进程 `clipboard` 已经换成 W3C 语义，
+`Object.keys(clipboard)` 只有 **`clear / has / read / readText / write / writeText`**
+—— **`writeImage` 这个方法不存在了**。而原来的实现是：
+
+```js
+try { clipboard.writeImage(nativeImage.createFromPath(imgPath)) } catch { /* 图片读不到就算了 */ }
+```
+
+必然抛 `TypeError: clipboard.writeImage is not a function`，被那个**空 catch** 吞掉 ⇒
+每一次点都这样、**跟图片格式和大小都无关、连一句提示都没有**。这就是"失效"的全部原因。
+
+> 顺带发现的两件事（都会让"写剪贴板"这件事变得比看起来难）：
+> · `clipboard.write()` 只收 `[ClipboardItem]`，而且**异步 reject**
+>   （`clipboard.write expects an array of ClipboardItem`）—— `try/catch` 接不住；
+> · `has()` / `read()` 返回 **Promise**；`read('image/png')` 也**不是** Buffer，
+>   拿它去比字节会得到 1 字节/`[ClipboardItem {}]` 这种结果。
+
+**改法**（新增 `electron/core/clipboardImage.js`）：
+
+| 环节 | 做法 |
+|---|---|
+| 拿尺寸 | `planCopy()` 只读**文件头**（复用 `imgsize.js`），不解码 —— 好在动手前就把尺寸报给界面 |
+| 先报进度 | `copyImageWithNotice()` **先**推 `app:toast`「正在复制图像（宽×高）…」+ 让出一帧，**再**进同步段 |
+| 真写 | `clipboard.write([new ClipboardItem({'image/png': Blob})])`，带 20s 死线（实测大图写入要 1.7s，死线只能抓"永不返回"） |
+| 自证 | 回读 `clipboard.has('image/png')`，**读不到就报失败**（"write 没报错"≠"剪贴板里真有一张图"） |
+| 不静默 | 空图（webp）/ 文件不在 / 写失败 / 回读失败，全部返回 `{ok:false, error}` 由界面弹 toast |
+
+同一轮还加了右键菜单的「🗂️ 用其他程序打开…」（`rundll32.exe shell32.dll,OpenAs_RunDLL`），
+见下面「打开方式」一节。
+
+### 实测数字（真机 + 真图 + koffi 交叉核对）
+
+开发期的**一次性探针**（放在 `per-monitor-wallpaper` 仓库的 `tools/tmp/` 下跑：
+借那边的 koffi 才能量 `GlobalSize`，并**开跑拍快照、结束按字节还原**剪贴板；
+重跑它需要 koffi + 那边现成的启动器，量法见 `src/clipboardWin.js`）：
+
+| 图 | 编码 | 写入 | 端到端 | koffi 回读系统剪贴板 |
+|---|---|---|---|---|
+| 10000×6667 PNG (66.7 MP) | `toPNG` **5326 ms** | 1762 ms | **7.6 s** | CF_DIBV5 **254.3 MiB** ≥ 期望 254.3 MiB ✓ |
+| 9500×6531 JPEG (62.0 MP) | `toPNG` 5864 ms | 1714 ms | 7.8 s | CF_DIBV5 236.7 MiB ≥ 期望 236.7 MiB ✓ |
+| webp | — | — | — | 明确报错（`nativeImage` 解不出 → 空图） |
+| 不存在的文件 | — | — | — | 明确报错（ENOENT） |
+
+`formats = [49582(PNG), 17(CF_DIBV5), 2(CF_BITMAP), 8(CF_DIB)]` —— 系统会自动补齐另外几个格式。
+
+**大图为什么慢、以及为什么没顺手"优化"掉**：慢的那 5 秒是 `nativeImage.toPNG()`，
+它是**同步**的（主进程整段冻住），这就是"先报进度再干活"的理由。想更快只有三条路，
+都不适合默默替用户决定：
+
+- **koffi 直写 CF_DIBV5**（跳过 PNG 编码，同机 `per-monitor-wallpaper` 已验证 ~1s、无损）
+  —— 代价是引入原生模块，与 `thumbs.js` 定下的"不引原生模块"冲突；
+- **大图改 `toJPEG(92)`** —— 编码只要 **329 ms**（快 16 倍），但是**有损**；
+- **自己套 BMP 壳子塞给 `write()`** —— **实测行不通**：Chromium 只解 PNG / JPEG
+  **内容**，喂真 BMP 会得到**空剪贴板**（而且 `write()` 立刻 resolve、不报错；
+  拿 JPEG 字节贴 `image/bmp` 反而成功 —— 说明 **MIME 标签不参与判断，按内容嗅探**）。
+
+`toJPEG` / 真 BMP 这两条都测过了，数字在上面；要不要换是个产品决定，不是 bug 修复。
+
+### 「打开方式」对话框：结论 + 怎么验证的
+
+`rundll32.exe shell32.dll,OpenAs_RunDLL <路径>` 在本机**实测可用**，
+且**不阻塞我们的消息循环**（`tools/probe-openwith.py`）：
+
+- 对话框**不是 rundll32 画的** —— rundll32 只把请求转给另一个 **`OpenWith.exe`**；
+  rundll32 自己在本进程里只有隐藏的 `RunDLL` / `IME` 辅助窗口。
+  ⇒ 所以**别对它发 `WM_CLOSE`**（那会把壳关掉），收尾要么按新起的 OpenWith.exe 的 PID，
+  要么关标题命中的对话框窗口。
+- `windowsHide` 开/关都**不影响**对话框（两种取值各测一遍，窗口集合完全一样）。
+- 单测里**绝不真起进程**（会在用户桌面上弹出真对话框）：`openWithDeps.spawn` 是注入点，
+  用例换成假的并断言参数（`['shell32.dll,OpenAs_RunDLL', 路径]` / `detached: true` / `stdio: 'ignore'`）。
+
 ## 验证
 
 ### 怎么跑
@@ -834,6 +909,12 @@ npm run e2e
 ```
 
 它做三件事：静态预检 → 构建 → 用 CDP 驱动**真实运行的 Electron**逐视图断言。
+
+> ⚠️ **已知偶发（2026-09-24 实测）**：`批量移动` 那段里「等移动到位的 toast」偶尔会超时，
+> 报 `等待超时: 移动 toast`，然后整个流程中断（总数会掉到 251 左右）。
+> 原因是前一步「网格剩 1 张」最多等 20s，而 toast 只活 2.6s —— 正是第 25 条那个陷阱。
+> **重跑一次就绿（265/265）**，不要当成回归去追代码。想根治：把 toast 文本在
+> 移动发起前就记进一个变量，别依赖"再去 DOM 里找它"。
 不需要 Playwright（本机只有三样依赖，不想为一次验证再拉一整套浏览器）。
 
 **数据隔离**：测试**自建工作目录 `.e2e-work/`**（项目内，已 gitignore），跑之前会把真实数据目录
@@ -957,7 +1038,7 @@ e2e 自己也会把**落在沙箱里的**导出预设先清干净（判据是"�
 
 ---
 
-## 二十五个踩过的坑（已修，留档备忘）
+## 二十六个踩过的坑（已修，留档备忘）
 
 ### 1. 窗口比数据先到，首屏数字偏小
 
@@ -1445,6 +1526,37 @@ const c = Buffer.alloc(4); c.writeUInt32BE(crc32(Buffer.concat([t, data])) >>> 0
 再等会迟到的（弹窗关闭）**。同段还有个反面教材：全删空之后，二级模板整个切到
 「没有可显示的图片」分支，批量操作条跟着消失 —— 对"已消失的元素"断言计数必须
 容错「元素不存在 = 也算归零」。
+
+### 26. 一个空 `catch` 把「Electron 44 里 `clipboard.writeImage` 已经不存在」藏了不知道多久
+
+右键「复制图片到剪贴板」**每次点都毫无反应、连提示都没有**。不是格式问题、不是大小问题：
+
+```js
+try { clipboard.writeImage(nativeImage.createFromPath(p)) } catch { /* 图片读不到就算了 */ }
+//    ^ 这个方法在 Electron 44.3.0 的主进程里**不存在**（实测 keys 只有
+//      clear/has/read/readText/write/writeText），必然抛 TypeError → 被吞 → 静默无操作
+```
+
+**为什么值得单独记一条**：吞异常让"调用了不存在的 API"看起来和"图片读不到"完全一样，
+而这条路径**没有任何其它信号**（没有日志、没有 toast、剪贴板里留着上次的内容）。
+凡是"点了应该有反应"的功能，`catch` 里必须**留下痕迹**（返回 error 交给界面弹提示）。
+
+同一条路上还蹲着三个坑，一起记：
+
+1. `clipboard.write()` 只收 `[ClipboardItem]`，而且**异步 reject** —— `try/catch` **接不住**
+   （`clipboard.write expects an array of ClipboardItem`）。要么 `await` + `.catch`，要么加死线。
+2. `has()` / `read()` 返回 **Promise**（W3C 语义）；`read('image/png')` **不是** Buffer，
+   拿它比字节只会拿到 1 字节或 `[ClipboardItem {}]`。**能用的自证只有 `has()`**；
+   要"载荷 ≥ 宽×高×4"这种硬证据，只能借 koffi 量 `GlobalSize`（开发期就是这么核对的，
+   `read()` 那条路走不通：它取回的是**重编码**过的 PNG，4706B 写进去、17345B 读回来）。
+3. Chromium 写剪贴板时按**内容**嗅探，**MIME 标签不参与判断**：拿 JPEG 字节贴
+   `image/bmp` 照样成功；而喂**真 BMP** 会得到一个**空剪贴板且不报错**。
+   ⇒ "换个小众格式能不能更快"这种想法，必须实测，别推理。
+
+**顺带一条同类陷阱（与第 24 条对称）**：主进程 → 渲染层的**推送**是另一套白名单
+（`preload.cjs` 的 `PUSH`），跟 `CHANNELS` 不是一回事。漏了它 `on()` 会**静默返回一个空退订函数**
+（不报错、不警告），现象是"主进程明明发了、界面永远不动"。这次加 `app:toast` 就是三处一起改：
+`ipc.js` 的 `PUSH_EVENTS` → `preload.cjs` 的 `PUSH` → `useAppStore.init()` 里的消费。
 
 ## 与旧版共存 / 回滚
 

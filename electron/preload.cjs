@@ -56,7 +56,18 @@ const CHANNELS = new Set([
   'diag:stats', 'diag:clearSearchCache', 'diag:clearThumbs', 'diag:fileInfo',
 ])
 
-const PUSH = new Set(['app:progress', 'app:reloaded', 'scan:progress', 'ingest:progress', 'tagger:progress', 'export:auto'])
+/**
+ * 主进程 → 渲染进程的单向推送。
+ * ⚠️ 不在这个集合里的 channel，`on()` 会**静默**返回一个空退订函数（不报错），
+ * 于是"主进程发了、界面没反应"。加推送通道时**两边都要改**（这里是白名单，
+ * 消费端在 src/stores/useAppStore.js 的 init()）。
+ */
+const PUSH = new Set([
+  'app:progress', 'app:reloaded', 'scan:progress', 'ingest:progress',
+  'tagger:progress', 'export:auto',
+  // 主进程主动要说的短句（右键「复制图片到剪贴板」动手前的进度提示）
+  'app:toast',
+])
 
 /** 自定义协议的 URL 构造 —— 与 imageproto.js 的解析必须成对 */
 function thumbUrl(p, w = 400) {

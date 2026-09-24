@@ -60,6 +60,20 @@ export function useImageCtxMenu() {
         ui.ok(`已保存预设文件夹: ${r.result?.name || ''}`, 'ok', 2400)
       } else if (action === 'quick-exists') {
         ui.err(r.result?.error || '文件夹已在预设里', 2400)
+      } else if (action === 'copy-image') {
+        // 主进程已经把像素写完了(过程中推的「正在复制图像…」在 app:toast 那条路上)。
+        // 成败都必须报出来: 以前这里什么都不做, 而主进程那行 clipboard.writeImage
+        // 抛的 TypeError 被空 catch 吃掉 ⇒ 用户点了完全没反应(2026-09-24 修)。
+        const res = r.result || {}
+        if (res.ok) {
+          const secs = res.totalMs >= 1000 ? `（${(res.totalMs / 1000).toFixed(1)}s）` : ''
+          ui.ok(`📋 已复制图像 ${res.width}×${res.height}${secs}`, 'ok', 2400)
+        } else {
+          ui.err('复制图像失败: ' + (res.error || '未知原因'), 4600)
+        }
+      } else if (action === 'open-with') {
+        // 成功了不打扰(对话框自己会弹出来); 只报失败, 免得"点了没反应"
+        if (!r.result?.ok) ui.err(r.result?.error || '调不出「打开方式」', 3600)
       }
     } catch (err) {
       // console.error 会被主进程转发进 logs/launch.log([render] 行), 方便排查

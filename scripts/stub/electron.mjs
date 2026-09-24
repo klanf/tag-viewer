@@ -31,6 +31,13 @@ export const ctl = {
   messageBox: null,
   /** shell / clipboard 这类外部副作用调用流水: [api, ...args] */
   calls: [],
+  /** 剪贴板当前有没有图（clipboard.write 成功后置 true，clear 置 false） */
+  clipboardImage: false,
+  /** 强制覆盖 clipboard.has() 的返回（布尔）；不设则按 clipboardImage 推导。
+   *  用来测「写完了但回读读不到」那条 —— 真机上那是 CF_DIBV5 没落地。 */
+  clipboardHas: undefined,
+  /** nativeImage 桩给的尺寸（模拟真机 getSize()） */
+  imageSize: { width: 4, height: 4 },
   /** 被 new 出来的窗口 */
   windows: [],
   /** 收集到的日志 */
@@ -44,6 +51,9 @@ export const ctl = {
     ctl.messageBox = null
     ctl.calls = []
     ctl.logs = []
+    ctl.clipboardImage = false
+    ctl.clipboardHas = undefined
+    ctl.imageSize = { width: 4, height: 4 }
   },
 }
 
@@ -100,10 +110,47 @@ export const dialog = {
   showErrorBox(title, content) { ctl.calls.push(['dialog.showErrorBox', title, content]) },
 }
 
+/**
+ * 剪贴板桩 —— **刻意照着 Electron 44.3.0 的真身做**（2026-09-24 实测）：
+ *   · `Object.keys(clipboard)` = clear / has / read / readText / write / writeText
+ *     —— **没有 writeImage**。这个"缺方法"是事实，必须保留：谁把代码改回
+ *     `clipboard.writeImage(...)`，用例就会红（那正是用户报的「点了没反应」的根因）。
+ *   · `has()` / `read()` 返回 **Promise**（真机已是 W3C 异步语义）。
+ *   · `write()` 只认 `[ClipboardItem]`；给别的形状 reject
+ *     （真机原话：`clipboard.write expects an array of ClipboardItem`）。
+ */
+export class ClipboardItem {
+  constructor(items = {}) {
+    this.types = Object.keys(items)
+    this.items = items
+  }
+
+  getType(type) { return Promise.resolve(this.items[type]) }
+}
+
 export const clipboard = {
+  clear() {
+    ctl.calls.push(['clipboard.clear'])
+    ctl.clipboardImage = false
+  },
+  async has(fmt) {
+    ctl.calls.push(['clipboard.has', fmt])
+    return typeof ctl.clipboardHas === 'boolean' ? ctl.clipboardHas : ctl.clipboardImage === true
+  },
+  async read(fmt) {
+    ctl.calls.push(['clipboard.read', fmt])
+    return null
+  },
+  readText() { ctl.calls.push(['clipboard.readText']); return '' },
+  write(items) {
+    ctl.calls.push(['clipboard.write', items])
+    if (!Array.isArray(items) || !items.every((i) => i instanceof ClipboardItem)) {
+      return Promise.reject(new TypeError('clipboard.write expects an array of ClipboardItem'))
+    }
+    ctl.clipboardImage = true
+    return Promise.resolve()
+  },
   writeText(t) { ctl.calls.push(['clipboard.writeText', String(t)]) },
-  writeImage(img) { ctl.calls.push(['clipboard.writeImage', img]) },
-  readText: () => '',
 }
 
 export const shell = {
@@ -123,7 +170,9 @@ export class BrowserWindow {
   constructor(opts = {}) {
     this.opts = opts
     this.webContents = {
-      on() {}, once() {}, send() {}, openDevTools() {},
+      on() {}, once() {}, openDevTools() {},
+      // 主进程 → 渲染层的推送在这里留痕, 测试才能断言"提示真的发出去了"
+      send(channel, payload) { ctl.calls.push(['webContents.send', channel, payload]) },
       setWindowOpenHandler() {},
       session: { webRequest: { onHeadersReceived() {} } },
     }
@@ -161,9 +210,30 @@ export const Menu = {
   buildFromTemplateSync: null,
 }
 
+/**
+ * nativeImage 桩。**照真机的事实做**：Electron 的解码器只认 PNG / JPEG，
+ * webp / bmp / gif 会拿到**空图**（`isEmpty() === true`）——
+ * 「复制图片」那条路必须自己拦住空图，否则真机上就是"不报错也不写进去"。
+ * 尺寸由 `ctl.imageSize` 控制（默认 4×4），`toPNG()` 给一段带 PNG 文件头的假数据。
+ */
+const DECODABLE = /\.(png|jpe?g|jpe)$/i
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+
 export const nativeImage = {
-  createFromPath: (p) => ({ __stubImage: p, isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }),
-  createEmpty: () => ({ __stubImage: null, isEmpty: () => true }),
+  createFromPath: (p) => (DECODABLE.test(String(p))
+    ? {
+      __stubImage: p,
+      isEmpty: () => false,
+      getSize: () => ({ ...ctl.imageSize }),
+      toPNG: () => Buffer.concat([Buffer.from(PNG_MAGIC), Buffer.alloc(8, 1)]),
+      toBitmap: () => Buffer.alloc((ctl.imageSize.width || 1) * (ctl.imageSize.height || 1) * 4),
+    }
+    : {
+      __stubImage: p,
+      isEmpty: () => true,
+      getSize: () => ({ width: 0, height: 0 }),
+    }),
+  createEmpty: () => ({ __stubImage: null, isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }) }),
   createFromBuffer: () => ({ __stubImage: 'buffer', isEmpty: () => false }),
 }
 

@@ -12,12 +12,16 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
 
 register('./stub/electron-loader.mjs', import.meta.url)
 
-const { ctl } = await import('./stub/electron.mjs')
+const { ctl, clipboard: stubClipboard, ClipboardItem, BrowserWindow } = await import('./stub/electron.mjs')
 const { initWorkspace } = await import('../electron/core/workspace.js')
 const { registerIpc } = await import('../electron/ipc.js')
+const { readImageSize } = await import('../electron/core/imgsize.js')
+const { copyImage, openWithDialog, openWithCommand, openWithDeps } =
+  await import('../electron/core/clipboardImage.js')
 
 let pass = 0
 let fail = 0
@@ -174,6 +178,158 @@ await ta('新增的预设立刻出现在下一次菜单里(读回生效)', async
   ctl.pick = (tpl) => { labels = tpl.find((i) => i.label === '📤 移动到').submenu.map((i) => String(i.label)) }
   await handler(fakeEvent(), { path: img, name: 'f.png' })
   assert.ok(labels.some((l) => l.includes(srcDir)), `菜单里没有新预设: ${JSON.stringify(labels)}`)
+})
+
+console.log('\n[2.5] 复制图片到剪贴板 / 用其他程序打开（2026-09-24 修的那个「点了没反应」）')
+console.log('     根因: Electron 44.3.0 的主进程 clipboard **没有 writeImage 这个方法**')
+console.log('     (实测只有 clear/has/read/readText/write/writeText), 原来那行必然抛')
+console.log('     TypeError, 而它外面套着空 catch ⇒ 100% 静默失效、零提示。')
+console.log('     这组用例把「桩里也没有 writeImage」当成事实来用: 谁改回去就红。')
+
+/* 造一张**真 PNG**：planCopy 要读文件头拿尺寸，所以必须是真实字节 */
+const pngFixture = fileURLToPath(new URL('../test-fixtures/scan-test/a1.png', import.meta.url))
+const copySrc = path.join(srcDir, 'copy-me.png')
+fs.copyFileSync(pngFixture, copySrc)
+const realSize = readImageSize(copySrc)
+assert.ok(realSize && realSize[0] > 0, '夹具 PNG 读不出尺寸，后面的断言没意义')
+ctl.imageSize = { width: realSize[0], height: realSize[1] }   // 桩的 getSize 与真文件头对齐
+new BrowserWindow()                                           // 主进程推送要有窗口才发得出去
+
+/** 按标签点菜单项（找不到就断言失败，而不是静默什么都不点） */
+const pickLabel = (label) => (tpl) => {
+  const it = tpl.find((i) => i.label === label)
+  assert.ok(it, `菜单里没有「${label}」`)
+  it.click()
+}
+
+await ta('菜单里有「🗂️ 用其他程序打开…」且紧跟「用系统查看器打开」', () => {
+  let labels = []
+  ctl.pick = (tpl) => { labels = tpl.map((i) => i.label || i.type) }
+  handler(fakeEvent(), { path: copySrc, name: 'copy-me.png' })
+  assert.ok(labels.includes('🗂️ 用其他程序打开…'), `菜单缺少该项: ${JSON.stringify(labels)}`)
+  assert.equal(labels[labels.indexOf('🗂️ 用其他程序打开…') - 1], '🖥️ 用系统查看器打开', '位置不对')
+})
+
+await ta('点「复制图片到剪贴板」→ 真的 write([ClipboardItem(image/png)])，不再调不存在的 writeImage', async () => {
+  ctl.calls = []
+  ctl.pick = pickLabel('🖼️ 复制图片到剪贴板')
+  const r = await handler(fakeEvent(), { path: copySrc, name: 'copy-me.png' })
+  assert.equal(r.error, undefined, `handler 抛错: ${r.error}`)
+  assert.equal(r.action, 'copy-image', `意外 action: ${r.action}`)
+  assert.equal(r.result?.ok, true, `复制没成功: ${r.result?.error}`)
+  assert.equal(r.result.width, realSize[0], '返回的宽度不是这张图的')
+  assert.equal(r.result.height, realSize[1])
+
+  const w = ctl.calls.find((c) => c[0] === 'clipboard.write')
+  assert.ok(w, 'clipboard.write 没被调用')
+  const item = w[1][0]
+  assert.ok(item instanceof ClipboardItem, '传的不是 ClipboardItem 数组（真机会直接 reject）')
+  assert.deepEqual(item.types, ['image/png'])
+  assert.equal(item.items['image/png'].type, 'image/png', 'Blob 的 MIME 不对')
+  assert.ok(!ctl.calls.some((c) => c[0] === 'clipboard.writeImage'), '又调了不存在的 clipboard.writeImage')
+})
+
+await ta('「正在复制图像…」提示必须**先**推给界面（大图 toPNG 实测 5s，先干后说等于没响应）', () => {
+  const iSend = ctl.calls.findIndex((c) => c[0] === 'webContents.send' && c[1] === 'app:toast'
+    && /正在复制图像/.test(String(c[2]?.text)))
+  const iWrite = ctl.calls.findIndex((c) => c[0] === 'clipboard.write')
+  assert.ok(iSend >= 0, '没有推 app:toast 进度提示')
+  assert.ok(iWrite >= 0, '没有 clipboard.write')
+  assert.ok(iSend < iWrite, '提示在写入之后才发 —— 主进程那时已经冻住了，界面根本画不出来')
+  assert.match(String(ctl.calls[iSend][2].text), new RegExp(`${realSize[0]}×${realSize[1]}`), '提示里没带尺寸')
+})
+
+await ta('回读不到图 → 报失败（“写完了”不等于“剪贴板里真有一张图”）', async () => {
+  ctl.clipboardHas = false          // 模拟 CF_DIBV5 没落地
+  ctl.calls = []
+  ctl.pick = pickLabel('🖼️ 复制图片到剪贴板')
+  const r = await handler(fakeEvent(), { path: copySrc, name: 'copy-me.png' })
+  assert.equal(r.result?.ok, false, '回读不到却报了成功')
+  assert.match(r.result.error, /读不到图片/)
+  ctl.clipboardHas = undefined
+})
+
+await ta('webp/bmp/gif（nativeImage 解不出）→ 明确报错，不许"静默什么都没写"', async () => {
+  const wp = path.join(srcDir, 'format.webp')
+  fs.writeFileSync(wp, 'webp-bytes')
+  ctl.calls = []
+  ctl.pick = pickLabel('🖼️ 复制图片到剪贴板')
+  const r = await handler(fakeEvent(), { path: wp, name: 'format.webp' })
+  assert.equal(r.result?.ok, false, '空图居然报了成功')
+  assert.match(r.result.error, /只认 PNG \/ JPEG/)
+  assert.ok(!ctl.calls.some((c) => c[0] === 'clipboard.write'), '空图还去写剪贴板了')
+})
+
+await ta('clipboard.write 被 reject（真机原话 expects an array of ClipboardItem）→ 失败带原因', async () => {
+  const orig = stubClipboard.write
+  stubClipboard.write = () => Promise.reject(new TypeError('clipboard.write expects an array of ClipboardItem'))
+  try {
+    ctl.pick = pickLabel('🖼️ 复制图片到剪贴板')
+    const r = await handler(fakeEvent(), { path: copySrc, name: 'copy-me.png' })
+    assert.equal(r.result?.ok, false)
+    assert.match(r.result.error, /expects an array of ClipboardItem/)
+  } finally { stubClipboard.write = orig }
+})
+
+await ta('write 永不 settle → 有死线兜底（注入 150ms，真等 20s 太慢）', async () => {
+  const orig = stubClipboard.write
+  stubClipboard.write = () => new Promise(() => {})
+  try {
+    const r = await copyImage(copySrc, { writeTimeoutMs: 150 })
+    assert.equal(r.ok, false, '永不返回却报了成功')
+    assert.match(r.error, /没返回/)
+  } finally { stubClipboard.write = orig }
+})
+
+await ta('openWithCommand: shell32.dll,OpenAs_RunDLL + 盘符绝对路径的 rundll32', () => {
+  // path-check-ignore 下面是**示例路径**，只为断言纯函数的拼装结果，不是真实位置
+  const sample = 'D:/x/y.png'
+  const { exe, args } = openWithCommand(sample)
+  assert.equal(args[0], 'shell32.dll,OpenAs_RunDLL')
+  assert.equal(args[1], sample)
+  assert.match(exe, /rundll32\.exe$/i, `exe 不是 rundll32: ${exe}`)
+  if (process.env.SystemRoot) {
+    assert.ok(/^[A-Za-z]:\\/.test(exe), `有 SystemRoot 却没拼出绝对路径: ${exe}`)
+    // path-check-ignore 这一行是在**断言源码里没把盘符写死**，本身不是硬编码路径
+    assert.ok(!/^C:\\Windows/i.test(exe) || /^C:\\Windows/i.test(process.env.SystemRoot), '把盘符写死了')
+  }
+})
+
+await ta('点「用其他程序打开…」→ detached 子进程 + 参数对（用假 spawn，单测绝不真弹对话框）', async () => {
+  const seen = []
+  const orig = openWithDeps.spawn
+  openWithDeps.spawn = (exe, args, opts) => { seen.push({ exe, args, opts }); return { on() {}, unref() {} } }
+  try {
+    ctl.pick = pickLabel('🗂️ 用其他程序打开…')
+    const r = await handler(fakeEvent(), { path: copySrc, name: 'copy-me.png' })
+    assert.equal(r.action, 'open-with', `意外 action: ${r.action}`)
+    assert.equal(r.result?.ok, true, `失败: ${r.result?.error}`)
+    assert.equal(seen.length, 1, `起了 ${seen.length} 次进程`)
+    assert.equal(seen[0].args[0], 'shell32.dll,OpenAs_RunDLL')
+    assert.equal(seen[0].args[1], copySrc, '传给对话框的不是这张图')
+    assert.equal(seen[0].opts.detached, true, '必须 detached: 关掉看板不该顺手关掉用户的看图软件')
+    assert.equal(seen[0].opts.stdio, 'ignore')
+  } finally { openWithDeps.spawn = orig }
+})
+
+await ta('「打开方式」起进程失败 → 返回原因（菜单点了不能没反应）', async () => {
+  const orig = openWithDeps.spawn
+  openWithDeps.spawn = () => {
+    const h = {}
+    return {
+      on: (ev, fn) => {
+        h[ev] = fn
+        // spawn 的失败是**异步**报的（真机也是这样），所以只能在 on('error') 上兑现
+        if (ev === 'error') setTimeout(() => fn(new Error('ENOENT')), 10)
+      },
+      unref() {},
+    }
+  }
+  try {
+    const r = await openWithDialog(copySrc)
+    assert.equal(r.ok, false, 'EXISTING: 起进程失败却报了成功')
+    assert.match(r.error, /ENOENT/)
+  } finally { openWithDeps.spawn = orig }
 })
 
 console.log('\n[3] image:trash / shell API 只认反斜杠(2026-09-20 真机 bug)')
