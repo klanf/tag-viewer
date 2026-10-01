@@ -55,6 +55,13 @@ const props = defineProps({
    * 不传(null) = 老行为, 走 `suggest:get` 查库。
    */
   localTags: { type: Array, default: null },
+  /**
+   * 补全一条都没有时的提示语。
+   * 扫描页要覆盖它: 那边的框除了标签还按**文件名**筛(见 ScanView),
+   * 敲 a3 补不出标签很正常, 但网格确实筛出了 a3.png —— 只写"没有匹配的标签"
+   * 会让人以为搜索框坏了。默认值就是老文案, 不传时行为不变。
+   */
+  emptyText: { type: String, default: '没有匹配的标签' },
   limit: { type: Number, default: 12 },
   disabled: { type: Boolean, default: false },
   size: { type: String, default: 'md' },
@@ -251,7 +258,7 @@ defineExpose({ focus: () => input.value?.focus(), hide })
       <!-- 补全 -->
       <template v-else>
         <div v-if="busy && !items.length" class="msg">搜索中...</div>
-        <div v-else-if="!items.length" class="msg">没有匹配的标签</div>
+        <div v-else-if="!items.length" class="msg">{{ emptyText }}</div>
         <div
           v-else
           v-for="(s, i) in items"

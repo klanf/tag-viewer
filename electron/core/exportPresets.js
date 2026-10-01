@@ -3,7 +3,15 @@
  * ==================================
  * 用户诉求(2026-09-22): 每次 ban 完词条都要手动点导出、再在「另存为」里挑目录,
  * 纯重复劳动。这里把它变成: 预设里存好【来源 + 筛选参数 + 目标目录/文件名】,
- * 黑名单**内容真的变了**就 1.5s 防抖后自动按预设原地覆盖导出一次。
+ * 黑名单**内容真的变了**就按预设原地覆盖导出一次。
+ *
+ * 2026-09-24 改: 延迟从写死的 1.5s 变成**全局可配、默认 3 分钟**。
+ *   起因(用户原话): "点击黑名单后过几分钟再自动导出, 因为有可能同时 ban 好几个,
+ *   每个都导出有点耗时"。1.5s 防抖只能合并"同一瞬间"的连点, 而真实操作是
+ *   隔几秒 ban 一个、连着 ban 十几个 —— 每个都各触发一次 3~4 秒的同步导出。
+ *   顺带修掉一个真 bug: 上一轮还在跑时定时器到点, 这次改动会被静默丢弃
+ *   (旧代码 `if (running) return {skipped:true}`), 现在标脏、跑完补一轮。
+ *   排程状态机本身摘到了 ./exportScheduler.js(纯逻辑, 可单测假时钟)。
  *
  * 几个刻意的取舍:
  *   · 触发只认「黑名单内容真的变了」(指纹比对) —— 打开编辑器原样保存、连点
@@ -12,6 +20,8 @@
  *     绝不能读到写了一半的内容。
  *   · **导出失败绝不影响 ban 本身** —— ban 是主操作, 导出是附带的;
  *     失败只把错误记进预设并回执, 不往上抛。
+ *   · 延迟期间界面能看见"还差多久"(首页角标倒计时), 点一下跳过等待立刻导;
+ *     关窗口前也会把待导的跑掉 —— 否则 3 分钟延迟下"ban 完就关窗"等于白改。
  *   · 预设存数据目录 `user/export_presets.json`(走 dataFile 路由表) ——
  *     e2e/冒烟沙箱有自己的一份数据目录, 不会污染真实预设。
  */
@@ -22,11 +32,15 @@ import { dataFile } from './workspace.js'
 import { buildExport } from './exporter.js'
 import { blacklistText } from './rules.js'
 import { status, whenReady } from './app-state.js'
+import { createScheduler, DELAY_OPTIONS, DEFAULT_DELAY_MS, normDelay } from './exportScheduler.js'
 
 const FILE = 'export_presets.json'      // -> <dataDir>/user/export_presets.json
 const VERSION = 1
-const DEBOUNCE_MS = 1500
 const DEFAULT_FILE = '筛选结果.txt'
+
+// 延迟档位与归一化在 exportScheduler.js(纯逻辑, 可单测)。
+// 这里**再导出**一次: ipc.js 从本模块取(它不该关心排程器的内部结构)。
+export { DELAY_OPTIONS }
 
 /* ------------------------------------------------------------ 写盘 */
 
@@ -79,7 +93,7 @@ function filePath() {
 }
 
 function emptyStore() {
-  return { version: VERSION, updated_at: 0, presets: [] }
+  return { version: VERSION, updated_at: 0, autoDelayMs: DEFAULT_DELAY_MS, presets: [] }
 }
 
 function readStore() {
@@ -88,14 +102,26 @@ function readStore() {
     const j = JSON.parse(raw)
     // 容忍"直接写了个数组"的形态(手改文件时容易写成这样)
     const presets = Array.isArray(j) ? j : (Array.isArray(j?.presets) ? j.presets : [])
-    return { version: VERSION, updated_at: j?.updated_at || 0, presets: presets.map(normPreset).filter(Boolean) }
+    // autoDelayMs 是 2026-09-24 加的: **老文件里没有这个字段 -> 直接退回默认 3 分钟**,
+    // 不需要写迁移脚本(归一化函数就是兼容层)。
+    return {
+      version: VERSION,
+      updated_at: j?.updated_at || 0,
+      autoDelayMs: normDelay(j?.autoDelayMs),
+      presets: presets.map(normPreset).filter(Boolean),
+    }
   } catch {
     return emptyStore()
   }
 }
 
 function writeStore(store) {
-  const next = { version: VERSION, updated_at: Date.now(), presets: store.presets }
+  const next = {
+    version: VERSION,
+    updated_at: Date.now(),
+    autoDelayMs: normDelay(store.autoDelayMs),
+    presets: store.presets,
+  }
   const p = filePath()
   fs.mkdirSync(path.dirname(p), { recursive: true })
   const tmp = `${p}.tmp${process.pid}`
@@ -103,6 +129,39 @@ function writeStore(store) {
   replaceFileWithRetry(tmp, p)
   return next
 }
+
+/* -------------------------------------------------------- 延迟设置(全局) */
+
+/**
+ * 当前生效的延迟 = 存档值(不合法就回默认 3 分钟)。
+ *
+ * ⚠️ 曾经在这里给环境变量 `TV_EXPORT_DELAY_MS` 开了个"永远优先"的口子(为了 e2e 快),
+ * 2026-09-24 当天就撤掉了: 它让**界面开始骗人** —— 弹窗按存档值显示"3 分钟",
+ * 而实际按环境变量 1.5 秒导; 用户在 e2e/dev 里改延迟也永远不生效(改完界面还回显改过的值)。
+ * 正确做法是让**测试自己去改这个值**(e2e 在导出预设段落开头显式设成 1.5 秒并断言),
+ * 而不是给产品代码留后门。
+ */
+export function getAutoDelayMs() {
+  return readStore().autoDelayMs
+}
+
+/** 有几个"开着自动导出且设了目录"的预设(没有就不排空程) */
+export function readAutoCount() {
+  return readStore().presets.filter((p) => p.auto && p.dir).length
+}
+
+/** 改延迟。存档 + 立刻生效: 正在等的那一批要按新时长**重排**。 */
+export function setAutoDelayMs(ms) {
+  const store = readStore()
+  store.autoDelayMs = normDelay(ms)
+  writeStore(store)
+  // 只有"正排着队等"的那批需要重排。
+  // 正在跑时 (running) 不去 schedule —— 那会被 scheduler 记成 dirty,
+  // 白白多导一轮(用户只是改个设置, 没改黑名单)。
+  if (scheduler.getState().state === 'scheduled') scheduler.schedule()
+  return { ok: true, delayMs: store.autoDelayMs, delayOptions: DELAY_OPTIONS }
+}
+
 
 /* ------------------------------------------------------------ 归一化 */
 
@@ -269,10 +328,7 @@ export function blacklistFingerprint() {
   return fingerprint(blacklistText())
 }
 
-let timer = null
-let running = false
 let notifier = null
-let pendingResolvers = []
 
 /** 主进程把结果推给渲染层的回调(ipc.js 注册) */
 export function setAutoNotifier(fn) {
@@ -280,18 +336,61 @@ export function setAutoNotifier(fn) {
 }
 
 /**
+ * 真正跑一轮: 所有 auto 预设各导一次。
+ * 数据集没就绪时**不导**(不能拿半份数据覆盖上一次的好结果), 但会挂补跑 —— 见 armReadyRetry。
+ * 注意这里**不发通知**: 结果由排程器统一推(带 kind='result'), 免得两处各推一条。
+ */
+async function runAutoImpl() {
+  const presets = readStore().presets.filter((p) => p.auto && p.dir)
+  if (!presets.length) return { skipped: true, results: [] }
+  if (status()?.phase !== 'ready') {
+    armReadyRetry()
+    return { skipped: true, reason: 'not-ready', phase: status()?.phase || 'unknown', results: [] }
+  }
+  retryPending = false          // 这一轮真跑了, 已排的补跑没有意义
+  const results = []
+  for (const p of presets) {
+    try {
+      results.push(runPreset(p.id, { trigger: 'auto' }))
+    } catch (e) {
+      // 单个预设失败不影响其它预设, 也不影响 ban
+      results.push({ ok: false, id: p.id, name: p.name, error: e?.message || String(e), trigger: 'auto' })
+    }
+  }
+  return { results }
+}
+
+/**
+ * 排程器: 延迟多久导 / 期间又改了几次 / 正在导的时候又改一次怎么办。
+ * 摘到 exportScheduler.js 是为了能用假时钟单测(scripts/test-export-presets.mjs)。
+ */
+export const scheduler = createScheduler({
+  run: runAutoImpl,
+  notify: (p) => notifier?.(p),
+  getDelayMs: getAutoDelayMs,
+  listAutoCount: readAutoCount,
+})
+
+/**
  * 黑名单改完之后调: 内容真的变了 -> 排一次自动导出(防抖合并)。
  * @param {string} prevFp 改动前调用 blacklistFingerprint() 拿到的值
- * @returns {{changed:boolean, scheduled:boolean, autoCount:number}}
+ * @returns {{changed:boolean, scheduled:boolean, autoCount:number, dueAt:number, delayMs:number, fresh:boolean}}
+ *   `fresh` = 这一批的第一次排程(渲染层只在这时候提示一次, 免得连 ban 刷屏)。
  */
 export function afterBlacklistChange(prevFp) {
   const nowFp = blacklistFingerprint()
-  if (nowFp === prevFp) return { changed: false, scheduled: false, autoCount: 0 }
-  const autoCount = readStore().presets.filter((p) => p.auto && p.dir).length
-  if (!autoCount) return { changed: true, scheduled: false, autoCount: 0 }
-  clearTimeout(timer)
-  timer = setTimeout(() => { timer = null; void runAuto() }, DEBOUNCE_MS)
-  return { changed: true, scheduled: true, autoCount }
+  if (nowFp === prevFp) {
+    return { changed: false, scheduled: false, autoCount: 0, dueAt: 0, delayMs: 0, fresh: false }
+  }
+  const r = scheduler.schedule()
+  return {
+    changed: true,
+    scheduled: !!r.scheduled,
+    autoCount: r.autoCount || 0,
+    dueAt: r.dueAt || 0,
+    delayMs: r.delayMs || 0,
+    fresh: !!r.fresh,
+  }
 }
 
 /**
@@ -317,7 +416,9 @@ function armReadyRetry() {
     retryArmed = false
     if (!retryPending) return
     retryPending = false
-    void runAuto()
+    // 走 flushNow 而不是 schedule: 数据已就绪, 没必要再等一个延迟;
+    // 且它内部会先清掉待排程的定时器 —— 不会和定时器撞成"同一批导两次"。
+    void scheduler.flushNow()
   }).catch(() => {
     // 数据集加载失败(phase='error') -> 补跑没有意义, 清干净
     retryArmed = false
@@ -325,55 +426,27 @@ function armReadyRetry() {
   })
 }
 
-/** 立刻跑一遍所有 auto 预设(防抖到期 / 测试里手动 flush 都走这里) */
-export async function runAuto() {
-  if (running) return { skipped: true, results: [] }
-  const presets = readStore().presets.filter((p) => p.auto && p.dir)
-  if (!presets.length) return { skipped: true, results: [] }
-  // 数据集没就绪时不导 —— 否则会拿半份数据覆盖掉上一次的好结果
-  if (status()?.phase !== 'ready') {
-    armReadyRetry()
-    const payload = { at: Date.now(), reason: 'not-ready', phase: status()?.phase || 'unknown', results: [] }
-    notifier?.(payload)
-    return { skipped: true, reason: 'not-ready', results: [] }
-  }
-  retryPending = false          // 这一轮真跑了, 已排的补跑没有意义
-  running = true
-  try {
-    const results = []
-    for (const p of presets) {
-      try {
-        results.push(runPreset(p.id, { trigger: 'auto' }))
-      } catch (e) {
-        // 单个预设失败不影响其它预设, 也不影响 ban
-        results.push({ ok: false, id: p.id, name: p.name, error: e?.message || String(e), trigger: 'auto' })
-      }
-    }
-    const payload = { at: Date.now(), results }
-    notifier?.(payload)
-    return payload
-  } finally {
-    running = false
-    const rs = pendingResolvers
-    pendingResolvers = []
-    for (const fn of rs) fn()
-  }
+/**
+ * 立刻把"排程中"的那次导掉 —— 首页角标点一下 / 关窗口前的收尾都走这里。
+ * **没有排程就什么都不做**: 否则用户点了下空角标, 反而触发一次 3~4 秒的同步重活。
+ */
+export async function flushPendingNow() {
+  if (!scheduler.hasPending()) return { ok: true, skipped: true, results: [] }
+  const r = await scheduler.flushNow()
+  return { ok: true, ...r }
+}
+
+/** 排程器当前状态(渲染层拉倒计时 / 关窗前判据) */
+export function autoState() {
+  return scheduler.getState()
 }
 
 /** 是否还有"排程中/正在跑"的自动导出(退出前 flush 的判据) */
 export function hasPendingAuto() {
-  return !!timer || running
+  return scheduler.hasPending()
 }
 
 /** 等待"排程中的自动导出"跑完(测试与关窗前的收尾用) */
 export function flushAuto(timeoutMs = 8000) {
-  if (!timer && !running) return Promise.resolve()
-  return new Promise((resolve) => {
-    const started = Date.now()
-    pendingResolvers.push(resolve)
-    const tick = setInterval(() => {
-      if (!timer && !running) { clearInterval(tick); resolve() }
-      if (Date.now() - started > timeoutMs) { clearInterval(tick); resolve() }
-    }, 120)
-  })
+  return scheduler.waitIdle(timeoutMs)
 }

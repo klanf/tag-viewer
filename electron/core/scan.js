@@ -117,6 +117,9 @@ function persistSaveNow() {
     return
   }
   const p = dataFile(PERSIST_NAME)
+  // data/cache 这类子目录可能整个不存在(全新数据目录/被清理过) —— ENOENT 只会让
+  // 缓存永远写不出去, 且是静默的(只在主进程 console 里刷屏)。写前建一次目录。
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }) } catch { /* 已存在 */ }
   const tmp = `${p}.tmp`
   fs.promises.writeFile(tmp, JSON.stringify(PERSIST), 'utf8')
     .then(() => fs.promises.rename(tmp, p))

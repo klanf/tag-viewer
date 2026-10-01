@@ -21,6 +21,20 @@ function load() {
   } catch { return {} }
 }
 
+/**
+ * 附加标签归一(2026-10-01): 字符串或数组都行, 按逗号拆、去空白、去重、封顶 30 个。
+ * 用途: 给购物车条目追加 tag(如给哥伦比亚追加 closed_eyes), 导出时拼在同一行。
+ */
+export function normExtra(v) {
+  const raw = Array.isArray(v) ? v : String(v || '').split(',')
+  const out = []
+  for (const x of raw) {
+    const t = String(x || '').trim()
+    if (t && !out.includes(t)) out.push(t)
+  }
+  return out.slice(0, 30)
+}
+
 export const useCartStore = defineStore('cart', () => {
   const items = ref(load())
   const drawerOpen = ref(false)
@@ -34,6 +48,25 @@ export const useCartStore = defineStore('cart', () => {
 
   watch(items, () => {
     writeLS(LS.cart.key, JSON.stringify(items.value))
+    /**
+     * 上报主进程 —— 「购物车有更新就自动导出一份」的预设靠这个触发。
+     * ============================================================
+     * 挂在这里(而不是各个界面上)是刻意的: 购物车有六个改动入口 —— 标签详情页的
+     * 「角色」区 pill、光箱 pill、系列页卡片/批量加入、购物车页与抽屉的删除清空、
+     * 结算后自动清空、历史载入整体替换。挂 store 一次全覆盖, 以后加新入口也不会漏。
+     *
+     * **条目整包上报**(tag + extra): 2026-10-01 起条目可以带附加标签,
+     * 附加变了导出的行文本就变了, 指纹和自动导出都必须跟着走 —— 只报 tag 会漏。
+     *
+     * 顺序 = list 的顺序(Object.values 的插入序), 与「导出全部」写文件时一字不差 ——
+     * 主进程拿这个顺序算指纹, 所以"移出再放回来"也算内容变了(文件行序真的变了)。
+     *
+     * 上报是**附带动作**: 失败(比如正在退出、浏览器降级)只吞掉, 绝不影响购物车本身。
+     */
+    api.cartChanged(Object.values(items.value).map((c) => ({
+      tag: c.tag,
+      extra: Array.isArray(c.extra) ? c.extra : [],
+    }))).catch(() => {})
   }, { deep: true })
 
   function has(tag) { return !!items.value[tag] }
@@ -51,6 +84,31 @@ export const useCartStore = defineStore('cart', () => {
     return true
   }
   function remove(tag) { delete items.value[tag] }
+
+  /**
+   * 改某条目的附加标签(编辑弹窗用)。归一后写回; 空数组 = 清掉附加。
+   * watch(items, deep) 会自动: 持久化 + 上报主进程重算自动导出指纹。
+   */
+  function setExtra(tag, extra) {
+    const it = items.value[tag]
+    if (!it) return
+    it.extra = normExtra(extra)
+  }
+
+  /**
+   * 单条目的 wildcard 行文本(wildcardLine / 复制到剪贴板用)。
+   * spaces=false 是「复制」按钮的老口径(保留下划线); spaces=true 与导出文件一致。
+   */
+  function wildcardLine(item, { spaces = false } = {}) {
+    if (!item) return ''
+    const esc = (t) => {
+      let s = String(t).replace(/\(/g, '\\(').replace(/\)/g, '\\)')
+      if (spaces) s = s.replace(/_/g, ' ')
+      return s
+    }
+    const extras = Array.isArray(item.extra) ? item.extra : []
+    return [esc(item.tag), ...extras.map((x) => esc(x))].join(', ')
+  }
   function toggle(c, series) {
     if (items.value[c.tag]) { remove(c.tag); return false }
     add(c, series)
@@ -72,11 +130,11 @@ export const useCartStore = defineStore('cart', () => {
     return { added, skipped }
   }
 
-  /** 导出 wildcard; save=true 时走原生「另存为」 */
+  /** 导出 wildcard; save=true 时走原生「另存为」。条目整包传(tag+extra), 附加标签跟行走 */
   async function exportFile(save = true) {
-    const tags = list.value.map((c) => c.tag)
-    if (!tags.length) return { error: '购物车是空的' }
-    return api.exportCart(tags, { save })
+    const entries = list.value.map((c) => ({ tag: c.tag, extra: Array.isArray(c.extra) ? c.extra : [] }))
+    if (!entries.length) return { error: '购物车是空的' }
+    return api.exportCart(entries, { save })
   }
 
   /** 结算: 导出 -> 存历史 -> 清空 */
@@ -85,7 +143,9 @@ export const useCartStore = defineStore('cart', () => {
     if (!n) return { error: '请填写历史记录名称' }
     if (!list.value.length) return { error: '购物车是空的' }
 
-    const ex = await api.exportCart(list.value.map((c) => c.tag), { save: true })
+    const ex = await api.exportCart(
+      list.value.map((c) => ({ tag: c.tag, extra: Array.isArray(c.extra) ? c.extra : [] })),
+      { save: true })
     if (ex?.canceled) return { canceled: true }
     if (ex?.error) return { error: ex.error }
 
@@ -99,7 +159,7 @@ export const useCartStore = defineStore('cart', () => {
 
   return {
     items, list, ordered, count, keys, drawerOpen,
-    has, add, remove, toggle, replaceAll, clear, addMany,
+    has, add, remove, setExtra, wildcardLine, toggle, replaceAll, clear, addMany,
     exportFile, checkout,
   }
 })

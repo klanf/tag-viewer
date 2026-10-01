@@ -478,6 +478,31 @@ const { countHits } = await load('src/utils/safetyMatch.js')
     `${againWide?.px_w}x${againWide?.px_h}`, '320x180')
 }
 
+/* ---------------------------------------------------------- 导出视角词表(种子) */
+
+/*
+ * 词表种子的守门断言。种子只在**首次使用**时写出去(之后绝不覆盖用户的改动),
+ * 所以"写出去的那一版对不对"没有第二次机会 —— 用断言把它钉住。
+ * 口径来自《随机机位交接文档》第 3 节 + 对端背景池的清理口径(补 from_side)。
+ */
+{
+  const { DEFAULT_VIEW_TAGS } = await load('electron/core/rules.js')
+  const doc18 = [
+    'from_front', 'from_behind', 'from_left', 'from_right',
+    'directly_above', 'from_above', 'aerial_view', 'high_angle', 'eye-level',
+    'low_angle', 'from_below', 'directly_below',
+    'extreme_close-up', 'close-up', 'medium_shot', 'full_body', 'wide_shot',
+    'dutch_angle',
+  ]
+  eq('视角词表: 收齐交接文档第 3 节的全部分档(18 条)',
+    doc18.filter((t) => !DEFAULT_VIEW_TAGS.includes(t)).length, 0)
+  eq('视角词表: 额外收了 from_side(WD14 会写, 实测库里 2,834 张)',
+    DEFAULT_VIEW_TAGS.includes('from_side'), true)
+  eq('视角词表: 没有重复条目', new Set(DEFAULT_VIEW_TAGS).size, DEFAULT_VIEW_TAGS.length)
+  eq('视角词表: 全部小写(匹配前会 toLowerCase, 写错大小写等于永远命中不了)',
+    DEFAULT_VIEW_TAGS.every((t) => t === t.toLowerCase()), true)
+}
+
 /* ---------------------------------------------------------- 收尾 */
 
 closeDb()

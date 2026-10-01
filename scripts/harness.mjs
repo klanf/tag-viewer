@@ -182,8 +182,17 @@ export function ensureWorkDir({ quiet = false } = {}) {
   // scan_folders.json 的"每轮清零"也没生效。
   // 所以这里直接把 settings.json 覆盖成指向沙箱, 让隔离不依赖环境变量。
   const settingsPath = path.join(userData, 'settings.json')
+  // 「快速移动」按钮条的夹具目录(2026-09-29): 种两条预设进 settings.json,
+  // 光箱按钮条/数字键 1~9 的 e2e 断言靠它们; 目录本体也建好 —— image:moveMany
+  // 对不存在的目标目录会自建, 但提前建好能少一层变量。
+  const qmDirs = [
+    { name: 'QM-A', path: path.join(WORK, 'quick-move-a') },
+    { name: 'QM-B', path: path.join(WORK, 'quick-move-b') },
+  ]
+  for (const q of qmDirs) fs.mkdirSync(q.path, { recursive: true })
   fs.writeFileSync(settingsPath, JSON.stringify({
     dataDir,
+    quickFolders: qmDirs,
     firstRunDone: true,   // 别让后续的首启向导在测试里弹出来
   }, null, 2), 'utf8')
   reset.push('userdata/settings.json')

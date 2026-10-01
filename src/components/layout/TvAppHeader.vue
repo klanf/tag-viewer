@@ -1,10 +1,13 @@
 <script setup>
 /**
- * 顶栏 —— 品牌 / 导航 / 数据集数字 / 收藏开关 / 购物车 / 主题
+ * 顶栏 —— 品牌 / 导航 / 数据集数字 / 数据目录 / 购物车 / 主题
  * ========================================================
  * 旧版每个页面都在 header 里手写自己的按钮与返回链接(index.html 只有"扫描文件夹"
  * 一个链接, series/tags/cart 各写"回首页", 互相之间没有直达路径)。
- * 这里统一成一个导航条, 六个视图互相可达。
+ * 这里统一成一个导航条, 各视图互相可达。
+ *
+ * 2026-10-01 用户反馈: 看板的「只看收藏」模式和 ❤ 入口整个去掉 ——
+ * 收藏本身还在(图片 ★ / 光箱 ☆ / ⭐收藏页), 只是不再有"看板只显示收藏"这个模式。
  *
  * 注意: 这里显示的数字是**数据集总量**(不随来源筛选变化) ——
  * 带来源筛选的统计在首页左栏, 两者语义不同, 不要混。
@@ -12,18 +15,15 @@
 import { computed } from 'vue'
 import TvButton from '../base/TvButton.vue'
 import { useAppStore } from '@/stores/useAppStore.js'
-import { useFavStore } from '@/stores/useFavStore.js'
 import { useCartStore } from '@/stores/useCartStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
-import { useRouter, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { nfmt } from '@/utils/format.js'
 import { api } from '@/utils/api.js'
 
 const app = useAppStore()
-const fav = useFavStore()
 const cart = useCartStore()
 const ui = useUiStore()
-const router = useRouter()
 const route = useRoute()
 
 const NAV = [
@@ -94,14 +94,6 @@ async function openDataDir() {
         <b>{{ nfmt(totals.series) }}</b><span>系列</span>
       </div>
     </div>
-
-    <TvButton
-      size="sm"
-      variant="fav"
-      :active="fav.onlyFav"
-      :title="fav.onlyFav ? '正在「只看收藏」—— 点击关闭' : '点击只显示收藏的图片'"
-      @click="toggleFavFilter"
-    >❤ {{ fav.count }}</TvButton>
 
     <TvButton size="sm" variant="secondary" title="打开数据目录" @click="openDataDir">📁</TvButton>
     <TvButton

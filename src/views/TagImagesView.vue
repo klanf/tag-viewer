@@ -16,6 +16,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import TvImageGrid from '@/components/image/TvImageGrid.vue'
+import TvTagEditModal from '@/components/tag/TvTagEditModal.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvSelect from '@/components/base/TvSelect.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
@@ -112,6 +113,17 @@ function toggleFav(item) {
   const added = fav.toggle(item?.path || item, item?.tags, item)
   ui.ok(added ? '★ 已收藏' : '已取消收藏', 'info', 1200)
 }
+
+/* ---------------- 标签编辑(改名/删除) ----------------
+ * 弹窗里执行完主进程会自动重载数据集(app:reloaded 推回来)。
+ * 改名: 跳到新标签的页面(路由参数变化 -> watch 重查); 删除: 回标签列表。 */
+const showEdit = ref(false)
+function onTagRenamed(newTag) {
+  router.replace({ name: 'tag-images', params: { tag: newTag } })
+}
+function onTagDeleted() {
+  router.replace('/tags')
+}
 </script>
 
 <template>
@@ -123,6 +135,7 @@ function toggleFav(item) {
         <span class="now">{{ tag }}</span>
       </div>
       <span class="spacer" />
+      <TvButton size="sm" variant="secondary" title="改名(全库替换)或删除(可圈范围)这个标签" @click="showEdit = true">✏️ 编辑标签</TvButton>
     </div>
 
     <div class="panel body">
@@ -174,6 +187,14 @@ function toggleFav(item) {
         />
       </div>
     </div>
+
+    <TvTagEditModal
+      v-model="showEdit"
+      :tag="tag"
+      :count="feed.total.value"
+      @renamed="onTagRenamed"
+      @deleted="onTagDeleted"
+    />
   </div>
 </template>
 

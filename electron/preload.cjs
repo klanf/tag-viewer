@@ -16,13 +16,14 @@ const { contextBridge, ipcRenderer } = require('electron')
 const CHANNELS = new Set([
   // 应用 / 数据集
   'app:status', 'app:reload', 'app:config', 'app:pickDataDir', 'app:openPath', 'app:revealPath',
-  'app:ctxMenu', 'app:quickFolders', 'app:quickFolders:add',
+  'app:ctxMenu', 'app:quickFolders', 'app:quickFolders:add', 'app:quickFolders:set',
   // 统计 / 搜索
   'stats:get', 'search:do',
   // 系列 / 角色
   'series:get', 'series:meta:get', 'series:meta:post', 'characters:get',
   // 标签
   'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'translate:get',
+  'tags:edit:preview', 'tags:edit:apply',
   // 规则
   'blacklist:get', 'blacklist:save', 'blacklist:toggle',
   'replace:get', 'replace:save', 'bg:get', 'rules:reload',
@@ -30,11 +31,15 @@ const CHANNELS = new Set([
   'safety:get', 'safety:set', 'safety:text', 'safety:save', 'safety:toggle',
   // 购物车历史
   'cart:history', 'cart:detail', 'cart:save', 'cart:delete', 'cart:rename',
+  // 购物车自动导出(单预设): 上报变更 + 配置读写 + 立即导
+  'cart:changed', 'cart:preset:get', 'cart:preset:save', 'cart:preset:run', 'cart:preset:flushNow',
   // 导出
   'export:preview', 'export:save', 'export:text', 'export:cart',
   // 导出预设(黑名单变更后自动导出)
   'export:preset:list', 'export:preset:save', 'export:preset:delete',
   'export:preset:run', 'export:preset:flush', 'export:preset:pickDir',
+  // 延迟可配 + 待导出倒计时/立刻导出(2026-09-24)
+  'export:preset:state', 'export:preset:delay', 'export:preset:flushNow',
   // 扫描
   'scan:pickFolder', 'scan:folder',
   // 增量入库(磁盘 <-> tags.db 对齐)
@@ -64,7 +69,7 @@ const CHANNELS = new Set([
  */
 const PUSH = new Set([
   'app:progress', 'app:reloaded', 'scan:progress', 'ingest:progress',
-  'tagger:progress', 'export:auto',
+  'tagger:progress', 'export:auto', 'cart:auto',
   // 主进程主动要说的短句（右键「复制图片到剪贴板」动手前的进度提示）
   'app:toast',
 ])

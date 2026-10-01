@@ -73,6 +73,7 @@ const exporting = ref(0)      // 0=空闲 1=纯标签 2=带路径
 const stripCharExport = ref(true)  // 导出时剔除角色/系列标签(含无括号角色, 走角色库)
 const stripViewExport = ref(false) // 导出时剔除视角/机位标签(词表 data/export_view_tags.txt, 来自随机机位交接文档)
 const safeOnlyExport = ref(false)  // 导出时剔除敏感tag(只导出安全模式的标签, 口径跟随安全模式档位)
+const replaceExport = ref(true)    // 导出时应用替换规则(默认开; 关了就导原始标签, 主进程 exporter 本来就认 replace=0)
 
 /** 预设弹窗里「新建预设」的初值 = 首页当前筛选条件(建完之后就是快照, 不再联动) */
 const presetSnapshot = computed(() => ({
@@ -84,7 +85,7 @@ const presetSnapshot = computed(() => ({
   exclude_char: excludeChar.value,
   spaces: true,
   blacklist: true,
-  replace: true,
+  replace: replaceExport.value,
   bg: prefs.bgAuto,
   strip_char: stripCharExport.value,
   strip_view: stripViewExport.value,
@@ -96,11 +97,32 @@ const presetTitle = computed(() => (autoPresetCount.value
   ? `已开启自动导出: ${autoPresetCount.value} 个预设(ban 完黑名单后自动覆盖导出)`
   : '把筛选条件 + 目标目录存成预设, ban 完自动导出'))
 
+/**
+ * 待导出的倒计时(mm:ss)。
+ * 为什么要有: 延迟是**几分钟**级别, 静默等待与"功能坏了"在界面上长得一样。
+ * 数据来自 app store(主进程排程时推一条, 之后本地每秒走), 这个组件只负责显示。
+ */
+const autoLeft = computed(() => {
+  const s = Math.ceil((app.autoExport?.remainingMs || 0) / 1000)
+  const m = Math.floor(s / 60)
+  return `${m}:${String(s % 60).padStart(2, '0')}`
+})
+const autoBadgeTitle = computed(() => (app.autoExport?.pending
+  ? `黑名单已改动, 还有 ${autoLeft.value} 自动导出 —— 点一下立刻导`
+  : presetTitle.value))
+/** 角标: 排程中 = 点一下立刻导; 空闲 = 点开预设弹窗 */
+async function onAutoBadge() {
+  if (app.autoExport?.pending) { await app.flushAutoNow(); return }
+  showPresets.value = true
+}
+
 async function refreshPresetCount() {
   try {
     const r = await api.exportPresets()
     autoPresetCount.value = (r?.presets || []).filter((p) => p.auto && p.dir).length
   } catch { /* 取不到就不显示角标, 不影响主流程 */ }
+  // 顺带同步一次"待导出"状态 —— 可能是在别的窗口/上一轮排下的(见 app.pullAutoState)
+  void app.pullAutoState()
 }
 
 const feed = useImageFeed({ infinite: true, pageSize: 60 })
@@ -114,10 +136,8 @@ const feed = useImageFeed({ infinite: true, pageSize: 60 })
 const shownResults = computed(() => safety.filterItems(feed.results.value))
 const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boolean))
 
-// 换页 / 换一批 / 收藏筛选后就地同步, 免得光箱还拿着上一批的顺序
+// 换页 / 换一批后就地同步, 免得光箱还拿着上一批的顺序
 watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
-
-const favCount = computed(() => fav.count)
 
 /** 组装查询参数 —— 与后端 parseQuery 的字段名一一对应 */
 function buildQuery(offset = 0) {
@@ -134,7 +154,6 @@ function buildQuery(offset = 0) {
   }
   if (nameFilter.value.trim()) o.name = nameFilter.value.trim()
   if (sort.value === 'random') o.seed = rndSeed.value
-  if (fav.onlyFav) o.fav = fav.paths
   return o
 }
 
@@ -210,13 +229,15 @@ async function doExport(withPath) {
     params.strip_char = stripCharExport.value ? '1' : '0'
     params.strip_view = stripViewExport.value ? '1' : '0'
     params.safe_only = safeOnlyExport.value ? '1' : '0'
+    params.replace = replaceExport.value ? '1' : '0'
     const r = await api.exportSave(params)
     if (r?.canceled) { ui.toast('已取消导出', 'info'); return }
     if (r?.error) { ui.err('导出失败: ' + r.error); return }
     const stripNote = stripCharExport.value && r.stripped ? `(已剔 ${nfmt(r.stripped)} 个角色/系列)` : ''
     const viewNote = stripViewExport.value && r.viewStripped ? `(已剔 ${nfmt(r.viewStripped)} 个视角/机位)` : ''
     const safeNote = safeOnlyExport.value && r.safeStripped ? `(已剔 ${nfmt(r.safeStripped)} 个敏感tag)` : ''
-    ui.ok(`✅ 已导出 ${nfmt(r.count)} 行${stripNote}${viewNote}${safeNote} → ${r.path}`, 3200)
+    const repNote = replaceExport.value && r.replaced ? `(已替换 ${nfmt(r.replaced)} 个)` : ''
+    ui.ok(`✅ 已导出 ${nfmt(r.count)} 行${stripNote}${viewNote}${safeNote}${repNote} → ${r.path}`, 3200)
   } catch (e) {
     ui.err('导出失败: ' + e.message)
   } finally {
@@ -236,11 +257,11 @@ function pickExport(withPath) {
 /* ---------------- 收藏 ---------------- */
 /* 收藏按钮现在发整个 item —— tags 存进收藏记录当快照(收藏页要用),
    item 一起传进去是为了让收藏记录**顺便带上像素尺寸**(收藏页的网格要按真实
-   比例排版, 没尺寸就会把横图裁成竖条)。 */
+   比例排版, 没尺寸就会把横图裁成竖条)。
+   2026-10-01: 「只看收藏」模式已整个移除, 这里只剩 ★ 收藏本身。 */
 function toggleFav(item) {
   const added = fav.toggle(item?.path || item, item?.tags, item)
   ui.ok(added ? '★ 已收藏' : '已取消收藏', 'info', 1200)
-  if (fav.onlyFav) doSearch()
 }
 
 /* ---------------- 生命周期 ---------------- */
@@ -263,8 +284,7 @@ onMounted(initHome)
 // 数据换了(启动时"窗口先渲染、数据后到"，或菜单里「重新加载数据」) -> 重跑一次初始查询
 watch(() => app.epoch, (n) => { if (n) initHome() })
 
-// 收藏筛选 / 排序 / 每页数量变化 -> 重搜
-watch(() => fav.onlyFav, () => doSearch())
+// 排序 / 每页数量变化 -> 重搜
 watch(sort, (v) => { prefs.sortHome = v; doSearch() })
 // 打开预设弹窗时刷一下"自动 N"角标 —— 预设也可能是在别处(或上一轮)建的
 watch(showPresets, (v) => { if (v) refreshPresetCount() })
@@ -408,6 +428,13 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
               <div class="msep" />
               <div class="mopt">
                 <TvCheckbox
+                  v-model="replaceExport"
+                  label="导出时应用替换规则"
+                  title="导出结果先过一遍替换规则(🔁 替换规则里配的那些); 不想要替换后的版本就关掉, 导出原始标签"
+                />
+              </div>
+              <div class="mopt">
+                <TvCheckbox
                   v-model="stripCharExport"
                   label="导出剔除角色/系列标签"
                   title="导出结果里去掉角色标签(含 higuchi_madoka 这类无括号写法, 由角色库识别)和裸系列标签; 生成提示词通常需要"
@@ -445,7 +472,13 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
               @click="showReplace = true"
             >🔁 替换规则</TvButton>
             <TvButton variant="ghost" size="sm" :title="presetTitle" @click="showPresets = true">📤 预设导出</TvButton>
-            <span v-if="autoPresetCount" class="badge" :title="presetTitle">自动 {{ autoPresetCount }}</span>
+            <button
+              v-if="autoPresetCount"
+              class="badge"
+              :class="{ live: app.autoExport?.pending }"
+              :title="autoBadgeTitle"
+              @click="onAutoBadge"
+            >{{ app.autoExport?.pending ? `待导出 ${autoLeft}` : `自动 ${autoPresetCount}` }}</button>
           </div>
         </div>
 
@@ -457,7 +490,6 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
     <section class="panel result">
       <div class="result-head">
         <b>{{ nfmt(feed.total.value) }}</b><span class="muted">条匹配</span>
-        <span v-if="fav.onlyFav" class="fav-on" title="只看收藏模式">📌 只看收藏({{ favCount }})</span>
         <TvInput
           v-model="nameFilter"
           class="name-input"
@@ -592,6 +624,13 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
   background: var(--accent-soft); color: var(--accent);
   font-size: 11px; white-space: nowrap;
 }
+/* 角标改成可点了(待导出时点一下 = 立刻导) —— button 的默认样式要清掉 */
+.badge {
+  border: 0; font-family: inherit; line-height: inherit; cursor: pointer;
+}
+.badge:hover { filter: brightness(1.15); }
+/* 排程中: 用"待办"色(不是报错的-red), 一眼看出还在等 */
+.badge.live { background: var(--warn-soft); color: var(--warn); }
 
 .result {
   flex: 1; min-width: 0;
@@ -606,11 +645,6 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 }
 .result-head b { color: var(--accent); font-size: 16px; }
 .name-input { width: 240px; flex: 0 1 auto; margin-left: 6px; }
-.fav-on {
-  color: var(--fav); font-size: 12px;
-  border: 1px solid var(--fav); border-radius: var(--r-pill);
-  padding: 1px 8px;
-}
 .grid-wrap { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 4px; }
 
 .shuffle {

@@ -37,6 +37,7 @@ import { useImageCtxMenu } from '@/composables/useImageCtxMenu.js'
 import { useTrash } from '@/composables/useTrash.js'
 import { useCharCart } from '@/composables/useCharCart.js'
 import TvCopySplit from '../tag/TvCopySplit.vue'
+import TvQuickMoveBar from './TvQuickMoveBar.vue'
 import { fileUrl } from '@/utils/api.js'
 
 const lb = useLightboxStore()
@@ -235,6 +236,10 @@ function preheat() {
               @click="lb.toggleFav()"
             >{{ lb.isFav ? '★ 已收藏' : '☆ 收藏' }}</TvButton>
           </div>
+
+          <!-- 快速移动按钮条(2026-09-29): 绑定的路径一排小按钮, 点一下移走当前图并自动前进;
+               数字键 1~9 同样触发。移动出口与右键「移动到」同一条(tv:moved 广播)。 -->
+          <TvQuickMoveBar :path="lb.path" />
 
           <div class="lb-path" :title="lb.path">{{ lb.path }}</div>
 

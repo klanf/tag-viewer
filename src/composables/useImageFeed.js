@@ -12,7 +12,7 @@
  *
  * 内部只有一份 offset / pageSize / results 状态, 页面不用再自己算页码。
  */
-import { ref, computed, shallowRef } from 'vue'
+import { ref, computed, shallowRef, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '@/utils/api.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 
@@ -36,8 +36,48 @@ export function useImageFeed(opts = {}) {
   // 当前查询(除 offset/limit 外的一切)
   let query = {}
 
+  /* ---------------- 「图没了」-> 从列表里剔除 ----------------
+   * 删到回收站(useTrash, 广播 'tv:trashed')与右键菜单「移动到」(广播 'tv:moved')
+   * 都是**全局事件**: 谁要联动谁自己订阅。扫描页(自己一份列表)订阅了, 光箱(store)
+   * 也订阅了, 但看板 / 标签图片 / 系列页的图片流**没人订阅** ——
+   * 于是"文件真搬走了, 界面上那张还杵着"(2026-09-29 用户报)。
+   *
+   * 修在这一层: 上面三个视图都走 useImageFeed, 一次全覆盖; 以后新视图只要用
+   * useImageFeed 就自带这个联动。
+   *
+   * ⚠️ **不走 useImageFeed 的列表视图要自己订阅这两个事件** —— 收藏页就是自己处理的,
+   *    而且语义不同: 收藏**记录保留**、卡片标灰"文件已不在", 不是从列表里剔除。
+   */
+  function dropGone(paths) {
+    const gone = new Set(Array.isArray(paths) ? paths : [])
+    if (!gone.size || !results.value.length) return 0
+    let n = 0
+    for (const r of results.value) if (gone.has(r.path)) n++
+    if (!n) return 0
+    results.value = results.value.filter((r) => !gone.has(r.path))
+    /* 计数只减**真的从本列表里拿掉**的张数: 若减 gone.size, 删掉的图不在当前筛选里时
+       会越减越少, 出现"已加载 60 / 共 57"这种荒唐值。少减的那几次数不清会让 M 略偏大,
+       下次 search 自然修正 —— 宁可偏大也不能偏成负数。 */
+    total.value = Math.max(0, total.value - n)
+    return n
+  }
+  const onGone = (e) => dropGone(e?.detail?.paths)
+  onMounted(() => {
+    window.addEventListener('tv:trashed', onGone)
+    window.addEventListener('tv:moved', onGone)
+  })
+  onBeforeUnmount(() => {
+    window.removeEventListener('tv:trashed', onGone)
+    window.removeEventListener('tv:moved', onGone)
+  })
+
+  /* 从后端**累计**取回多少条 —— 与"本地剔掉了几张"无关(见下面的 dropGone):
+     loadMore 的下一页起点与 hasMore 的判据都用它, 不用 results.length。
+     少了这个, 本地剔掉几张之后下一页起点会**往回退**, 重复拉已经看过的图。 */
+  const fetched = ref(0)
+
   const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
-  const hasMore = computed(() => offset.value + results.value.length < total.value)
+  const hasMore = computed(() => offset.value + fetched.value < total.value)
 
   function params(off) {
     return {
@@ -59,12 +99,14 @@ export function useImageFeed(opts = {}) {
       results.value = d.results || []
       total.value = d.total || 0
       unsafe.value = d.unsafe || { core: 0, edge: 0 }
+      fetched.value = results.value.length
       loadedOnce.value = true
     } catch (e) {
       error.value = e.message
       results.value = []
       total.value = 0
       unsafe.value = { core: 0, edge: 0 }
+      fetched.value = 0
     } finally {
       loading.value = false
     }
@@ -88,6 +130,7 @@ export function useImageFeed(opts = {}) {
       results.value = d.results || []
       total.value = d.total || 0
       unsafe.value = d.unsafe || { core: 0, edge: 0 }
+      fetched.value = results.value.length
     } catch (e) {
       error.value = e.message
     } finally {
@@ -99,11 +142,12 @@ export function useImageFeed(opts = {}) {
   async function loadMore() {
     if (loading.value) return
     if (!hasMore.value) return
-    const next = offset.value + results.value.length
+    const next = offset.value + fetched.value
     loading.value = true
     try {
       const d = await api.search(params(next))
       results.value = [...results.value, ...(d.results || [])]
+      fetched.value += (d.results || []).length
       total.value = d.total || 0
       /* 追加页也会带这个数 —— 它与 offset 无关, 值跟第一页一样, 所以数字不会跳 */
       unsafe.value = d.unsafe || unsafe.value
@@ -124,6 +168,7 @@ export function useImageFeed(opts = {}) {
   function reset() {
     results.value = []
     total.value = 0
+    fetched.value = 0
     unsafe.value = { core: 0, edge: 0 }
     offset.value = 0
     page.value = 1

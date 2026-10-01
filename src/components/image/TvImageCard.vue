@@ -154,8 +154,8 @@ function onCtx(e) {
       @click.stop="emit('toggle-fav', item)"
     >{{ favorited ? '★' : '☆' }}</button>
 
-    <span v-if="selectable" class="ckbox" @click.stop="emit('toggle-select', item)">
-      <input type="checkbox" :checked="selected" @click.stop="emit('toggle-select', item)">
+    <span v-if="selectable" class="ckbox" @click.stop="emit('toggle-select', item, $event)">
+      <input type="checkbox" :checked="selected" @click.stop="emit('toggle-select', item, $event)">
     </span>
 
     <!-- 失效收藏不请求缩略图: 路径已失效, 请求必然 404(还会打红 e2e 的控制台总闸) -->

@@ -18,6 +18,21 @@ export function ms(v) {
   return n < 1000 ? `${n} ms` : `${(n / 1000).toFixed(2)} s`
 }
 
+/**
+ * 时长(给人看的) —— 用于「多久后自动导出」这类文案。
+ * 1500 -> "1.5 秒", 60000 -> "1 分钟", 180000 -> "3 分钟"
+ * (与上面的 ms() 分工不同: ms() 是量耗时用的 "12.34 s", 这个是人话)
+ */
+export function dur(v) {
+  const n = Math.max(0, Number(v) || 0)
+  if (n < 60000) {
+    const s = n / 1000
+    return `${Number.isInteger(s) ? s : s.toFixed(1)} 秒`
+  }
+  const m = n / 60000
+  return `${Number.isInteger(m) ? m : m.toFixed(1)} 分钟`
+}
+
 export function ts(v) {
   const d = new Date(Number(v) || 0)
   const p = (x) => String(x).padStart(2, '0')

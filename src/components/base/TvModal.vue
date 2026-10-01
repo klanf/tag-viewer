@@ -15,6 +15,9 @@ const props = defineProps({
   maskClosable: { type: Boolean, default: true },
   /** 锁滚动: 大弹窗列表内滚时, 阻止滚轮穿透到页面 */
   lockScroll: { type: Boolean, default: true },
+  /* 遮罩层级。默认 250 低于光箱(300) —— 在光箱里开的弹窗必须传更高的值,
+     否则整个弹窗被压在光箱后面, 用户点到的全是光箱的「点空白关闭」(2026-10-01 用户实测踩中)。 */
+  zIndex: { type: Number, default: 250 },
 })
 const emit = defineEmits(['update:modelValue', 'close'])
 
@@ -45,7 +48,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
 <template>
   <Teleport to="body">
     <Transition name="tv-modal">
-      <div v-if="modelValue" class="mask" @click="onMask" @wheel.stop>
+      <div v-if="modelValue" class="mask" :style="{ zIndex }" @click="onMask" @wheel.stop>
         <div :class="['box', `s-${size}`]" role="dialog" aria-modal="true">
           <div v-if="title || $slots.header" class="head">
             <slot name="header"><b>{{ title }}</b></slot>

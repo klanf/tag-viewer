@@ -115,6 +115,8 @@ export const api = {
   // 标签
   suggest: (q) => call('suggest:get', q),
   allTags: (q) => call('tags:all', q),
+  tagsEditPreview: (body) => call('tags:edit:preview', body),
+  tagsEditApply: (body) => call('tags:edit:apply', body),
   tagsForPath: (path) => call('tags:forPath', { path }),
   lightbox: (path) => call('lightbox:data', { path }),
   translate: (tags) => call('translate:get', { q: tags.join(',') }),
@@ -135,6 +137,15 @@ export const api = {
   cartDelete: (name) => call('cart:delete', { name }),
   cartRename: (oldName, newName) => call('cart:rename', { old_name: oldName, new_name: newName }),
 
+  // 购物车自动导出(单预设) —— 购物车一变就按延迟自动覆盖导一份到指定目录。
+  // changed 由 useCartStore 的 watch 调用(六个购物车入口共用这一条上报)。
+  // 目录选择复用 pickExportDir: 弹的本来就是同一个「选自动导出目标文件夹」。
+  cartChanged: (tags) => call('cart:changed', { tags }),
+  cartPreset: () => call('cart:preset:get'),
+  cartPresetSave: (patch) => call('cart:preset:save', patch),
+  cartPresetRun: (tags) => call('cart:preset:run', { tags }),
+  cartPresetFlushNow: () => call('cart:preset:flushNow'),
+
   // 导出
   exportPreview: (q) => call('export:preview', q),
   exportSave: (q) => call('export:save', q),
@@ -148,6 +159,13 @@ export const api = {
   exportPresetRun: (id) => call('export:preset:run', { id }),
   exportPresetFlush: () => call('export:preset:flush'),
   pickExportDir: () => call('export:preset:pickDir'),
+  // 延迟可配 + 待导出倒计时(2026-09-24):
+  //   state    -> {state, pending, dueAt, remainingMs, autoCount, delayMs, delayOptions}
+  //   delay    -> 改全局延迟(立刻生效, 正在等的那批会重排)
+  //   flushNow -> 跳过等待立刻导(首页角标点一下; 没有排程就是空操作)
+  exportPresetState: () => call('export:preset:state'),
+  exportPresetDelay: (delayMs) => call('export:preset:delay', { delayMs }),
+  exportPresetFlushNow: () => call('export:preset:flushNow'),
 
   // 扫描
   pickFolder: (opts) => call('scan:pickFolder', opts),
@@ -174,6 +192,7 @@ export const api = {
   // 「移动到」预设文件夹(主进程 settings.json, 与右键菜单同一份)
   quickFolders: () => call('app:quickFolders'),
   addQuickFolder: (path) => call('app:quickFolders:add', { path }),
+  saveQuickFolders: (folders) => call('app:quickFolders:set', { folders }),
 
   // 文件夹登记表 —— 扫描夹与看板来源**共用一份**(真源是 tags.db 的 folders 表)。
   // folders(opts) 的 usage: 'scan'(默认, 扫描页) / 'source'(看板来源) / 'all'(全部登记过的)

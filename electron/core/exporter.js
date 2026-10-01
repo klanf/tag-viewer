@@ -133,12 +133,28 @@ export function buildExport(raw = {}) {
   }
 }
 
-/** 购物车导出: 角色标签 -> wildcard 格式(转义括号、下划线转空格) */
+/**
+ * 购物车导出: 角色标签 -> wildcard 格式(转义括号、下划线转空格)。
+ *
+ * 2026-10-01 支持**条目级附加标签**: 条目可以是字符串, 也可以是
+ * { tag, extra: ['closed_eyes', ...] } —— extra 逐个拼在同一行后面
+ * (comma 分隔), 这样「哥伦比亚」导出就是 `columbina (genshin impact), closed eyes`。
+ * 放同一行而不是单独一行, 是因为 wildcard 是**整行随机抽一条**, 单独一行会抽到
+ * 「没有角色只有 closed eyes」的空 prompt。
+ */
+function escWildcard(t, spaces) {
+  let s = String(t).replace(/\(/g, '\\(').replace(/\)/g, '\\)')
+  if (spaces) s = s.replace(/_/g, ' ')
+  return s
+}
+
 export function buildCartExport(tags, { spaces = true } = {}) {
-  const lines = tags.map((t) => {
-    let s = t.replace(/\(/g, '\\(').replace(/\)/g, '\\)')
-    if (spaces) s = s.replace(/_/g, ' ')
-    return s
+  const entries = (tags || []).map((t) =>
+    (t && typeof t === 'object') ? t : { tag: t, extra: [] })
+  const lines = entries.map((e) => {
+    const extras = Array.isArray(e.extra) ? e.extra.filter((x) => String(x || '').trim()) : []
+    return [escWildcard(e.tag, spaces),
+      ...extras.map((x) => escWildcard(x, spaces))].join(', ')
   })
   return {
     text: lines.join('\n') + (lines.length ? '\n' : ''),

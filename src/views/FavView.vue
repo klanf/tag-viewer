@@ -14,7 +14,7 @@
  *   - 文件确实不在的标灰"文件已不在"(卡片读 item._missing), 记录保留
  *     (用户拍板: 删除/移动都不清收藏)
  */
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import TvImageGrid from '@/components/image/TvImageGrid.vue'
 import { useFavStore } from '@/stores/useFavStore.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
@@ -66,6 +66,25 @@ function toggleFav(item) {
   fav.toggle(item.path)
 }
 
+/**
+ * 删到回收站(core/useTrash 广播 'tv:trashed')的图, 收藏**记录保留**但卡片要标灰
+ * "文件已不在" —— 判据与下面 onMounted 里 resolveMissing 的那套完全一致。
+ *
+ * 为什么要在这里订阅: 本页在 keep-alive 白名单里(App.vue), onMounted **只跑一次**,
+ * 不能指望"下次进页面再查"。别的页面(看板/系列/扫描)删掉的收藏图, 回到本页若不订阅
+ * 就还是一张彩色卡片(点开光箱空白)。
+ *
+ * 移动**不在这里处理**: 右键菜单那条路已经调了 fav.onMoved 把记录改写到新路径,
+ * 列表重算后自动指向新位置; 旧路径留下的"标灰"标记也不会粘到新路径上。
+ */
+function onFavTrashed(e) {
+  const gone = e?.detail?.paths
+  if (!Array.isArray(gone) || !gone.length) return
+  const next = new Set(missingSet.value)
+  for (const p of gone) if (p) next.add(p)
+  missingSet.value = next
+}
+
 onMounted(async () => {
   if (!fav.list.length) { ready.value = true; return }
   const updates = await fav.resolveMissing()
@@ -81,6 +100,11 @@ onMounted(async () => {
   if (dimmed) ui.ok(`📐 已量好 ${dimmed} 张收藏图的尺寸(横图不再被裁成竖条)`, 'info', 2600)
   ready.value = true
 })
+
+/* 删到回收站 -> 本页卡片标灰。单独挂一个 onMounted 而不是塞进上面那个 async 的:
+   上面那个在"收藏为空"时会提前 return, 订阅必须在任何情况下都挂上。 */
+onMounted(() => window.addEventListener('tv:trashed', onFavTrashed))
+onBeforeUnmount(() => window.removeEventListener('tv:trashed', onFavTrashed))
 </script>
 
 <template>
@@ -98,26 +122,37 @@ onMounted(async () => {
       <TvSafetyToggle :counts="favHits" />
     </header>
 
-    <TvImageGrid
-      :results="ready ? displayList : []"
-      :loading="!ready"
-      :loaded-once="ready"
-      :infinite="false"
-      favable
-      :is-fav="fav.isFav"
-      footnote="name"
-      empty-text="还没有收藏 —— 在图片或光箱里点 ☆ 收藏, 扫描页收藏的也会出现在这里"
-      @open="openItem"
-      @toggle-fav="toggleFav"
-      @hover="({ text, event }) => ui.showTip(text, event)"
-      @move="ui.moveTip"
-      @leave="ui.hideTip"
-    />
+    <!-- 网格套一层独立滚动容器(与看板 .grid-wrap 同款):
+         .stage 是 overflow:hidden 的 flex 容器, 根节点不自己滚的话内容超高就被裁掉,
+         表现就是"收藏页滚不下去"。 -->
+    <div class="grid-wrap">
+      <TvImageGrid
+        :results="ready ? displayList : []"
+        :loading="!ready"
+        :loaded-once="ready"
+        :infinite="false"
+        favable
+        :is-fav="fav.isFav"
+        footnote="name"
+        empty-text="还没有收藏 —— 在图片或光箱里点 ☆ 收藏, 扫描页收藏的也会出现在这里"
+        @open="openItem"
+        @toggle-fav="toggleFav"
+        @hover="({ text, event }) => ui.showTip(text, event)"
+        @move="ui.moveTip"
+        @leave="ui.hideTip"
+      />
+    </div>
   </div>
 </template>
 
 <style scoped>
-.favs-view { padding: 14px 18px 24px; }
+/* 根节点撑满 stage 并锁滚动(滚动交给 .grid-wrap), 与看板/扫描页同构 */
+.favs-view {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  padding: 14px 18px 0;
+}
 .bar {
   display: flex; align-items: center; gap: 14px;
   margin-bottom: 12px;
@@ -140,4 +175,13 @@ onMounted(async () => {
   font-size: 12px;
 }
 .filter:focus { outline: none; border-color: var(--accent); }
+
+/* 独立滚动容器: header 固定在上面, 网格自己滚(与看板 .grid-wrap 同款) */
+.grid-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 24px;
+  padding-right: 4px;
+}
 </style>

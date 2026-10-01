@@ -133,16 +133,19 @@ const rawItems = computed(() => result.value?.items || [])
  *  (扫描页的图是库外图, 没有 feed 可用, 只能前端按标签现算 —— unsafeOf 里有记忆。) */
 const scanHits = computed(() => safety.countHits(rawItems.value))
 
-/* ---------------- 标签筛选 ----------------
+/* ---------------- 筛选(标签 + 文件名) ----------------
  * 扫描页的图是**库外图片**(标签从 PNG 元数据现场解析), 所以筛选只能在前端做,
  * 而且筛选条件本身也得来自这一批图 —— 搜索框的补全用当前文件夹的标签池,
  * **不查标签库**(扫描夹特有的标签在库里可能根本不存在, 查了也补不出来)。
  *
  * 匹配规则: 空格分隔多个词 = AND(每个词都得命中)。
- * 单个词用**子串**匹配而非精确 —— 扫描出的角色标签带括号后缀,
- * 输入 hoshino 要能命中 hoshino_(blue_archive)。 */
-const tagKw = ref('')
-const tagTokens = computed(() => tagKw.value.trim().toLowerCase().split(/\s+/).filter(Boolean))
+ * 单个词**两个地方都试**: 标签 或 文件名(含扩展名, 大小写不敏感), 命中其一即算。
+ * 用**子串**匹配而非精确 —— 扫描出的角色标签带括号后缀,
+ * 输入 hoshino 要能命中 hoshino_(blue_archive); 文件名同理(输入 a3 命中 a3.png)。
+ * 文件名这一路是库外图的地盘: 扫描夹里常有一批**裸图**(PNG 里没提示词, 标签也
+ * 反推不出来), 想在其中定位某一张, 唯一抓手就是文件名。 */
+const filterKw = ref('')
+const filterTokens = computed(() => filterKw.value.trim().toLowerCase().split(/\s+/).filter(Boolean))
 
 /** 当前文件夹出现过的标签: 计数降序 + 中文(给补全用), 只在打开文件夹后才有内容 */
 const scanTagPool = computed(() => {
@@ -157,11 +160,12 @@ const scanTagPool = computed(() => {
 
 const sortedItems = computed(() => {
   let arr = [...rawItems.value]
-  const tk = tagTokens.value
+  const tk = filterTokens.value
   if (tk.length) {
     arr = arr.filter((it) => {
       const ts = it.tags || []
-      return tk.every((w) => ts.some((t) => t.toLowerCase().includes(w)))
+      const nm = (it.name || '').toLowerCase()
+      return tk.every((w) => nm.includes(w) || ts.some((t) => t.toLowerCase().includes(w)))
     })
   }
   arr.sort(cmpOf(sortBy.value))
@@ -309,7 +313,7 @@ async function openFolder(f, { refresh = false } = {}) {  if (!f.exists) { ui.wa
   error.value = ''
   if (refresh) result.value = null
   page.value = 1
-  tagKw.value = ''      // 换了文件夹就是换了一批标签, 上一次的筛选词没有意义了
+  filterKw.value = ''   // 换了文件夹就是换了一批图, 上一次的筛选词没有意义了
   selectMode.value = false   // 换文件夹也换了一批图, 选择集没有延续的意义
   clearSel()
   try {
@@ -359,13 +363,27 @@ function toggleSelectMode() {
   selectMode.value = !selectMode.value
   if (!selectMode.value) selected.value = new Set()
   lastSelIdx = -1
-  ui.toast(selectMode.value ? '☑ 选择模式: 点击卡片勾选, Shift 点选是区间, Ctrl+A 全选' : '已退出选择模式', 'info', 1800)
+  ui.toast(selectMode.value ? '☑ 选择模式: 点击勾选, Shift 区间, Ctrl+A 全选, Esc 退出' : '已退出选择模式', 'info', 1800)
 }
 
-function toggleSelect(it) {
+function toggleSelect(it, ev) {
+  const idx = sortedItems.value.findIndex((x) => x.path === it.path)
+  if (ev?.shiftKey && lastSelIdx >= 0 && idx >= 0) {
+    rangeTo(idx)
+  } else {
+    const s = new Set(selected.value)
+    if (s.has(it.path)) s.delete(it.path)
+    else s.add(it.path)
+    selected.value = s
+    lastSelIdx = idx
+  }
+}
+
+/** 锚点 -> idx 的区间全部并入选中集(按当前排序; 卡片主体与勾选框共用) */
+function rangeTo(idx) {
+  const [a, b] = lastSelIdx < idx ? [lastSelIdx, idx] : [idx, lastSelIdx]
   const s = new Set(selected.value)
-  if (s.has(it.path)) s.delete(it.path)
-  else s.add(it.path)
+  for (let i = a; i <= b; i++) s.add(sortedItems.value[i].path)
   selected.value = s
 }
 
@@ -385,25 +403,15 @@ function clearSel() {
 }
 
 /** 卡片点击的唯一入口( TvImageCard @open 把原生事件也带出来了 ):
- *  选择模式里点击=勾选 / Shift=区间; 浏览模式里 Ctrl=勾选并顺手进入选择模式。 */
+ *  选择模式里点击=勾选(Shift=区间) / 浏览模式里 Ctrl=勾选并顺手进入选择模式。 */
 function onCardClick(it, ev) {
-  const idx = sortedItems.value.findIndex((x) => x.path === it.path)
   if (selectMode.value) {
-    if (ev?.shiftKey && lastSelIdx >= 0 && idx >= 0) {
-      const [a, b] = lastSelIdx < idx ? [lastSelIdx, idx] : [idx, lastSelIdx]
-      const s = new Set(selected.value)
-      for (let i = a; i <= b; i++) s.add(sortedItems.value[i].path)
-      selected.value = s
-    } else {
-      toggleSelect(it)
-      lastSelIdx = idx
-    }
+    toggleSelect(it, ev)
     return
   }
   if (ev && (ev.ctrlKey || ev.metaKey)) {
     selectMode.value = true
-    toggleSelect(it)
-    lastSelIdx = idx
+    toggleSelect(it, ev)
     return
   }
   openImage(it)
@@ -474,7 +482,7 @@ function onScanKey(e) {
 
 function gotoPage(p) {
   page.value = Math.max(1, Math.min(p, totalPages.value))
-  document.querySelector('.scan-body')?.scrollTo({ top: 0 })
+  document.querySelector('.scan-body .result-scroll')?.scrollTo({ top: 0 })
 }
 
 const pageOptions = [60, 120, 240, 600]
@@ -491,12 +499,12 @@ function loadMore() {
 watch([sortBy, pageSize], () => {
   prefs.sortScan = sortBy.value
   page.value = 1
-  document.querySelector('.result')?.scrollTo({ top: 0 })
+  document.querySelector('.result-scroll')?.scrollTo({ top: 0 })
 })
 /* 改了筛选词也要回第一页并滚到顶 —— 否则会停在第 5 页对着一个空网格 */
-watch(tagKw, () => {
+watch(filterKw, () => {
   page.value = 1
-  document.querySelector('.scan-body')?.scrollTo({ top: 0 })
+  document.querySelector('.scan-body .result-scroll')?.scrollTo({ top: 0 })
 })
 watch(sentinel, (el) => {
   gridOb?.disconnect()
@@ -547,7 +555,7 @@ useFloatBack(() => {
   if (route.name !== 'scan') return false
   if (level.value !== 'folder') return false
   // 正在筛选时, 第一次按返回只清筛选(网格恢复全量), 再按一次才回文件夹列表
-  if (tagKw.value) { tagKw.value = ''; return true }
+  if (filterKw.value) { filterKw.value = ''; return true }
   backToList()
   return true
 })
@@ -583,7 +591,7 @@ onBeforeUnmount(() => {
  * 被 KeepAlive 摘离 document, querySelector 会扑空。 */
 let savedScroll = { list: 0, folder: 0 }
 onBeforeRouteLeave(() => {
-  const box = document.querySelector(level.value === 'folder' ? '.scan-body' : '.list-panel')
+  const box = document.querySelector(level.value === 'folder' ? '.scan-body .result-scroll' : '.list-panel')
   if (box) savedScroll[level.value] = box.scrollTop
 })
 /* 首次激活是紧跟在 onMounted 之后的(KeepAlive 组件的正常行为) —— 那时列表刚加载过,
@@ -591,7 +599,7 @@ onBeforeRouteLeave(() => {
 let firstActivate = true
 onActivated(() => {
   nextTick(() => {
-    const sel = level.value === 'folder' ? '.scan-body' : '.list-panel'
+    const sel = level.value === 'folder' ? '.scan-body .result-scroll' : '.list-panel'
     const box = document.querySelector(sel)
     const top = savedScroll[level.value] || 0
     if (box && top) box.scrollTo({ top })
@@ -734,14 +742,41 @@ onActivated(() => {
         </div>
         <TvState v-else-if="!opening && !rawItems.length" state="empty" text="没有可显示的图片" />
         <template v-else>
+          <!-- 批量操作条: 选择模式下出现(置顶常驻, 滚动也看得见) -->
+          <div v-if="selectMode" class="batch-bar" data-test="scan-batch-bar">
+            <span class="bcnt">已选 <b data-test="scan-sel-count">{{ selected.size }}</b> 张</span>
+            <TvButton size="sm" variant="ghost" data-test="scan-sel-all" @click="selectAll">全选</TvButton>
+            <TvButton size="sm" variant="ghost" data-test="scan-sel-invert" @click="invertSel">反选</TvButton>
+            <TvButton size="sm" variant="ghost" :disabled="!selected.size" data-test="scan-sel-clear" @click="clearSel">清空</TvButton>
+            <TvButton size="sm" variant="ghost" data-test="scan-batch-exit" title="退出选择模式(同时清空已选)" @click="toggleSelectMode">✕ 退出</TvButton>
+            <span class="spacer" />
+            <TvButton
+              size="sm"
+              variant="primary"
+              :disabled="!selected.size"
+              :loading="moving"
+              data-test="scan-batch-move"
+              @click="openMove"
+            >📤 移动到…</TvButton>
+            <TvButton
+              size="sm"
+              variant="danger"
+              :disabled="!selected.size"
+              data-test="scan-batch-trash"
+              @click="batchDelete"
+            >🗑 删除</TvButton>
+          </div>
+
+          <!-- 滚动只发生在这一层: 工具条在滚动区外, 天生常驻顶上(无缝, 不用 sticky) -->
+          <div class="result-scroll">
           <div class="pager-bar">
-            <!-- 按标签筛选: 复用首页/标签页那个带补全的搜索框, 但补全走**本夹的标签池**
-                 (扫描图是库外的, 它们的标签在标签库里可能根本不存在)。
-                 历史也走**自己那份键**: 这里是"筛过的标签", 首页那边是"敲过的查询",
+            <!-- 按标签 / 文件名筛选: 复用首页/标签页那个带补全的搜索框, 但补全走**本夹的标签池**
+                 (扫描图是库外的, 它们的标签在标签库里可能根本不存在; 文件名压根不在标签库里)。
+                 历史也走**自己那份键**: 这里是"筛过的词", 首页那边是"敲过的查询",
                  混着存两边都会变脏(见 utils/lskey.js 的 searchHistoryScan)。 -->
             <div class="tag-filter">
               <TvTagSuggestInput
-                v-model="tagKw"
+                v-model="filterKw"
                 size="sm"
                 :local-tags="scanTagPool"
                 :limit="14"
@@ -749,12 +784,13 @@ onActivated(() => {
                 remember
                 :history-key="SCAN_HIST_KEY"
                 history-label="扫描页筛选历史"
-                placeholder="🔍 按标签筛选(空格分隔多个)"
+                placeholder="🔍 按标签 / 文件名筛选(空格分隔多个)"
+                empty-text="没有匹配的标签(文件名仍会匹配)"
               />
             </div>
-            <TvButton v-if="tagKw" size="sm" variant="ghost" title="清除筛选" @click="tagKw = ''">✕ 清除</TvButton>
+            <TvButton v-if="filterKw" size="sm" variant="ghost" title="清除筛选" @click="filterKw = ''">✕ 清除</TvButton>
             <span class="hint">
-              <template v-if="tagTokens.length">筛选出 <b class="hit">{{ nfmt(sortedItems.length) }}</b> / 共 {{ nfmt(rawItems.length) }} 张</template>
+              <template v-if="filterTokens.length">筛选出 <b class="hit">{{ nfmt(sortedItems.length) }}</b> / 共 {{ nfmt(rawItems.length) }} 张</template>
               <template v-else>已加载 {{ nfmt(pagedItems.length) }} / 共 {{ nfmt(sortedItems.length) }} 张 · 滚到底自动加载</template>
             </span>
             <span class="spacer" />
@@ -779,34 +815,11 @@ onActivated(() => {
             <TvButton size="sm" variant="ghost" :disabled="page >= totalPages" @click="gotoPage(totalPages)">⏭</TvButton>
           </div>
 
-          <!-- 批量操作条: 选择模式下出现(置顶常驻, 滚动也看得见) -->
-          <div v-if="selectMode" class="batch-bar" data-test="scan-batch-bar">
-            <span class="bcnt">已选 <b data-test="scan-sel-count">{{ selected.size }}</b> 张</span>
-            <TvButton size="sm" variant="ghost" data-test="scan-sel-all" @click="selectAll">全选</TvButton>
-            <TvButton size="sm" variant="ghost" data-test="scan-sel-invert" @click="invertSel">反选</TvButton>
-            <TvButton size="sm" variant="ghost" :disabled="!selected.size" data-test="scan-sel-clear" @click="clearSel">清空</TvButton>
-            <span class="spacer" />
-            <TvButton
-              size="sm"
-              variant="primary"
-              :disabled="!selected.size"
-              :loading="moving"
-              data-test="scan-batch-move"
-              @click="openMove"
-            >📤 移动到…</TvButton>
-            <TvButton
-              size="sm"
-              variant="danger"
-              :disabled="!selected.size"
-              data-test="scan-batch-trash"
-              @click="batchDelete"
-            >🗑 删除</TvButton>
-          </div>
 
           <TvState
             v-if="!sortedItems.length"
             state="empty"
-            :text="`这个文件夹里没有图片匹配「${tagKw.trim()}」`"
+            :text="`这个文件夹里没有匹配「${filterKw.trim()}」的图片(标签或文件名)`"
           />
 
           <div v-else ref="rowsEl" class="grid imgs jrows">
@@ -841,8 +854,10 @@ onActivated(() => {
           <div v-if="page < totalPages" ref="sentinel" class="load-sentinel">
             <span class="hint">加载中...</span>
           </div>
+          </div>
         </template>
       </div>
+
 
       <MoveTargetModal
         v-model="moveOpen"
@@ -893,7 +908,9 @@ onActivated(() => {
 .spacer { flex: 1 1 auto; }
 
 .list-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; }
-.result { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; }
+.result { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 14px; display: flex; flex-direction: column; }
+/* 滚动层: 工具条在这层外面, 常驻顶上 */
+.result-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 
 .pager-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .pager-bar .hint { color: var(--muted); font-size: 12px; }
@@ -901,15 +918,19 @@ onActivated(() => {
 .pager-bar .tag-filter { flex: 1 1 300px; max-width: 360px; margin-right: 4px; }
 .pager-bar .hit { color: var(--accent); font-size: 13px; }
 
-/* 批量操作条(选择模式) */
+/* 批量操作条(选择模式) —— 放在滚动区**外**的结构性常驻: .result 是不滚的 flex 列,
+   滚动只发生在 .result-scroll 里 —— 工具条天生钉在顶上, 连 sticky 都不用
+   (sticky 在带 padding 的滚动容器里钉住后会露出一条缝, 10-01 用户截图实锤, 弃用)。 */
 .batch-bar {
+  flex: 0 0 auto;
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  margin-bottom: 12px; padding: 7px 10px;
+  margin: 0 0 12px; padding: 7px 10px;
   border-radius: var(--r-sm); background: var(--panel3);
   border: 1px solid var(--accent-soft, transparent);
 }
 .batch-bar .bcnt { font-size: 12px; color: var(--muted); margin-right: 4px; }
 .batch-bar .bcnt b { color: var(--accent); font-size: 14px; }
+
 .load-sentinel { display: flex; justify-content: center; padding: 18px 0; }
 
 /* 扫描元数据进度条(opening 期间, worker 解析进度) */

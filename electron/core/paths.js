@@ -201,6 +201,8 @@ export const DATA_ROUTE = Object.freeze({
   'cart_history.json': { kind: 'user' },
   // 导出预设(含目标目录这类本机路径) -> user/export_presets.json
   'export_presets.json': { kind: 'user' },
+  // 购物车自动导出预设(单份, 同样含目标目录这类本机路径) -> user/cart_preset.json
+  'cart_preset.json': { kind: 'user' },
   // 登记表: 真源是 tags.db 的 folders 表, 这份 json 降级为「导出备份 + 首次导入源」
   'scan_folders.json': { kind: 'user', as: 'folders.json' },
   // U 规则: 导出词表

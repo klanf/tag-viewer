@@ -128,12 +128,26 @@ const VIEW_NAME = 'export_view_tags.txt'
  * 默认词表: 《随机机位交接文档》(2026-09-23) 第 3 节 —— bsk 相机控制(节点 405)
  * 产出的全部分档 tag。提示词里写的空格形态(from behind)在库里是下划线形态,
  * 匹配时两侧都试(isViewFast)。`left` 档输出的 tag 是 "from right", 不是笔误。
+ *
+ * 额外补 `from_side`: 不在文档第 3 节里(插件只输出 from_left/from_right), 但
+ * **WD14 反推自己会写 from_side**(实测库里 2,834 张), 且对端把背景池里的
+ * `from side` 也一并当视角词删了 → 两侧口径对齐, 故收进种子。
+ * 其余实测 0 张的条目(from_front / from_left / from_right / high_angle /
+ * low_angle / eye-level / medium_shot / extreme_close-up / aerial_view /
+ * directly_above / directly_below)保留无害: 一旦提示词元数据里带了就顺手剔掉。
+ * ⚠️ `full_body` 在库里 23,574 张, 它同时是"构图类"常用词, 勾上剔除视角会一起剔掉 ——
+ * 这是文档第 3 节景别档的原义, 不需要就整行删掉。
+ *
+ * 2026-09-26 补: 交接文档「任务派发·景别词」的 10 个词对账后补齐 4 个缺口
+ * (cowboy_shot / upper_body / lower_body / very_wide_shot) —— 对端背景池已按
+ * 该清单清洗, 本机导出不再剔就会经 Syncthing 把词回灌进池子。
  */
 export const DEFAULT_VIEW_TAGS = [
-  'from_front', 'from_behind', 'from_left', 'from_right',
+  'from_front', 'from_behind', 'from_left', 'from_right', 'from_side',
   'directly_above', 'from_above', 'aerial_view', 'high_angle', 'eye-level',
   'low_angle', 'from_below', 'directly_below',
   'extreme_close-up', 'close-up', 'medium_shot', 'full_body', 'wide_shot',
+  'very_wide_shot', 'cowboy_shot', 'upper_body', 'lower_body',
   'dutch_angle',
 ]
 
@@ -149,7 +163,11 @@ function defaultViewText() {
     '#   高度  directly_above / from_above / aerial_view / high_angle / eye-level',
     '#         / low_angle / from_below / directly_below',
     '#   景别  extreme_close-up / close-up / medium_shot / full_body / wide_shot',
+    '#         / very_wide_shot / cowboy_shot / upper_body / lower_body',
+    '#         (后 4 条为 2026-09-26 交接文档「任务派发·景别词」补齐)',
     '#   斜角  dutch_angle',
+    '# 另补 from_side: WD14 反推自己会写它(库里实测 2,834 张), 对端背景池也已按视角词清理。',
+    '# ⚠️ full_body 在库里 23,574 张, 属于"构图类"常用词, 不想要就整行删掉。',
     '# 注意: 机位插件 left 档输出的 tag 是 "from right"(相机在左=画面从右看), 没写错。',
     '# 405 的 config 以后加了新分档/改了措辞, 这里(或交接文档)记得同步。',
     '',

@@ -566,12 +566,11 @@ async function main() {
     const after = await cdp.eval(`return __t.text('.result-head b')`)
     check('首页: 关键词搜索生效', after !== before, `${before} -> ${after}`)
 
-    await cdp.eval(`__t.click('.hdr .tv-btn', 0); return true`)   // ❤ 收藏筛选
-    await sleep(800)
-    const favOn = await cdp.eval(`return document.querySelector('.hdr .tv-btn.v-fav')?.classList.contains('active')`)
-    check('首页: 「只看收藏」可切换', favOn === true, `active=${favOn}`)
-    await cdp.eval(`__t.click('.hdr .tv-btn', 0); return true`)
-    await sleep(600)
+    /* 2026-10-01: 看板「只看收藏」模式和 ❤ 入口已整个移除 —— 负向断言:
+       顶栏不再有 ❤ 按钮(收藏功能本身还在: 图片 ★ / 光箱 ☆ / ⭐收藏页, 见后面 /favs 段) */
+    const hdrBtns = await cdp.eval(`return [...document.querySelectorAll('.hdr .tv-btn')].map((b) => b.textContent.trim())`)
+    check('首页: 看板的「只看收藏」❤ 入口已移除(负向对照: 顶栏无 ❤ 按钮)',
+      hdrBtns.every((t) => !t.includes('❤')), `顶栏按钮 = ${hdrBtns.join('、')}`)
 
     await cdp.eval(`__t.setInput('.sug input', ''); return true`)
     await cdp.eval(`__t.pressEnter('.sug input'); return true`)
@@ -784,6 +783,37 @@ async function main() {
     check('标签: 子页面里顶栏「标签」保持选中(继承父导航)',
       (tagImgs.navOn || '').includes('标签'), tagImgs.navOn)
     await cdp.shot('10-tags-images')
+
+    /* 10-01 标签编辑弹窗(改名/删除的入口)。这段**只读**: 打开 -> 预览影响 -> 取消,
+       不真的执行改名/删除 —— 写路径已由 scripts/test-tagedit.mjs 在副本库上覆盖,
+       界面层只钉"入口在、弹窗开、预览出数"。 */
+    await cdp.eval(`__t.clickText('.tag-images-view .head .tv-btn', '编辑标签'); return true`)
+    await waitFor(cdp, `!!document.querySelector('.mask .box')`, { label: '标签编辑弹窗', timeout: 8000 })
+    const tagEditUi = await cdp.eval(`
+      // rename 模式下预览要求目标名非空(主进程校验) —— 填个占位名, 依然只读不执行
+      const toInp = document.querySelector('.mask .tv-input')
+      if (toInp) {
+        const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        set.call(toInp, toInp.value + '_e2e_tmp')
+        toInp.dispatchEvent(new Event('input', { bubbles: true }))
+      }
+      await new Promise(r => setTimeout(r, 300))
+      __t.clickText('.mask .foot .tv-btn', '预览影响')
+      await new Promise(r => setTimeout(r, 1500))
+      return {
+        title: __t.text('.mask .head'),
+        pv: __t.text('.mask .pv'),
+        hasRename: !!document.querySelector('.mask .op input[value="rename"]'),
+        hasScope: !!document.querySelector('.mask .tv-input'),
+      }
+    `)
+    check('标签编辑: 详情页 ✏️ 打开弹窗, 预览影响返回命中数',
+      /编辑标签/.test(tagEditUi.title) && /将命中/.test(tagEditUi.pv),
+      `${tagEditUi.title} · ${tagEditUi.pv}`)
+    check('标签编辑: 改名/删除两种操作可切换, 删除带范围标签输入',
+      tagEditUi.hasRename && tagEditUi.hasScope, JSON.stringify({ r: tagEditUi.hasRename, s: tagEditUi.hasScope }))
+    await cdp.eval(`__t.clickText('.mask .foot .tv-btn', '取消'); return true`)
+    await sleep(400)
     // 层级是真的: 浏览器后退一步就回标签列表(以前 ?tag= 是同一个页面, 得退两次)
     await cdp.eval(`history.back(); return true`)
     await waitFor(cdp, `__t.count('.tag-list .pill') > 0`, { label: '后退回标签列表', timeout: 20000 })
@@ -846,6 +876,18 @@ async function main() {
      */
     const waitExportChange = async (before, timeoutMs = 25000) => {
       const t0 = Date.now()
+      /*
+       * ⚠️ 先按**内容**比一次, 再进 stat 轮询(2026-09-29 修)。
+       * 原来只有 stat 轮询: `lastStat` 取的是**进入本函数那一刻**的 mtime+size,
+       * 于是"在我们开始轮询之前就已经写完"的路径永远等不到变化 —— 基线本身就是
+       * 写完之后的状态。点角标那条(手动 flushNow)正好踩中: 沙箱数据小, 导出在
+       * 点击后 1.2 秒内就跑完了(诊断里 state=idle / 剩余=0 / 回执 n=1 都说写过了),
+       * 而断言却报"变了=false"干等 25 秒 —— 是**断言在骗人**, 不是功能坏了。
+       * (同一个洞对"防抖 1.5 秒后再导"那条不发作, 所以一直没暴露。)
+       */
+      if (readExport() !== before) {
+        return { changed: true, waited: Date.now() - t0, text: readExport() }
+      }
       let lastStat = statExport()
       while (Date.now() - t0 < timeoutMs) {
         await sleep(400)
@@ -905,6 +947,26 @@ async function main() {
       return { left: left.length, names: left.map((p) => p.name) }
     `)
     cleaned.removed = staleIds.length
+
+    /*
+     * 先把自动导出的延迟压到 1.5 秒(默认是 3 分钟)。
+     *
+     * 为什么不用环境变量:`TV_EXPORT_DELAY_MS` 那套"env 永远优先"会让**界面开始骗人** ——
+     * 弹窗按存档值显示"3 分钟"、实际 1.5 秒导, 而且用户/e2e 改延迟永远不生效。
+     * 所以改成测试自己调产品接口改(改的是真值, 断言才有意义)。
+     *
+     * 位置很关键: 必须在**第一个 ban**之前 —— 否则"ban 后自动导出"那几条要干等 3 分钟。
+     * 顺带也把"上一轮 e2e 崩在半路、残留一个 10 分钟延迟"的坑堵上(每次都重设)。
+     */
+    const delayGate = await cdp.eval(`
+      const before = await window.tv.invoke('export:preset:state')
+      const r = await window.tv.invoke('export:preset:delay', { delayMs: 1500 })
+      const after = await window.tv.invoke('export:preset:state')
+      return { before: before?.delayMs, set: r?.delayMs, effective: after?.delayMs, options: after?.delayOptions || [] }
+    `)
+    check('导出预设: 延迟改到 1.5 秒(后续"ban 后自动导出"要按它等)',
+      delayGate?.set === 1500 && delayGate?.effective === 1500,
+      `改前=${delayGate?.before} · 设=${delayGate?.set} · 生效=${delayGate?.effective} · 档位=${(delayGate?.options || []).join('/')}`)
 
     const savedPreset = await cdp.eval(`
       const r = await window.tv.invoke('export:preset:save', {
@@ -972,12 +1034,18 @@ async function main() {
         autoOn: __t.count('.mask .auto-sw input:checked'),
         path: __t.text('.mask .ppath'),
         meta: __t.text('.mask .pmeta'),
+        cartSec: __t.count('.mask .csec'),
+        cartSecT: __t.text('.mask .csec-t'),
       }
     `)
     check('导出预设: 弹窗列出预设(名字/目标文件/自动开关/上次导出)',
       presetModal.rows >= 1 && /e2e/.test(presetModal.name) && presetModal.autoOn >= 1
       && presetModal.path.includes(EXPORT_NAME) && /\d/.test(presetModal.meta),
       `${presetModal.name} · ${presetModal.meta.slice(0, 60)}`)
+    // 购物车那条预设是独立的一份, 但配置面板就嵌在这个弹窗里(用户选择: 一个台面)
+    check('导出预设: 同一个弹窗里内嵌了「购物车自动导出」区块',
+      presetModal.cartSec === 1 && /购物车自动导出/.test(presetModal.cartSecT),
+      `${presetModal.cartSecT.replace(/\s+/g, ' ').slice(0, 60)}`)
     await cdp.shot('12-export-presets')
     await cdp.eval(`document.querySelector('.mask .x').click(); return true`)
     await sleep(400)
@@ -1070,6 +1138,109 @@ async function main() {
     check('导出预设(负向): 上一条 ban 确实没有触发任何导出(probe2 仍在文件里)',
       !!probe2 && hasTag(beforeNeg, probe2), `probe2=${probe2 || '无'}`)
     if (probe2) await cdp.eval(`return await window.tv.invoke('blacklist:toggle', { tag: ${JSON.stringify(probe2Tag)} })`)
+
+    /* ---------------- 7.54 延迟可配 + 待导出倒计时 + 跳过等待 (2026-09-24) ----------------
+     * 需求原文: "点击黑名单后过几分钟再自动导出, 因为有可能同时 ban 好几个, 每个都导出
+     * 有点耗时"。这里验三件事(延迟被压到 1.5 秒这件事在本段开头已经断言过):
+     *   ① 延迟**可改且立刻生效**(下面改成 10 分钟);
+     *   ② 等待期间**不导出**(否则"合并成一次"就是空话), 且侧栏角标显示「待导出 mm:ss」;
+     *   ③ 点角标能跳过等待立刻导。
+     *
+     * 为什么把延迟临时调到 10 分钟: 1.5 秒的等待窗口太窄, CDP 往返 + 断言本身就要几百毫秒,
+     * 量出来的是竞态而不是功能。10 分钟意味着"这期间文件绝不该动", 是确定性断言。
+     *
+     * ⚠️ 这里踩过一次(第一版就是这样错的), 记下来: 原先用环境变量 `TV_EXPORT_DELAY_MS`
+     * 把延迟压到 1.5 秒, 又在下面把它改成 10 分钟 —— 但 env 是**永远优先**的, 于是
+     * "改成 10 分钟"只改了存档、实际仍按 1.5 秒导: 导出在那 4 秒里已经跑完, 状态归零,
+     * 两条断言挂得莫名其妙。现在 env 那个后门已经撤掉(见 exportPresets.getAutoDelayMs)。
+     */
+    const setDelay = (ms) => cdp.eval(`return await window.tv.invoke('export:preset:delay', { delayMs: ${ms} })`)
+
+    // 重新打开自动开关(上一步负向控制把它关掉了) —— 并且**验一下真存回去了**:
+    // 这是本段的先决条件, 不验的话下面失败时只能靠猜(第一次就吃了这个亏)。
+    const rearmed = await cdp.eval(`
+      const r0 = await window.tv.invoke('export:preset:list')
+      const p = r0.presets.find((x) => x.id === ${JSON.stringify(savedPreset.id)})
+      if (!p) return { found: false }
+      const saved = await window.tv.invoke('export:preset:save', { ...p, auto: true })
+      const r2 = await window.tv.invoke('export:preset:list')
+      const q = r2.presets.find((x) => x.id === ${JSON.stringify(savedPreset.id)})
+      return { found: true, err: saved?.error || '', auto: !!q?.auto, autoCount: r2.presets.filter((x) => x.auto && x.dir).length }
+    `)
+    check('导出预设: 重新打开自动开关(下一步要它排程)',
+      rearmed?.found === true && rearmed.auto === true && rearmed.autoCount === 1,
+      JSON.stringify(rearmed))
+
+    const d10 = await setDelay(600000)
+    const d10state = await cdp.eval(`return await window.tv.invoke('export:preset:state')`)
+    check('导出预设: 延迟可改成 10 分钟且**真的生效**(启动前先确认过是 1.5 秒)',
+      d10?.delayMs === 600000 && d10state?.delayMs === 600000,
+      `返回=${d10?.delayMs} · 实际生效=${d10state?.delayMs}`)
+
+    // 挑一个当前没被 ban 的词 ban 掉 -> 进入"待导出", 但这一刻文件不该动
+    const blText3 = (await cdp.eval(`const r = await window.tv.invoke('blacklist:get'); return r.text || ''`)) || ''
+    const blSet3 = new Set(blText3.split('\n').map((l) => l.trim().toLowerCase()).filter((l) => l && !l.startsWith('#')))
+    let probe3 = ''
+    let probe3Tag = ''
+    let banReceipt = null
+    for (const t of candidates) {
+      if (blSet3.has(asDatasetTag(t).toLowerCase())) continue
+      const tag = asDatasetTag(t)
+      const r = await cdp.eval(`return await window.tv.invoke('blacklist:toggle', { tag: ${JSON.stringify(tag)} })`)
+      if (r?.banned) { probe3 = t; probe3Tag = tag; banReceipt = r; break }
+    }
+    // 主进程的排程回执进断言详情 —— 失败时能一眼区分"没排上"/"排上了但界面没显示"
+    check('导出预设: ban 之后主进程排上了自动导出(回执 scheduled=true)',
+      banReceipt?.auto?.scheduled === true && banReceipt.auto.delayMs === 600000,
+      `ban=${JSON.stringify(banReceipt?.auto || null)} · probe3=${probe3 || '无'}`)
+
+    const beforeWait = readExport()
+    await sleep(4000)                    // 远超原来的 1.5s 防抖, 但远小于 10 分钟
+    const afterWait = readExport()
+    check('导出预设: 延迟期间**不导出**(4 秒过去文件纹丝不动, 合并才有意义)',
+      !!probe3 && afterWait === beforeWait,
+      `probe3=${probe3 || '无'} · 文件${afterWait === beforeWait ? '未变' : '变了'}`)
+
+    const pend = await cdp.eval(`
+      const s = await window.tv.invoke('export:preset:state')
+      return { pending: s.pending, remainingMs: s.remainingMs, badge: __t.text('.lnk .badge'), live: __t.count('.lnk .badge.live') }
+    `)
+    check('导出预设: 侧栏角标显示「待导出 mm:ss」倒计时(不再是「自动 N」)',
+      pend?.pending === true && /待导出\s*\d+:\d\d/.test(pend.badge || '') && pend.live >= 1,
+      `badge="${pend?.badge}" · remainingMs=${pend?.remainingMs}`)
+
+    // 点角标 = 跳过等待立刻导
+    /*
+     * 诊断信息是**特意**带上的(2026-09-24): 这条第一次跑挂时只能看到"文件没变",
+     * 分不清是「点击没进主进程」还是「flush 跑了但没落盘」。三条线索一次说清:
+     *   · 点后 pending/state —— true+还有 9 分钟 = 点击根本没触发; false/running = 触发了
+     *   · 弹窗数 —— >0 说明渲染层那一刻以为"没排程", 于是点成了"打开预设弹窗"
+     *   · __autoEv —— 主进程有没有真的跑完一轮(有 kind='result' 才算导过)
+     */
+    const badgeClick = await cdp.eval(`
+      const el = document.querySelector('.lnk .badge.live')
+      if (!el) return { clicked: false }
+      el.click()
+      await new Promise((r) => setTimeout(r, 1200))
+      const s = await window.tv.invoke('export:preset:state')
+      return {
+        clicked: true, pending: s.pending, state: s.state, dirty: s.dirty,
+        remainingMs: s.remainingMs, modal: __t.count('.mask'),
+      }
+    `)
+    const afterFlush = await waitExportChange(beforeWait)
+    const evAfterFlush = await autoEvidence()
+    check('导出预设: 点角标立刻导出(不用等那 10 分钟), 内容套用了新黑名单',
+      badgeClick?.clicked && afterFlush.changed && !!probe3 && !hasTag(afterFlush.text, probe3),
+      `等了 ${afterFlush.waited}ms · 点到了=${!!badgeClick?.clicked}`
+      + ` · 点后 pending=${badgeClick?.pending} state=${badgeClick?.state} dirty=${badgeClick?.dirty}`
+      + ` 剩余=${badgeClick?.remainingMs} 弹窗=${badgeClick?.modal}`
+      + ` · 变了=${afterFlush.changed} · probe3=${probe3 || '无'} · ${evAfterFlush}`)
+
+    // 收尾: 把这个 probe 解开、延迟还原成 1.5 秒 —— 后面的段落不该被我这段影响
+    if (probe3) await cdp.eval(`return await window.tv.invoke('blacklist:toggle', { tag: ${JSON.stringify(probe3Tag)} })`)
+    const dBack = await setDelay(1500)
+    check('导出预设: 延迟能改回 1.5 秒(档位往返)', dBack?.delayMs === 1500, `delayMs=${dBack?.delayMs}`)
 
     // 收尾: 删除预设(顺便验删除接口), 导出文件留着当证据
     const presetDel = await cdp.eval(`return await window.tv.invoke('export:preset:delete', { id: ${JSON.stringify(savedPreset.id)} })`)
@@ -1293,19 +1464,19 @@ async function main() {
     `)
     check('首页动作区: 「导出(带路径)」不再占独立按钮, 已并入下拉',
       homeBtns.pathBtnGone === true, `文字链 = ${(homeBtns.lnk || []).join('、')}`)
-    check('首页动作区: 分裂按钮下拉含两条导出方式 + 四个导出选项',
+    check('首页动作区: 分裂按钮下拉含两条导出方式 + 五个导出选项',
       homeBtns.caret === true && homeBtns.menuOpen === true
       && (homeBtns.items || []).length === 2
       && (homeBtns.items || []).join('').includes('带图片路径')
-      && (homeBtns.checks || []).length === 4 && homeBtns.emptyMenuBtn === true,
+      && (homeBtns.checks || []).length === 5 && homeBtns.emptyMenuBtn === true,
       `项 = ${(homeBtns.items || []).join(' / ')} · 选项 = ${(homeBtns.checks || []).join(' / ')}`)
     check('首页动作区: 下拉与整排同宽且不被侧栏裁切',
       homeBtns.sameWidthAsRow === true && homeBtns.insidePanel === true && homeBtns.inViewport === true,
       `同宽=${homeBtns.sameWidthAsRow} 在侧栏内=${homeBtns.insidePanel} 在视口内=${homeBtns.inViewport}`)
     check('首页动作区: 箭头随展开态翻转(菜单是向上开的)',
       homeBtns.caretRotated === true, `chev.up = ${homeBtns.caretRotated}`)
-    check('首页动作区: 四个导出开关挪进下拉后仍能切换',
-      (homeBtns.cbAfter || []).length === 4
+    check('首页动作区: 五个导出开关挪进下拉后仍能切换',
+      (homeBtns.cbAfter || []).length === 5
       && (homeBtns.cbAfter || []).every((v, i) => v !== (homeBtns.cbBefore || [])[i]),
       `${JSON.stringify(homeBtns.cbBefore)} → ${JSON.stringify(homeBtns.cbAfter)}`)
     check('首页动作区: 替换/预设导出降级为文字链, 且关下拉后不留遮罩',
@@ -1356,6 +1527,190 @@ async function main() {
       return true
     `)
     check('导航回系列页', !!drawer)
+
+    /* ---------------- 8.5 购物车自动导出 (2026-09-29) ---------------- */
+    /*
+     * 用户诉求: "检测当前购物车, 有更新就导出一份当前购物车到指定路径, 预设只需要一个"。
+     * 与 7.5 那条黑名单预设同构(内容真的变了才导 / 攒一会再导 / 原子覆盖), 但触发源是**购物车**。
+     *
+     * 真正要防的是**触发漏挂**: 购物车的改动入口有六个(标签详情页角色 pill / 光箱 pill /
+     * 系列页卡片与批量 / 购物车页与抽屉的删除清空 / 结算后自动清空 / 历史载入整体替换),
+     * 少挂一个的症状是"从某个入口加的角色永远导不出去", 而界面上一点异常都没有。
+     * 所以这里刻意走两条**真实界面**入口:
+     *   ① 购物车页删掉一条
+     *   ② 标签详情页「角色」区的 🛒 —— 用户特意点名的那个
+     * 判据全部落在真实文件上(行数 / 内容), 不看界面文案。
+     */
+    const CART_FILE = 'cart-e2e.txt'
+    const CART_PATH = path.join(EXPORT_DIR, CART_FILE)
+    const readCartFile = () => (fs.existsSync(CART_PATH) ? fs.readFileSync(CART_PATH, 'utf8') : '')
+    const cartFileLines = () => readCartFile().split('\n').filter(Boolean)
+    /** 等文件行数变成 want(自动导出是"延迟 1.5 秒 + 写盘", 得轮询) */
+    const waitCartLines = async (want, timeoutMs = 15000) => {
+      const t0 = Date.now()
+      while (Date.now() - t0 < timeoutMs) {
+        if (cartFileLines().length === want) return cartFileLines().length
+        await sleep(250)
+      }
+      return cartFileLines().length
+    }
+
+    // 先关再开: 让"打开开关就补导一份"这条判据在**任何残留状态**下都成立(可重复跑)
+    await cdp.eval(`await window.tv.invoke('cart:preset:save', { enabled: false }); return true`)
+    try { fs.unlinkSync(CART_PATH) } catch { /* 上一轮可能没留下 */ }
+
+    const cartCfg = await cdp.eval(`
+      return await window.tv.invoke('cart:preset:save', {
+        enabled: true, dir: ${JSON.stringify(EXPORT_DIR)},
+        file: ${JSON.stringify(CART_FILE)}, delayMs: 1500,
+      })
+    `)
+    check('购物车预设: 打开开关(目录已设)就当场补导一份, 不用等延迟',
+      cartCfg?.active === true && cartFileLines().length > 0,
+      `active=${cartCfg?.active} · 文件 ${cartFileLines().length} 行`)
+
+    /* 界面: 购物车页的「⚙ 自动导出」-> 配置弹窗 */
+    await cdp.eval(`__t.clickText('.hdr .nv', '购物车'); await new Promise(r => setTimeout(r, 1200)); return true`)
+    const cartPresetUi = await cdp.eval(`
+      __t.clickText('.cart-view .head .tv-btn', '自动导出')
+      await new Promise(r => setTimeout(r, 700))
+      return {
+        open: !!document.querySelector('.mask .box'),
+        title: __t.text('.mask .head'),
+        sw: __t.count('.mask .tv-check'),
+        dir: __t.text('.mask .path'),
+        file: (document.querySelector('.mask .tv-input') || {}).value || '',
+        rows: __t.count('.mask .row'),
+      }
+    `)
+    check('购物车预设: 购物车页有「⚙ 自动导出」并能打开配置弹窗',
+      cartPresetUi.open && /购物车自动导出/.test(cartPresetUi.title) && cartPresetUi.sw >= 1 && cartPresetUi.rows >= 5,
+      `${cartPresetUi.title} · 开关 ${cartPresetUi.sw} · ${cartPresetUi.rows} 行配置`)
+    check('购物车预设: 弹窗里回显了目标目录与文件名',
+      cartPresetUi.dir.includes('export-dest') && cartPresetUi.file === CART_FILE,
+      `${cartPresetUi.dir} / ${cartPresetUi.file}`)
+    await cdp.shot('11d-cart-preset')
+    await cdp.eval(`document.querySelector('.mask .x').click(); return true`)
+    await sleep(400)
+
+    /* 10-01 条目附加标签: ✏️ 给第一条加 closed_eyes -> 卡片显示 -> 自动导出文件
+       **同一行**拼上「, closed eyes」(wildcard 整行随机抽, 单独一行会抽到空 prompt)。 */
+    const cartExtra = await cdp.eval(`
+      const edit = document.querySelector('.ci .edit')
+      if (!edit) return { none: true }
+      edit.click()
+      await new Promise(r => setTimeout(r, 700))
+      const inp = document.querySelector('.mask .tv-input')
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      set.call(inp, 'closed_eyes')
+      inp.dispatchEvent(new Event('input', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 300))
+      const pv = __t.text('.mask .preview')
+      __t.clickText('.mask .foot .tv-btn', '保存')
+      await new Promise(r => setTimeout(r, 600))
+      return { pv, badge: (document.querySelector('.ci .extras') || {}).textContent || '' }
+    `)
+    check('购物车附加标签: ✏️ 弹窗预览出「…, closed eyes」, 保存后卡片显示',
+      !cartExtra.none && /closed/.test(cartExtra.pv) && /closed/.test(cartExtra.badge),
+      JSON.stringify(cartExtra))
+    const cartFileGotExtra = await (async () => {
+      const t0 = Date.now()
+      while (Date.now() - t0 < 15000) {
+        if (readCartFile().includes(', closed eyes')) return true
+        await sleep(250)
+      }
+      return false
+    })()
+    check('购物车附加标签: 自动导出文件同行拼上「, closed eyes」',
+      cartFileGotExtra, readCartFile().split('\n').slice(0, 3).join(' | '))
+
+    /* 真实入口①: 购物车页删掉一条 -> 不需要手动点导出, 文件行数自己跟着变 */
+    const beforeCartDel = await cdp.eval(`return __t.count('.ci')`)
+    const afterCartDel = await cdp.eval(`
+      const d = document.querySelector('.ci .del')
+      if (!d) return -1
+      d.click()
+      await new Promise(r => setTimeout(r, 300))
+      return __t.count('.ci')
+    `)
+    check('购物车预设: 购物车页删一条, 条目真的少了', afterCartDel === beforeCartDel - 1, `${beforeCartDel} -> ${afterCartDel}`)
+    const cartN1 = await waitCartLines(afterCartDel)
+    check('购物车预设: 删完之后自动导出的行数跟着变(不用手动点导出)', cartN1 === afterCartDel,
+      `文件 ${cartN1} 行 / 购物车 ${afterCartDel} 个`)
+
+    /* 真实入口②: 标签详情页「角色」区的 🛒 —— 用户特意点名的入口。
+       先从购物车条目开大图(条目来自系列页, 那张图必然有角色标签)拿它的路径,
+       再跳到**详情页**点同一个入口 —— 详情页的角色区与光箱共用 useCharCart,
+       但只有详情页那条路是"从标签进来"的, 值得单测一遍。 */
+    await cdp.eval(`__t.click('.ci'); return true`)
+    await waitFor(cdp, `__t.count('.lightbox .lb-meta-row .pill.k-char') > 0`, { label: '光箱角色 pill', timeout: 20000 })
+    const lbCartClick = await cdp.eval(`
+      const ct = document.querySelector('.lightbox .lb-meta-row .pill.k-char .acts .ct')
+      if (!ct) return { clicked: false }
+      const before = (await window.tv.invoke('cart:preset:get')).cartCount
+      ct.click()
+      await new Promise(r => setTimeout(r, 400))
+      const s = await window.tv.invoke('cart:preset:get')
+      return {
+        clicked: true, before, after: s.cartCount, synced: s.synced, pending: s.pending,
+        path: __t.text('.lightbox .lb-path'),
+      }
+    `)
+    check('购物车预设: 光箱角色 pill 的 🛒 也算"购物车有更新"',
+      /* 增删都算(这里是**移出**: 大图是从购物车条目点开的, 那个角色本来就在车里),
+         所以判 |Δ|=1, 不锁方向 —— 锁了就是测试自己的假设, 不是产品行为 */
+      lbCartClick.clicked && Math.abs(lbCartClick.after - lbCartClick.before) === 1
+      && lbCartClick.synced === false && lbCartClick.pending === true,
+      `主进程记 ${lbCartClick.before} -> ${lbCartClick.after} · 待导=${lbCartClick.pending}`)
+    await cdp.eval(`document.querySelector('.lightbox .lb-close').click(); return true`)
+    await sleep(300)
+
+    const detailCartClick = await cdp.eval(`
+      location.hash = '#/detail?path=' + encodeURIComponent(${JSON.stringify(lbCartClick.path || '')})
+      /* 轮询而不是死等: 详情页的标签是进页后现查的 */
+      for (let i = 0; i < 40 && !document.querySelector('.detail .tag-list .pill.k-char .acts .ct'); i++) {
+        await new Promise(r => setTimeout(r, 250))
+      }
+      const ct = document.querySelector('.detail .tag-list .pill.k-char .acts .ct')
+      if (!ct) {
+        return { clicked: false, pills: document.querySelectorAll('.detail .tag-list .pill').length,
+                 chars: document.querySelectorAll('.detail .tag-list .pill.k-char').length }
+      }
+      const before = (await window.tv.invoke('cart:preset:get')).cartCount
+      ct.click()
+      await new Promise(r => setTimeout(r, 400))
+      const s = await window.tv.invoke('cart:preset:get')
+      return { clicked: true, before, after: s.cartCount, synced: s.synced, pending: s.pending }
+    `)
+    check('购物车预设: **标签详情页**角色 pill 的 🛒 同样触发自动导出(2026-09-29 用户点名)',
+      /* 同一个角色在详情页再点一次 = 与光箱那次**方向相反**, 所以同样只判 |Δ|=1 */
+      detailCartClick.clicked && Math.abs(detailCartClick.after - detailCartClick.before) === 1
+      && detailCartClick.synced === false,
+      detailCartClick.clicked
+        ? `主进程记 ${detailCartClick.before} -> ${detailCartClick.after} · 待导=${detailCartClick.pending}`
+        : `详情页没有角色 pill: ${JSON.stringify(detailCartClick)}`)
+    const cartN2 = await waitCartLines(detailCartClick.after)
+    check('购物车预设: 详情页改完之后, 文件行数 = 购物车条目数',
+      cartN2 === detailCartClick.after && cartN2 > 0, `文件 ${cartN2} 行 / 购物车 ${detailCartClick.after} 个`)
+
+    /* 清空不算更新 —— 防的是"结算(导出 -> 存历史 -> 自动清空)"顺手把下游那份文件清成空。
+       清空按钮带 window.confirm(会挂住 CDP), 所以这条规则直接走上报接口验。 */
+    const cartFrozen = readCartFile()
+    const cartEmptyRes = await cdp.eval(`
+      const r = await window.tv.invoke('cart:changed', { tags: [] })
+      const f = await window.tv.invoke('cart:preset:flushNow')
+      return { r, f }
+    `)
+    check('购物车预设: 清空**不算**更新, 也不排程',
+      cartEmptyRes.r?.reason === 'empty' && cartEmptyRes.r?.scheduled === false,
+      JSON.stringify(cartEmptyRes.r))
+    check('购物车预设: 清空后"立即导"是空操作, 文件原封不动(没被清成空)',
+      cartEmptyRes.f?.skipped === true && readCartFile() === cartFrozen && cartFrozen.length > 0,
+      `${cartFileLines().length} 行 · flush=${JSON.stringify(cartEmptyRes.f)}`)
+
+    // 收尾: 关掉开关 —— 不给后面的段落留一个"随时会自动写盘"的预设
+    const cartOffRes = await cdp.eval(`return await window.tv.invoke('cart:preset:save', { enabled: false })`)
+    check('购物车预设: 关掉开关后 active=false(收尾)', cartOffRes?.active === false, `active=${cartOffRes?.active}`)
 
     /* ---------------- 9. 扫描文件夹(文件夹库) ---------------- */
     await cdp.eval(`__t.clickText('.hdr .nv', '扫描'); return true`)
@@ -1687,6 +2042,62 @@ async function main() {
       filt.two?.n === 3, `${filt.two?.n} 张`)
     check('扫描: 清空筛选后恢复全量', filt.cleared?.n === 5, `${filt.cleared?.n} 张`)
     await cdp.shot('13d-scan-filter')
+
+    /* ---------------- 9e-2. 筛选框也认文件名(2026-09-29) ----------------
+     * "扫描的搜索增加文件名搜索功能": 还是**同一个框**, 每个词**标签或文件名**命中
+     * 其一即算; 多个词仍然 AND(与 9e 一致 —— 只加了一条通路, 没动分词规则)。
+     * 夹具 a1..a5 三种情形都能造:
+     *   · a3 只出现在文件名里(arona 那堆标签里不含 "a3") -> 只能靠文件名命中
+     *   · a1 + hoshino -> 一个词走文件名、一个词走标签, 仍要 AND 出 1 张
+     *   · .png / a1 a5 -> 扩展名也参与匹配 / 多个文件名词仍是 AND 不是 OR
+     * 为什么要单独钉: 标签那一路 9e 已经覆盖, 但"文件名那一路真的接上了"只能靠
+     * 一个**标签里不可能出现**的词来证 —— 拿 hoshino 试是证不出来的(标签也能命中)。
+     * 另: 补全只认标签池, 敲 a3 会显示"没有匹配的标签", 那是对的 —— 但文案必须
+     * 带上"(文件名仍会匹配)", 否则用户会以为搜索框坏了(网格明明筛出了 1 张)。 */
+    const fileFilt = await cdp.eval(`
+      const inp = document.querySelector('.scan-view .pager-bar .tag-filter input')
+      if (!inp) return { err: '筛选框没渲染出来' }
+      const setV = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      const type = async (v) => {
+        setV.call(inp, v)
+        inp.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 800))
+      }
+      const read = () => ({
+        n: __t.count('.scan-view .grid.imgs .card'),
+        hint: __t.text('.scan-view .pager-bar .hint').replace(/\\s+/g, ' '),
+        empty: __t.count('.scan-view .tv-state.empty'),
+        msg: __t.text('.scan-view .pager-bar .tag-filter .drop .msg'),
+      })
+      await type('a3');            const byName = read()
+      await type('A3');            const byUp   = read()
+      await type('a1 hoshino');    const mixed  = read()
+      await type('a1 a5');         const andTwo = read()
+      await type('.png');          const byExt  = read()
+      await type('zzz-no-such');   const none   = read()
+      await type('');              const back   = read()
+      inp.blur()
+      return { err: '', byName, byUp, mixed, andTwo, byExt, none, back }
+    `)
+    check('扫描文件名筛选: 词只出现在文件名里也能命中(a3 -> 1 张)',
+      fileFilt.byName?.n === 1, fileFilt.err || `${fileFilt.byName?.n} 张`)
+    check('扫描文件名筛选: 命中数写进同一句提示(筛选出 1 / 共 5 张)',
+      /筛选出\s*1\s*\/\s*共\s*5\s*张/.test(fileFilt.byName?.hint || ''), fileFilt.byName?.hint)
+    check('扫描文件名筛选: 大小写不敏感(A3 与 a3 同结果)',
+      fileFilt.byUp?.n === 1, `${fileFilt.byUp?.n} 张`)
+    check('扫描文件名筛选: 一个词走文件名、一个词走标签, 仍按 AND 出 1 张(a1 + hoshino)',
+      fileFilt.mixed?.n === 1, `${fileFilt.mixed?.n} 张`)
+    check('扫描文件名筛选: 多个文件名词是 AND 不是 OR(没有哪张同时叫 a1 和 a5)',
+      fileFilt.andTwo?.n === 0 && fileFilt.andTwo?.empty === 1,
+      `${fileFilt.andTwo?.n} 张 · ${fileFilt.andTwo?.empty} 个空态`)
+    check('扫描文件名筛选: 扩展名也参与匹配(.png -> 全 5 张)',
+      fileFilt.byExt?.n === 5, `${fileFilt.byExt?.n} 张`)
+    check('扫描文件名筛选: 完全没命中时给空态',
+      fileFilt.none?.n === 0 && fileFilt.none?.empty === 1, `${fileFilt.none?.n} 张`)
+    check('扫描文件名筛选: 补全空态写明"文件名仍会匹配"(别让人以为搜索框坏了)',
+      /文件名仍会匹配/.test(fileFilt.byName?.msg || ''), JSON.stringify(fileFilt.byName?.msg))
+    check('扫描文件名筛选: 清空后恢复全量', fileFilt.back?.n === 5, `${fileFilt.back?.n} 张`)
+    await cdp.shot('13e-scan-filename')
 
     /* ---------------- 9f. 筛选框的搜索历史(2026-09-20 需求) ----------------
      * "筛选框还是记住历史吧, 不过要和公用的区分开":
@@ -2025,6 +2436,14 @@ async function main() {
 
     await cdp.eval(`__t.clickText('.hdr .nv', '收藏'); return true`)
     await waitFor(cdp, `!!document.querySelector('.favs-view')`, { label: '收藏页', timeout: 20000 })
+    /* 10-01 滚动修复: .stage 是 overflow:hidden, 根节点不自己滚 -> 网格必须套独立
+       .grid-wrap(与看板同款)。以前没套, 内容超高直接被裁掉 —— "收藏页滚不下去"。 */
+    const favsScroll = await cdp.eval(`
+      const w = document.querySelector('.favs-view .grid-wrap')
+      return { has: !!w, oy: w ? getComputedStyle(w).overflowY : '' }
+    `)
+    check('收藏: 网格套了独立滚动容器(overflow-y:auto, 页能往下滚)',
+      favsScroll.has && favsScroll.oy === 'auto', JSON.stringify(favsScroll))
     // 卡片在找回跑完才渲染(防止对失效路径发缩略图请求), 等它出图
     await waitFor(cdp, `__t.count('.favs-view .grid .card') > 0`, { label: '收藏卡片(找回完成后渲染)', timeout: 30000 })
     const favsRes = await cdp.eval(`
@@ -2740,6 +3159,83 @@ async function main() {
     check('安全模式开关: 每个能看到图片的页面都有', missing.length === 0,
       missing.length ? `缺: ${missing.join(', ')}` : `${PAGES.length} 个页面全有`)
 
+    /* ---------------- 看板删/移后网格要跟着变(2026-09-29 用户报) ----------------
+     * 现象: 在看板筛完词条, 把图**移动到别的文件夹 / 删到回收站** —— 文件真的动了,
+     * 界面上那张却还杵着(点开光箱是个空白)。用户原话: "不知道其他地方对图片的
+     * 操作有没有这个 bug"。
+     *
+     * 根因: 删/移只广播 'tv:trashed' / 'tv:moved', 而**当时只有扫描页与光箱 store
+     * 订阅**了这两个事件; 看板 / 标签图片 / 系列页的图片流(三者都走 useImageFeed)
+     * 没人订阅 —— 2026-09-19 修光箱那一批漏了这一批。现在修在 useImageFeed 里,
+     * 三个视图一次全覆盖(以后新视图只要用它就自带)。
+     *
+     * ⚠️ 这里为什么用 dispatchEvent, 而不是像上面 9c 那样走真实右键菜单:
+     *    看板的图来自**沙箱标签库**(从真实库 VACUUM INTO 拷来的), 路径指向**用户的
+     *    真实文件** —— 真搬/真删就是动用户的图, 不行。所以「生产端」(右键 -> IPC ->
+     *    主进程搬文件 -> 广播事件)由 9c 的光箱那段以**真实链路**覆盖(同一条
+     *    useImageCtxMenu、同一句 dispatchEvent); 这段只验**看板的消费端**:
+     *    收到事件后网格卡片与「共 M 张」有没有跟着变。
+     *
+     *    反向对照不能少 —— 只测"少了"的话, "任何事件都无条件清空列表"也是绿的。
+     */
+    await cdp.eval(`location.hash = '#/'
+      await new Promise((r) => setTimeout(r, 1500))
+      return true`)
+    await waitFor(cdp, `__t.count('.home .grid .card') > 0`,
+      { label: '看板网格(联动那一段)', timeout: 30000 })
+    const board = await cdp.eval(`
+      const cards = () => [...document.querySelectorAll('.home .grid .card')]
+      const paths = () => cards().map((c) => { const f = c.querySelector('.foot'); return f ? f.title : '' })
+      const cntOf = () => {
+        const el = document.querySelector('.home .result-head')
+        const m = /共\\s*([\\d,]+)\\s*张/.exec(el ? el.textContent : '')
+        return m ? Number(m[1].replace(/,/g, '')) : -1
+      }
+      const until = async (fn, ms) => {
+        const t0 = Date.now()
+        while (Date.now() - t0 < ms) { if (fn()) return true; await new Promise((r) => setTimeout(r, 120)) }
+        return false
+      }
+      const n0 = cards().length
+      const t0 = cntOf()
+      const victim = paths().find(Boolean)
+      if (!victim) return { err: '看板没有带路径的卡片' }
+
+      // ① 移动: 广播"这张被搬到别的文件夹了"
+      window.dispatchEvent(new CustomEvent('tv:moved', { detail: { paths: [victim], dest: '' } }))
+      const movedGone = await until(() => !paths().includes(victim), 3000)
+      const n1 = cards().length
+      const t1 = cntOf()
+
+      // ② 反向对照: 广播一张**本来就不在这个列表里**的图 —— 网格一张都不该少
+      // (Z: 盘只是"保证不在列表里"的假路径示例, 不是真文件 —— path-check-ignore)
+      window.dispatchEvent(new CustomEvent('tv:moved', {
+        detail: { paths: ['Z:/__e2e_not_in_this_list__/nope.png'], dest: '' },
+      }))
+      await new Promise((r) => setTimeout(r, 800))
+      const n2 = cards().length
+
+      // ③ 删除: 再取一张, 广播"已经进了回收站"(与移动走同一个 dropGone)
+      const victim2 = paths().find(Boolean)
+      if (victim2) {
+        window.dispatchEvent(new CustomEvent('tv:trashed', { detail: { paths: [victim2] } }))
+        await until(() => !paths().includes(victim2), 3000)
+      }
+      return {
+        n0, t0, movedGone, n1, t1, n2,
+        hasSecond: !!victim2, n3: cards().length, t3: cntOf(),
+      }
+    `)
+    check('看板: 广播"移到别处"后那张卡从网格里消失(不再杵着)',
+      board.movedGone === true && board.n1 === board.n0 - 1,
+      `${board.n0} -> ${board.n1} 张${board.err ? ' · ' + board.err : ''}`)
+    check('看板: 少了那张, 「共 M 张」也跟着减 1',
+      board.t0 > 0 && board.t1 === board.t0 - 1, `共 ${board.t0} -> ${board.t1} 张`)
+    check('看板: 反向对照 —— 广播列表里没有的路径, 网格一张都不少',
+      board.n2 === board.n1, `${board.n1} -> ${board.n2} 张`)
+    check('看板: 广播"进了回收站"后同样从网格剔除',
+      board.hasSecond === true && board.n3 === board.n2 - 1, `${board.n2} -> ${board.n3} 张`)
+
     /* ③ 入口点开是设置台(档位 / 集合 / "会隐藏多少张") */
     await cdp.eval(`location.hash = '#/tags'
       await new Promise((r) => setTimeout(r, 1200))
@@ -3304,6 +3800,28 @@ async function main() {
     const sel0 = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
     check('批量: 进入选择模式, 操作条出现且计数 = 0', sel0 === 0, `计数 ${sel0}`)
 
+    /* 10-01 结构性常驻: bar 在滚动区(.result-scroll)外 —— 滚 300px 位置纹丝不动。
+       (sticky 方案弃用: 在带 padding 的滚动容器里钉住会露一条缝, 用户截图实锤) */
+    const barPin = await cdp.eval(`
+      const bar = document.querySelector('[data-test="scan-batch-bar"]')
+      const sc = document.querySelector('.scan-view .result-scroll')
+      const grid = document.querySelector('.scan-view .grid.imgs')
+      sc.style.scrollBehavior = 'auto'
+      grid.style.paddingBottom = '2000px'   // 夹具只有 3 张图不够滚, 撑高再量
+      const t0 = bar.getBoundingClientRect().top
+      sc.scrollTop = 300
+      await new Promise(r => setTimeout(r, 200))
+      const t1 = bar.getBoundingClientRect().top
+      const out = { t0, t1, st: sc.scrollTop, pos: getComputedStyle(bar).position, oy: getComputedStyle(sc).overflowY }
+      grid.style.paddingBottom = ''
+      sc.scrollTop = 0
+      sc.style.scrollBehavior = ''
+      return out
+    `)
+    check('批量: 工具条钉在滚动区外(滚动 300px 位置不变, 无 sticky 缝)',
+      barPin.pos === 'static' && barPin.oy === 'auto' && barPin.st === 300 && Math.abs(barPin.t1 - barPin.t0) < 1,
+      JSON.stringify(barPin))
+
     /* 点两张卡(选择模式下点击 = 勾选) */
     await cdp.eval(`
       const cards = document.querySelectorAll('.scan-view .grid.imgs .card')
@@ -3322,6 +3840,23 @@ async function main() {
     const sel3 = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
     check('批量: Shift 区间选后计数 = 3', sel3 === 3, `计数 ${sel3}`)
 
+    /* 10-01 勾选框也认 Shift: 清空 -> 点 ckbox[0] -> Shift 点 ckbox[2] = 3
+       (TvImageCard 的 ckbox 以前不透传 $event, 点勾选框时区间选是死的) */
+    await cdp.eval(`__t.click('[data-test="scan-sel-clear"]'); return true`)
+    const ckShift = await cdp.eval(`
+      const cks = document.querySelectorAll('.scan-view .grid.imgs .card .ckbox')
+      cks[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 150))
+      cks[2].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))
+      await new Promise(r => setTimeout(r, 150))
+      return +document.querySelector('[data-test="scan-sel-count"]').textContent
+    `)
+    check('批量: 勾选框 Shift 区间选(ckbox[0] -> Shift ckbox[2]) = 3', ckShift === 3, `计数 ${ckShift}`)
+    await cdp.eval(`__t.click('[data-test="scan-sel-clear"]'); return true`)
+
+    // 恢复原「反选」断言的前提(已选 3/3): 我的拖框/勾选框段落把选中集清空了
+    await cdp.eval(`__t.click('[data-test="scan-sel-all"]'); return true`)
+
     await cdp.eval(`__t.click('[data-test="scan-sel-invert"]'); return true`)
     const selInv = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
     check('批量: 反选后计数 = 0', selInv === 0, `计数 ${selInv}`)
@@ -3336,7 +3871,36 @@ async function main() {
     /* 打开目标弹窗, 点「scan-batch-out」快速预设 -> 真的搬 */
     await cdp.eval(`__t.click('[data-test="scan-batch-move"]'); return true`)
     await waitFor(cdp, `!!document.querySelector('.mt-body')`, { label: '移动目标弹窗', timeout: 10000 })
+    /*
+     * toast 只活 2.6 秒, 而且**只有一个槽位** —— 后一条冒出会把前一条顶掉
+     * (移进登记来源后 kickAutoSync 还会再弹一条)。等网格更新 + 磁盘核对之后再回来看,
+     * 很可能已经读到 undefined 了(2026-09-29 r2/r3 就是这么超时并中断整轮的)。
+     * 所以**在点下目标之前**先装一个记录器: 只要 toast 出现过就留痕, 什么时候查都在。
+     *
+     * 2026-09-29 再修: 原来用 MutationObserver 抓"新增节点", 但单槽位 toast 的第二次
+     * 文案是**改已有节点的文字**(节点没新增) —— 于是"已移动 2 张"这条时灵时不灵,
+     * 一挂就抛错**中断整轮**(报成「e2e 流程未中断」, 排查时完全看不出跟 toast 有关)。
+     * 现在两条腿一起走: 观察新增节点 + 50ms 轮询读当前文案(单槽位组件靠轮询兜底;
+     * 后台标签页的定时器会被节流, 所以观察器那条也不能撤)。两边都写 window.__toasts。
+     */
     await cdp.eval(`
+      window.__toasts = []
+      const push = (t) => {
+        const s = (t || '').trim()
+        if (s && window.__toasts[window.__toasts.length - 1] !== s) window.__toasts.push(s)
+      }
+      window.__toastMo?.disconnect()
+      window.__toastMo = new MutationObserver((ms) => {
+        for (const m of ms) for (const n of m.addedNodes) {
+          if (n.nodeType === 1 && n.classList && n.classList.contains('toast')) push(n.textContent)
+        }
+      })
+      window.__toastMo.observe(document.body, { childList: true, subtree: true, characterData: true })
+      clearInterval(window.__toastTimer)
+      window.__toastTimer = setInterval(() => {
+        const el = document.querySelector('.toast')
+        if (el) push(el.textContent)
+      }, 50)
       const hit = [...document.querySelectorAll('.mt-body .row')]
         .find((r) => (r.textContent || '').includes('scan-batch-out'))
       if (!hit) throw new Error('快速预设行没找到')
@@ -3351,20 +3915,47 @@ async function main() {
     }
     check('批量移动: 两张图真的落到了目标文件夹',
       diskMoved.wide && diskMoved.tall, JSON.stringify(diskMoved))
-    /* toast 在 moveMany 返回时就弹了, 但 TvModal 的离场过渡比 toast 存活期(2.6s)长
-     * —— 先抓 toast, 再等弹窗关完, 顺序反了 toast 早就过期了(r2 踩到)。 */
-    await waitFor(cdp, `(document.querySelector('.toast')||{}).textContent?.includes('已移动 2 张')`,
-      { label: '移动 toast', timeout: 3000 })
-    await waitFor(cdp, `!document.querySelector('.mt-body')`,
-      { label: '移动弹窗关闭', timeout: 5000 })
+    /* 判 check 而不是 waitFor: 抓不到也该报出"到底记录到了什么"继续往下跑,
+       不该把整轮打断(下面那条「弹窗关闭」才是它的独立性所在) */
+    let moveToast = ''
+    for (let i = 0; i < 40 && !moveToast; i++) {
+      const seen = await cdp.eval(`return (window.__toasts || [])`)
+      moveToast = (seen || []).find((t) => t.includes('已移动 2 张')) || ''
+      if (!moveToast) await sleep(200)
+    }
+    const seenToasts = moveToast ? [] : await cdp.eval(`return (window.__toasts || [])`)
+    check('批量移动: 汇总 toast 说明「已移动 2 张」', !!moveToast,
+      moveToast || `没抓到; 记录到的是 ${JSON.stringify(seenToasts)}`)
+    await cdp.eval(`clearInterval(window.__toastTimer); return true`)
+    /* 2026-10-01 用户实机确认: 批量移动在真实应用里一切正常(弹窗正常关)。
+       e2e 无头环境里弹窗偶发不自动关(与窗口节流有关, 非业务 bug) —— 按用户指示
+       不再测「弹窗自动关闭」, 移动完成后直接手动收掉弹窗, 流程继续。 */
+    await cdp.eval(`
+      const x = document.querySelector('.mask .box .x')
+      if (x && document.querySelector('.mt-body')) x.click()
+      return true
+    `)
+    await sleep(400)
     const afterMove = await cdp.eval(`
       return {
         count: +document.querySelector('[data-test="scan-sel-count"]').textContent,
         modal: !!document.querySelector('.mt-body'),
       }
     `)
-    check('批量移动: 计数归 0 且弹窗已关', afterMove.count === 0 && !afterMove.modal,
+    check('批量移动: 选中计数归 0(弹窗由 e2e 手动收掉, 不再测自动关闭)', afterMove.count === 0,
       `计数 ${afterMove.count} · 弹窗 ${afterMove.modal}`)
+
+    /* 10-01 工具条 ✕ 退出: 此刻在选择模式、网格还有图(sq 未删) -> 点 ✕ -> 操作条消失。
+       ⚠️ 不能放在批量删除之后: 全删空时二级视图切到「没有可显示的图片」空态,
+       toggle 点了也回不到选择模式(操作条只在有图时渲染) —— r13 实锤「重新进入选择模式」超时。 */
+    await cdp.eval(`__t.click('[data-test="scan-batch-exit"]'); return true`)
+    await waitFor(cdp, `!document.querySelector('[data-test="scan-batch-bar"]')`,
+      { label: '✕ 退出后操作条消失', timeout: 8000 })
+    check('批量: 工具条 ✕ 退出按钮可退出选择模式', true, '操作条已消失 · 已清空已选')
+    /* 回到选择模式, 继续批量删除段 */
+    await cdp.eval(`__t.click('[data-test="scan-select-toggle"]'); return true`)
+    await waitFor(cdp, `!!document.querySelector('[data-test="scan-batch-bar"]')`,
+      { label: '重新进入选择模式', timeout: 8000 })
 
     /* 剩下 sq 一张: 全选 -> 批量删除 -> 确认弹窗(全局单例, 显示 N 张) -> 删除 */
     await cdp.eval(`__t.click('[data-test="scan-sel-all"]'); return true`)
@@ -3390,22 +3981,220 @@ async function main() {
       !afterTrash.bar || afterTrash.count === 0,
       `操作条 ${afterTrash.bar} · 计数 ${afterTrash.count}`)
 
+    /* ---------------- 11i. 光箱「快速移动」按钮条(2026-09-29 用户需求) ----------------
+     * 流水线: 看一张 -> 点按钮 / 按数字键 -> 移走 + 光箱自动前进。
+     * 走**真实 UI**: 点按钮 = 真调 image:moveMany(文件真落盘到 harness 种的 QM-A/QM-B
+     * 夹具目录), 数字键 = 真派发 keydown。自动前进不断言 toast, 断三件硬事:
+     * 磁盘落位 / 光箱前进 / 扫描网格减一张(tv:moved 消费端)。
+     * 管理弹窗改名+排序后保存, settings.json 落盘回读(与右键菜单同一份)。
+     * harness 种子 = [QM-A, QM-B], 11h 又追加了 scan-batch-out -> 按钮条应有 3 个 + ⚙。 */
+    {
+      const qmA = path.join(path.dirname(SCAN_DIR), 'quick-move-a')
+      const qmB = path.join(path.dirname(SCAN_DIR), 'quick-move-b')
+      /* 自己的夹具: 11h 收尾时扫描网格已经空了(a1-a5 与尺寸夹具都被前面几段消耗完),
+         所以这里现造一个文件夹 q1/q2/q3 三张图, 走 11g 那套 addAndOpenScanFolder
+         加进去再打开 —— 不依赖、也不打扰前面任何一段的计数。 */
+      const QM_SRC = path.join(path.dirname(SCAN_DIR), 'quick-move-src')
+      fs.mkdirSync(QM_SRC, { recursive: true })
+      for (const n of ['q1.png', 'q2.png', 'q3.png']) {
+        fs.writeFileSync(path.join(QM_SRC, n), makePng(96, 64, { prompt: '1girl, smile' }))
+      }
+      const gridN = () => cdp.eval(`return document.querySelectorAll('.scan-view .grid.imgs .card').length`)
+      await addAndOpenScanFolder(QM_SRC, 3)
+      const qmOpen = await cdp.eval(`
+        const card = document.querySelector('.scan-view .grid.imgs .card')
+        if (!card) return { ok: false }
+        card.click()
+        await new Promise((r) => setTimeout(r, 1800))
+        return { ok: !!document.querySelector('.lightbox'), path: __t.text('.lightbox .lb-path') }
+      `)
+      if (!qmOpen.ok) {
+        check('快速移动: 扫描网格还有图可开光箱', false, '光箱没打开, 本段只能报红')
+      } else {
+        // 2026-10-01 收起/展开两态: 光箱打开时工具条是收起的(一个 📤 圆钮), 点开才铺出按钮
+        const qmMini = await cdp.eval(`
+          return {
+            fab: !!document.querySelector('.lightbox [data-test="qm-fab"]'),
+            btns: __t.count('.lightbox .lb-qm .qm-btn[data-test^="qm-btn-"]'),
+          }
+        `)
+        check('快速移动: 光箱打开时工具条收起(只有 📤 圆钮, 无路径按钮)',
+          qmMini.fab && qmMini.btns === 0, `fab=${qmMini.fab} btns=${qmMini.btns}`)
+        await cdp.eval(`__t.click('.lightbox [data-test="qm-fab"]'); return true`)
+        await waitFor(cdp, `__t.count('.lightbox .lb-qm .qm-btn[data-test^="qm-btn-"]') > 0`,
+          { label: '快速移动: 点圆钮展开按钮条', timeout: 5000 })
+
+        const strip0 = await cdp.eval(`
+          return {
+            n: __t.count('.lightbox .lb-qm .qm-btn[data-test^="qm-btn-"]'),
+            k: __t.count('.lightbox .lb-qm .qm-btn .k'),
+            first: __t.text('.lightbox .lb-qm .qm-btn[data-test="qm-btn-1"]'),
+            title1: (document.querySelector('.lightbox .lb-qm .qm-btn[data-test="qm-btn-1"]') || {}).title || '',
+            gear: !!document.querySelector('.lightbox .lb-qm [data-test="qm-gear"]'),
+          }
+        `)
+        check('快速移动: 按钮条渲染且按钮数 = 预设数(3) + ⚙',
+          strip0.n === 3 && strip0.k === 3 && strip0.gear,
+          `${strip0.n} 个按钮 · ${strip0.k} 个数字角标 · gear=${strip0.gear}`)
+        check('快速移动: 按钮显示文件夹名, 悬停提示完整路径',
+          strip0.first.includes('QM-A') && strip0.title1.includes('quick-move-a'),
+          `${strip0.first} · title=${strip0.title1.slice(0, 60)}`)
+
+        // 2026-10-01 用户反馈两连修的回归断言:
+        // ① 工具条改成悬浮(fixed)在图片上方, 不再占侧栏;
+        // ② 管理弹窗 zIndex(400) 必须盖过光箱(300) —— 旧版弹窗被压在光箱后面,
+        //    用户点到的全是「点空白关闭」。elementFromPoint 验的是真实可点性,
+        //    这条在修复前必挂(querySelector 直发 click 的旧测法测不出层级问题)。
+        const qmFloat = await cdp.eval(`
+          const el = document.querySelector('[data-test="lb-quickmove"]')
+          if (!el) return { ok: false }
+          const cs = getComputedStyle(el)
+          const r = el.getBoundingClientRect()
+          return {
+            ok: true,
+            pos: cs.position,
+            grip: !!el.querySelector('.qm-grip'),
+            inView: r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight && r.right <= innerWidth,
+          }
+        `)
+        check('快速移动: 工具条是悬浮条(fixed · 带拖动把手 · 完整落在视口内)',
+          qmFloat.ok && qmFloat.pos === 'fixed' && qmFloat.grip && qmFloat.inView,
+          `pos=${qmFloat.pos} grip=${qmFloat.grip} inView=${qmFloat.inView}`)
+
+        // 点按钮 1: 移到 QM-A。光箱应前进(列表里还有图), 扫描网格同步少一张。
+        const mv1 = { n: await gridN(), p: qmOpen.path }
+        await cdp.eval(`__t.click('.lightbox .lb-qm [data-test="qm-btn-1"]'); return true`)
+        /* 注意表达式不能以换行开头 —— waitFor 会加 `return ` 前缀, 换行触发 ASI
+           直接 return undefined(见 waitFor 顶部注释, r2 就是这么超时的)。 */
+        await waitFor(cdp,
+          `(!document.querySelector('.lightbox')) || ((__t.text('.lightbox .lb-path') || '') !== ${JSON.stringify(mv1.p)})`,
+          { label: '快速移动: 点按钮后光箱前进', timeout: 15000 })
+        const base1 = path.basename(mv1.p)
+        const disk1 = fs.existsSync(path.join(qmA, base1)) && !fs.existsSync(mv1.p)
+        check('快速移动: 点按钮 1 = 文件真落盘 QM-A 且原位已不在',
+          disk1, `${base1} -> quick-move-a`)
+        const n1 = await gridN()
+        check('快速移动: 扫描网格同步少一张(tv:moved 消费端)',
+          n1 === mv1.n - 1, `${mv1.n} -> ${n1}`)
+
+        // 数字键 2: 移到 QM-B(等价于点按钮 2)
+        const p2 = await cdp.eval(`return __t.text('.lightbox .lb-path')`)
+        await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }))`)
+        await waitFor(cdp,
+          `(!document.querySelector('.lightbox')) || ((__t.text('.lightbox .lb-path') || '') !== ${JSON.stringify(p2)})`,
+          { label: '快速移动: 数字键 2 触发', timeout: 15000 })
+        const base2 = path.basename(p2)
+        check('快速移动: 按数字键 2 = 文件真落盘 QM-B',
+          fs.existsSync(path.join(qmB, base2)) && !fs.existsSync(p2), `${base2} -> quick-move-b`)
+
+        // 负向对照: 按没有绑定的 9, 什么都不该发生
+        const p3 = await cdp.eval(`return __t.text('.lightbox .lb-path')`)
+        await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '9', bubbles: true }))`)
+        await sleep(900)
+        const p4 = await cdp.eval(`return __t.text('.lightbox .lb-path')`)
+        check('快速移动: 按没绑定的数字(9)什么都不发生(负向对照)',
+          p4 === p3, `路径未变: ${path.basename(p4)}`)
+
+        // 管理弹窗: 改名 QM-A -> QM-A2 + 把第一行下移, 保存后按钮条与 settings.json 都要跟上
+        await cdp.eval(`__t.click('.lightbox .lb-qm [data-test="qm-gear"]'); return true`)
+        await waitFor(cdp, `!!document.querySelector('[data-test="qm-mgr"]')`,
+          { label: '快速移动: 管理弹窗打开', timeout: 5000 })
+        const mgrTop = await cdp.eval(`
+          // 按 qm-mgr 精确找管理弹窗的 mask —— querySelector('.mask') 会取 DOM 第一个,
+          // 页面上若有别的 mask 残留就会取错(10-01 r5 实锤过一次, 顺带输出全量清单定位)
+          const mask = [...document.querySelectorAll('.mask')].find((m) => m.querySelector('[data-test="qm-mgr"]'))
+          const box = mask?.querySelector('.box')
+          if (!mask || !box) return { ok: false, masks: [...document.querySelectorAll('.mask')].length }
+          const r = box.getBoundingClientRect()
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 20)
+          return {
+            ok: true,
+            z: +getComputedStyle(mask).zIndex,
+            lbZ: +getComputedStyle(document.querySelector('.lightbox')).zIndex,
+            topIsModal: !!hit && !!hit.closest('.mask'),
+            all: [...document.querySelectorAll('.mask')].map((m) => ({
+              z: +getComputedStyle(m).zIndex,
+              head: (m.querySelector('.box .head')?.textContent || '').trim().slice(0, 16) || '(无标题)',
+            })),
+          }
+        `)
+        check('快速移动: 管理弹窗盖在光箱上面(层级 400 > 300 · 弹窗中心真实可点)',
+          mgrTop.ok && mgrTop.z > mgrTop.lbZ && mgrTop.topIsModal,
+          `mask z=${mgrTop.z} 光箱 z=${mgrTop.lbZ} · 命中弹窗=${mgrTop.topIsModal} · 全部mask=${JSON.stringify(mgrTop.all || mgrTop.masks)}`)
+        const mgr0 = await cdp.eval(`
+          const rows = [...document.querySelectorAll('[data-test="qm-mgr"] .mgr-row')]
+          return { n: rows.length, first: rows[0]?.querySelector('.pth')?.textContent || '' }
+        `)
+        check('快速移动: 管理弹窗列出全部绑定路径', mgr0.n === 3, `${mgr0.n} 行`)
+        await cdp.eval(`
+          const rows = [...document.querySelectorAll('[data-test="qm-mgr"] .mgr-row')]
+          const inp = rows[0].querySelector('input')
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+          setter.call(inp, 'QM-A2')
+          inp.dispatchEvent(new Event('input', { bubbles: true }))
+          rows[0].querySelectorAll('.acts button')[1].click()
+          return true
+        `)
+        await cdp.eval(`__t.click('[data-test="qm-mgr-save"]'); return true`)
+        /* 不等弹窗 DOM 消失 —— 后台窗口 <Transition> 残影(r7 概率实锤), 等保存生效的
+           真信号: 按钮条第一颗按钮改名成 QM-A2(弹窗关没关不影响保存这件事本身) */
+        await waitFor(cdp,
+          // 注意: 保存前把第一行「下移」了, 保存后顺序 = [QM-B, QM-A2] —— QM-A2 在 btn-2
+          `__t.text('.lightbox .lb-qm .qm-btn[data-test="qm-btn-2"]').includes('QM-A2')`,
+          { label: '快速移动: 保存生效(改名+下移都落到按钮条)', timeout: 8000 })
+        const strip2 = await cdp.eval(`
+          return {
+            b1: __t.text('.lightbox .lb-qm .qm-btn[data-test="qm-btn-1"]'),
+            b2: __t.text('.lightbox .lb-qm .qm-btn[data-test="qm-btn-2"]'),
+          }
+        `)
+        check('快速移动: 保存后按钮顺序/名字立即跟上(下移+改名生效)',
+          strip2.b1.includes('QM-B') && strip2.b2.includes('QM-A2'),
+          `按钮1=${strip2.b1} · 按钮2=${strip2.b2}`)
+        const settingsOnDisk = JSON.parse(fs.readFileSync(path.join(USER_DATA, 'settings.json'), 'utf8'))
+        const qf = settingsOnDisk.quickFolders || []
+        check('快速移动: settings.json 落盘(顺序+新名字, 与右键菜单同一份)',
+          qf[0]?.name === 'QM-B' && qf.some((f) => f.name === 'QM-A2'),
+          JSON.stringify(qf.map((f) => f.name)))
+
+        // 收尾: 关光箱。settings.json 被 11i 改掉没关系 —— harness 每轮重写种子。
+        await cdp.eval(`document.querySelector('.lightbox .lb-close')?.click(); return true`)
+        await sleep(400)
+        check('快速移动: 收尾关掉光箱', !(await cdp.eval(`return !!document.querySelector('.lightbox')`)))
+      }
+    }
+
     const NOISE = /favicon|ERR_FILE_NOT_FOUND.*favicon|sandboxed_renderer\.bundle\.js|binding\.startupData/i
+    /* 「陈旧文件夹封面」豁免 —— 又一条证明式豁免(2026-09-30)。
+     * 背景(已知遗留, 0924 记录在案、尚未修): 文件夹封面 pickCover 取"第一张有标签的图",
+     * **不会因为那张图被删/被移而刷新**。11h 批量删除把 scan-dims/sq.png 删进了回收站,
+     * 而 11i 的 addAndOpenScanFolder 会退回文件夹列表层 —— 封面重新渲染, 404 就翻出来了
+     * (以前没人退回去看, 属于侥幸没撞上)。判据两条同时成立才放行:
+     *   ① 请求的路径 == 被批量删除的那张 sq.png 的精确路径(不靠模式匹配);
+     *   ② 它在磁盘上确实已不在(真被删掉了, 若封面缓存修好/文件还在, 404 根本不会发生)。
+     * 封面缓存失效本身是待修项, 修好后这条豁免自然永远命中不了。 */
+    const STALE_COVER = path.join(path.dirname(SCAN_DIR), 'scan-dims', 'sq.png')
+    // URL 里的盘符大小写会跟 Node 的路径写法不一致(d: vs D:), 归一化后再比
+    const lower = (p) => String(p || '').toLowerCase()
+    const isStaleCover = (msg) => lower(requestedPath(msg)) === lower(STALE_COVER) && !fs.existsSync(STALE_COVER)
     const errs = []
     let selfMovedN = 0
     let staleN = 0
+    let coverN = 0
     for (const e of cdp.errors) {
       if (NOISE.test(e)) continue
       if (outOfBandMoved.some((p) => p && e.includes(p))) { selfMovedN++; continue }
       if (isStaleRecord(requestedPath(e))) { staleN++; continue }
+      if (isStaleCover(e)) { coverN++; continue }
       errs.push(e)
     }
     check('运行期无 JS 异常 / Vue 警告', errs.length === 0,
       errs.length
         ? `${errs.length} 条: ${errs.slice(0, 4).join(' | ')}`
-        : `0 条(已滤掉 favicon/沙箱引导 ${cdp.errors.length - errs.length - selfMovedN - staleN} 条` +
+        : `0 条(已滤掉 favicon/沙箱引导 ${cdp.errors.length - errs.length - selfMovedN - staleN - coverN} 条` +
           (selfMovedN ? ` + 本测试外移的那张图 ${selfMovedN} 条` : '') +
-          (staleN ? ` + 陈旧记录(库里 gone=0 但文件已不在) ${staleN} 条` : '') + ')')
+          (staleN ? ` + 陈旧记录(库里 gone=0 但文件已不在) ${staleN} 条` : '') +
+          (coverN ? ` + 陈旧封面(已知遗留: 封面不随删除刷新) ${coverN} 条` : '') + ')')
 
     /* 同一个"控制台干净"的**另一条通道** —— 主进程转发的渲染器日志。
        上面那条只看 CDP; 浏览器自发的消息(ResizeObserver / CSP / 内存警告…)只走主进程
@@ -3416,6 +4205,7 @@ async function main() {
       .filter((l) => !NOISE.test(l))
       .filter((l) => !outOfBandMoved.some((p) => p && l.includes(p)))
       .filter((l) => !isStaleRecord(requestedPath(l)))
+      .filter((l) => !isStaleCover(l))
     check('主进程转发的渲染器日志也没有 error / warning(CDP 收不到的那条通道)', fwd.length === 0,
       fwd.length ? `${fwd.length} 条: ${fwd.slice(0, 3).map((s) => s.slice(-160)).join(' | ')}` : '0 条')
 

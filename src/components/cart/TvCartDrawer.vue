@@ -6,17 +6,20 @@
  * 现在做成全站共享的抽屉(状态在 useCartStore().drawerOpen), 不管在哪个视图
  * 都能随手看一眼、删两个、直接导出。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import TvButton from '../base/TvButton.vue'
 import TvCartItem from './TvCartItem.vue'
 import TvCheckoutModal from './TvCheckoutModal.vue'
 import TvHistoryModal from './TvHistoryModal.vue'
+import TvCartPresetModal from './TvCartPresetModal.vue'
+import TvCartExtraModal from './TvCartExtraModal.vue'
 import { useCartStore } from '@/stores/useCartStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { api } from '@/utils/api.js'
+import { useCartPresetBadge } from '@/composables/useCartPresetBadge.js'
 
 const cart = useCartStore()
 const ui = useUiStore()
@@ -26,7 +29,22 @@ const lb = useLightboxStore()
 
 const showCheckout = ref(false)
 const showHistory = ref(false)
+const showPreset = ref(false)
 const busy = ref(false)
+
+/**
+ * 「自动导出」开着没有 —— 只用来给按钮点个绿点(配置与倒计时都在弹窗里)。
+ * 每次拉开抽屉时问一次主进程: 抽屉是全站的、可能开着窗就被别处改了配置,
+ * 缓存一份容易显示成过期的状态(用户会看到"绿点亮着其实没开")。
+ */
+const { on: presetOn, lag: presetLag, refresh: refreshPreset, title: presetTitle } = useCartPresetBadge()
+watch(() => cart.drawerOpen, (v) => { if (v) void refreshPreset() })
+
+/** 关掉配置弹窗时重新问一次 —— 刚才可能刚把开关打开/换了目录 */
+function onPresetClose(v) {
+  showPreset.value = v
+  if (!v) void refreshPreset()
+}
 
 /** 按系列分组, 与旧版 cart.html 的排序一致(系列 -> 角色名) */
 const grouped = computed(() => {
@@ -66,11 +84,17 @@ function clearAll() {
 }
 
 async function openCartFile() {
-  // 把购物车内容渲染成一行文本贴到剪贴板 —— 方便直接粘进 ComfyUI 的 wildcard 节点
+  // 把购物车内容渲染成一行行文本贴到剪贴板 —— 方便直接粘进 ComfyUI 的 wildcard 节点。
+  // 走 store 的 wildcardLine: 条目附加标签(如哥伦比亚的 closed_eyes)与导出文件同一口径。
   if (!cart.count) { ui.warn('购物车是空的'); return }
-  const text = cart.list.map((c) => c.tag.replace(/\(/g, '\\(').replace(/\)/g, '\\)')).join('\n')
+  const text = cart.list.map((c) => cart.wildcardLine(c)).join('\n')
   await ui.copy(text, `已复制 ${cart.count} 行 wildcard`)
 }
+
+/* 编辑条目的「附加标签」(与购物车页共用 TvCartExtraModal) */
+const showExtra = ref(false)
+const extraItem = ref(null)
+function editExtra(it) { extraItem.value = it; showExtra.value = true }
 
 /** 点击缩略图 -> 看大图 */
 /** 购物车封面的顺序 —— 光箱里可以顺着翻 */
@@ -100,6 +124,12 @@ async function revealItem(it) {
             <TvButton size="sm" variant="warn" :disabled="!cart.count" @click="showCheckout = true">💳 结算</TvButton>
             <TvButton size="sm" variant="secondary" @click="showHistory = true">🕘 历史</TvButton>
             <TvButton size="sm" variant="primary" :disabled="!cart.count" @click="openCartFile">📋 复制</TvButton>
+            <TvButton
+              size="sm"
+              variant="secondary"
+              :title="presetTitle()"
+              @click="showPreset = true"
+            >⚙ 自动导出<i v-if="presetOn" class="dot" :class="{ lag: presetLag }" /></TvButton>
             <TvSafetyToggle icon-only />
             <TvButton size="sm" variant="danger" :disabled="!cart.count" @click="clearAll">🗑 清空</TvButton>
           </div>
@@ -119,7 +149,7 @@ async function revealItem(it) {
                     class="row"
                     @dblclick="revealItem(it)"
                   >
-                    <TvCartItem :item="it" compact @remove="(t) => cart.remove(t)" @open="openItem" />
+                    <TvCartItem :item="it" compact @remove="(t) => cart.remove(t)" @open="openItem" @edit="editExtra" />
                   </div>
                 </div>
               </div>
@@ -136,6 +166,8 @@ async function revealItem(it) {
 
   <TvCheckoutModal v-model="showCheckout" />
   <TvHistoryModal v-model="showHistory" />
+  <TvCartPresetModal :model-value="showPreset" @update:model-value="onPresetClose" />
+  <TvCartExtraModal v-model="showExtra" :item="extraItem" />
 </template>
 
 <style scoped>
@@ -180,6 +212,13 @@ async function revealItem(it) {
 
 .empty { color: var(--muted); text-align: center; padding: 50px 0; font-size: 13px; line-height: 2; }
 .faint { color: var(--faint); font-size: 11px; }
+
+/* 「⚙ 自动导出」开着的状态点: 绿 = 已开着且同步, 橙 = 开着但这次更新还没导出去 */
+.dot {
+  display: inline-block; width: 6px; height: 6px; margin-left: 5px;
+  border-radius: 50%; background: var(--accent2); vertical-align: middle;
+}
+.dot.lag { background: var(--warn); }
 
 /* 滑入动画 */
 .tv-drawer-enter-active, .tv-drawer-leave-active { transition: opacity .18s ease; }

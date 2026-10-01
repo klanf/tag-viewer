@@ -10,6 +10,8 @@ import { useRouter } from 'vue-router'
 import TvCartItem from '@/components/cart/TvCartItem.vue'
 import TvCheckoutModal from '@/components/cart/TvCheckoutModal.vue'
 import TvHistoryModal from '@/components/cart/TvHistoryModal.vue'
+import TvCartPresetModal from '@/components/cart/TvCartPresetModal.vue'
+import TvCartExtraModal from '@/components/cart/TvCartExtraModal.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvInput from '@/components/base/TvInput.vue'
 import TvState from '@/components/base/TvState.vue'
@@ -20,6 +22,7 @@ import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { api } from '@/utils/api.js'
 import { stripZhSeries } from '@/utils/format.js'
+import { useCartPresetBadge } from '@/composables/useCartPresetBadge.js'
 
 const cart = useCartStore()
 const ui = useUiStore()
@@ -30,7 +33,15 @@ const router = useRouter()
 
 const showCheckout = ref(false)
 const showHistory = ref(false)
+const showPreset = ref(false)
 const busy = ref(false)
+/** 「自动导出」的状态点(绿=已同步 / 橙=有更新待导) —— 与抽屉共用一份 */
+const { on: presetOn, lag: presetLag, refresh: refreshPreset, title: presetTitle } = useCartPresetBadge()
+onMounted(() => { void refreshPreset() })
+function onPresetClose(v) {
+  showPreset.value = v
+  if (!v) void refreshPreset()
+}
 
 /* ---------------- 搜索 ---------------- */
 const kw = ref('')
@@ -111,6 +122,11 @@ function clearAll() {
   ui.ok('已清空')
 }
 
+/* 编辑条目的「附加标签」(如给哥伦比亚加 closed_eyes, 导出同行拼上) */
+const showExtra = ref(false)
+const extraItem = ref(null)
+function editExtra(it) { extraItem.value = it; showExtra.value = true }
+
 /** 购物车封面的顺序 —— 光箱里可以顺着翻 */
 const thumbList = computed(() => cart.list.map((i) => i.thumb).filter(Boolean))
 
@@ -135,6 +151,11 @@ async function reveal(it) {
       <TvButton variant="success" :loading="busy" :disabled="!cart.count" @click="exportAll">⬇ 导出全部</TvButton>
       <TvButton variant="warn" :disabled="!cart.count" @click="showCheckout = true">💳 结算</TvButton>
       <TvButton variant="primary" @click="showHistory = true">🕘 历史记录</TvButton>
+      <!-- 购物车这份是**独立于「导出预设」的一份预设**(只有一个, 不需要筛选快照):
+           有更新就按延迟自动覆盖导一份到指定目录 —— 省掉每次「另存为」挑目录 -->
+      <TvButton variant="secondary" :title="presetTitle()" @click="showPreset = true">
+        ⚙ 自动导出<i v-if="presetOn" class="dot" :class="{ lag: presetLag }" />
+      </TvButton>
       <TvButton variant="danger" :disabled="!cart.count" @click="clearAll">🗑 清空</TvButton>
     </div>
 
@@ -169,7 +190,7 @@ async function reveal(it) {
               :key="it.tag"
               @dblclick="reveal(it)"
             >
-              <TvCartItem :item="it" @remove="(t) => cart.remove(t)" @open="openItem" />
+              <TvCartItem :item="it" @remove="(t) => cart.remove(t)" @open="openItem" @edit="editExtra" />
             </div>
           </div>
         </div>
@@ -178,10 +199,19 @@ async function reveal(it) {
 
     <TvCheckoutModal v-model="showCheckout" />
     <TvHistoryModal v-model="showHistory" />
+    <TvCartPresetModal :model-value="showPreset" @update:model-value="onPresetClose" />
+    <TvCartExtraModal v-model="showExtra" :item="extraItem" />
   </div>
 </template>
 
 <style scoped>
+/* 「⚙ 自动导出」开着时的状态点: 绿 = 已同步, 橙 = 有更新还没导出去(与抽屉同一套) */
+.dot {
+  display: inline-block; width: 6px; height: 6px; margin-left: 5px;
+  border-radius: 50%; background: var(--accent2); vertical-align: middle;
+}
+.dot.lag { background: var(--warn); }
+
 .cart-view {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column; gap: 10px;

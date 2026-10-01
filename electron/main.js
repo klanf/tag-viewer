@@ -23,7 +23,8 @@ import { bootstrap, status } from './core/app-state.js'
 import { runIngest, queueStats } from './core/ingest.js'
 import { runTagger, stopTagger, taggerState } from './core/tagger.js'
 import { ds } from './core/dataset.js'
-import { flushAuto, hasPendingAuto } from './core/exportPresets.js'
+import { flushPendingNow, hasPendingAuto } from './core/exportPresets.js'
+import { flushCartPendingNow, hasPendingCart } from './core/cartPreset.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || ''
@@ -457,15 +458,28 @@ app.on('child-process-gone', (_e, d) => log('warn', `child-process-gone: ${JSON.
 
 /**
  * 退出前把"排程中的自动导出"跑完。
- * 场景: ban 完最后一个词条马上关窗口 —— 1.5s 防抖还没到期, 不 flush 就白按了一次。
- * 这里同步等一下(最多几秒), 保证落盘不半途而废。
+ * 场景: ban 完最后一个词条马上关窗口 —— 延迟还没到期, 不 flush 就白按了一次。
+ *
+ * 2026-09-24 改: 延迟可配(默认 3 分钟)之后, 原来那套"等它自己到期(最多 8 秒)再退"
+ * 必然超时 —— 结果是**这次改动永远不会导出**, 而用户以为已经导过了。
+ * 所以改成**取消定时器、当场跑掉**: 代价是关窗口时可能多等几秒(导出是同步重活),
+ * 换来的是"最后一次改动一定落地"。
+ *
+ * 2026-09-29: 购物车自动导出那条同理 —— 加完角色就关窗, 延迟(默认 30 秒)还没到,
+ * 不 flush 就等于没开这个功能。两条线各 flush 各的, 互不影响。
  */
 app.on('before-quit', (e) => {
   if (quitting || !gotLock) return
-  if (!hasPendingAuto()) return
+  const pendingAuto = hasPendingAuto()
+  const pendingCart = hasPendingCart()
+  if (!pendingAuto && !pendingCart) return
   e.preventDefault()
   quitting = true
-  Promise.resolve(flushAuto()).finally(() => app.quit())
+  // 两条线各 flush 各的(购物车那份就是几十行, 基本不用等)
+  Promise.resolve()
+    .then(() => (pendingAuto ? flushPendingNow() : null))
+    .then(() => (pendingCart ? flushCartPendingNow() : null))
+    .finally(() => app.quit())
 })
 
 app.on('window-all-closed', () => {

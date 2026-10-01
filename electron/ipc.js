@@ -31,8 +31,14 @@ import { buildExport, buildCartExport } from './core/exporter.js'
 import {
   listPresets, savePreset, deletePreset, runPreset,
   blacklistFingerprint, afterBlacklistChange, setAutoNotifier, flushAuto,
+  autoState, DELAY_OPTIONS, setAutoDelayMs, flushPendingNow,
 } from './core/exportPresets.js'
+import {
+  cartPresetState, saveCartPreset, runCartPreset, notifyCartChanged,
+  flushCartPendingNow, setCartNotifier,
+} from './core/cartPreset.js'
 import { scanFolder, scanCacheStats, purgeScanCachePaths } from './core/scan.js'
+import { previewTagEdit, applyTagEdit } from './core/tagedit.js'
 import { copyImageWithNotice, openWithDialog } from './core/clipboardImage.js'
 import { runIngest, ingestStatus, pauseIngest, ingestState, queueStats } from './core/ingest.js'
 import {
@@ -215,6 +221,8 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
   // 自动导出的结果(成功/失败)由主进程推给渲染层弹 toast。
   // 注册一次即可: 防抖到期时主窗口可能已经不是同一个, 所以每次都现取。
   setAutoNotifier((payload) => mainWindow()?.webContents.send('export:auto', payload))
+  // 购物车自动导出的结果同理 —— 排程倒计时/结果都靠它。
+  setCartNotifier((payload) => mainWindow()?.webContents.send('cart:auto', payload))
 
   const map = {
     // ---------------- 应用 / 数据集 ----------------
@@ -402,6 +410,20 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     // ---------------- 标签 ----------------
     'suggest:get': safe((raw) => getSuggest(raw)),
     'tags:all': safe((raw) => getAllTags(raw)),
+    // ---------------- 标签改名 / 删除(2026-10-01) ----------------
+    // 预览只读; apply 走 tagedit.js(备份 -> 事务 -> rebuildTags), 改完顺手重载数据集
+    // —— 否则库是新的、内存里是旧的, 界面看不到改完的效果(与反推后的重载同一理由)。
+    'tags:edit:preview': safe(({ op, from, to, scopeTag } = {}) => previewTagEdit({ op, from, to, scopeTag })),
+    'tags:edit:apply': safe(async ({ op, from, to, scopeTag } = {}) => {
+      const r = applyTagEdit({ op, from, to, scopeTag })
+      const st = await bootstrap({
+        onProgress: (p) => mainWindow()?.webContents.send('app:progress', p),
+      })
+      onReload?.()
+      // 与 main.js startLoad 同款: 重载完把新状态推给渲染层(顶栏计数/各 store 刷新)
+      mainWindow()?.webContents.send('app:reloaded', st)
+      return r
+    }),
     'tags:forPath': safe((raw) => getTagsForPath(raw)),
     'lightbox:data': safe((raw) => getLightboxData(raw)),
     'translate:get': safe((raw) => getTranslations(raw)),
@@ -459,6 +481,17 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     'cart:delete': safe(({ name }) => deleteHistory(name)),
     'cart:rename': safe(({ old_name, new_name }) => renameHistory(old_name, new_name)),
 
+    // ---------------- 购物车自动导出(单预设) ----------------
+    // 渲染层的 useCartStore 每次变更都会报一次(六个入口共用这一条上报), 主进程
+    // 拿它当"购物车有更新"的判据 —— 指纹没变就是空操作。
+    'cart:changed': safe(({ tags } = {}) => notifyCartChanged(tags)),
+    'cart:preset:get': safe(() => cartPresetState()),
+    'cart:preset:save': safe((patch) => saveCartPreset(patch || {})),
+    // 立即导出一次: tags 由调用方带上(渲染层那份是最新的, 主进程内存里可能还没有)
+    'cart:preset:run': safe(({ tags } = {}) => runCartPreset({ tags, trigger: 'manual' })),
+    // 跳过等待、立刻导掉排程中的那次(抽屉里的「立刻导」/ 关窗前收尾)
+    'cart:preset:flushNow': safe(() => flushCartPendingNow()),
+
     // ---------------- 导出 ----------------
     // 先算好, 再弹「另存为」; 用户取消时不会白算一遍
     'export:preview': safe((raw) => {
@@ -474,7 +507,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       })
       if (dlg.canceled || !dlg.filePath) return { canceled: true, count: r.count }
       await fs.promises.writeFile(dlg.filePath, r.text, 'utf8')
-      return { ok: true, path: dlg.filePath, count: r.count, bytes: Buffer.byteLength(r.text, 'utf8') }
+      return { ok: true, path: dlg.filePath, count: r.count, replaced: r.replaced, bytes: Buffer.byteLength(r.text, 'utf8') }
     }),
     'export:text': safe((raw) => buildExport(raw)),
 
@@ -483,6 +516,14 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     'export:preset:save': safe((raw) => savePreset(raw)),
     'export:preset:delete': safe(({ id }) => deletePreset(id)),
     'export:preset:run': safe(({ id }) => runPreset(id, { trigger: 'manual' })),
+    // 排程状态 + 延迟档位 —— 渲染层显示「待导出 mm:ss」倒计时与延迟下拉都靠它。
+    // 档位从主进程带出去(而不是渲染层自己写一份), 免得两边漂移:
+    // 一边改了档位、另一边还按旧值显示, 用户会看到"选了 1 分钟却等 3 分钟"。
+    'export:preset:state': safe(() => ({ ...autoState(), delayOptions: DELAY_OPTIONS })),
+    // 改全局延迟。立刻生效: 正排着队等的那批会按新时长重排(见 setAutoDelayMs)
+    'export:preset:delay': safe(({ delayMs } = {}) => setAutoDelayMs(delayMs)),
+    // 跳过等待、立刻导(首页角标点一下)。没有排程就是空操作, 不会白跑一次重活
+    'export:preset:flushNow': safe(() => flushPendingNow()),
     // 等"排程中的自动导出"跑完 —— 关窗/换数据前收尾用, 保证落盘不半途而废
     'export:preset:flush': safe(async () => { await flushAuto(); return { ok: true } }),
     // 选目标目录: 与 scan:pickFolder 同一套"记住上次选的目录"行为
@@ -684,6 +725,26 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       const r = addQuickFolderAndReturn(dir)
       return r.result || { ok: false, error: '未知错误' }
     }),
+    /* 光箱「快速移动」按钮条的管理弹窗(2026-09-29): 整表保存(改名/排序/删除/新增)。
+       逐条清洗: 路径 resolve / 按路径去重(大小写不敏感, 与 add 同规矩) /
+       名字兜底 basename / 上限 50(与 add 一致)。resolve 不了的条目直接丢。 */
+    'app:quickFolders:set': safe(({ folders } = {}) => {
+      const seen = new Set()
+      const out = []
+      for (const f of (Array.isArray(folders) ? folders : [])) {
+        if (!f || typeof f.path !== 'string' || !f.path) continue
+        try {
+          const clean = path.resolve(f.path)
+          const key = clean.toLowerCase()
+          if (seen.has(key)) continue
+          seen.add(key)
+          out.push({ name: String(f.name || '').trim() || path.basename(clean) || clean, path: clean })
+        } catch { /* 非法路径条目丢弃 */ }
+        if (out.length >= 50) break
+      }
+      saveSettings({ quickFolders: out })
+      return { ok: true, quickFolders: out }
+    }),
 
     // ---------------- 剪贴板 ----------------
     'clipboard:write': safe(({ text }) => {
@@ -747,4 +808,4 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
 }
 
 /** 主进程主动推送的事件名(渲染进程用 tv.on 订阅) */
-export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress', 'tagger:progress', 'export:auto', 'app:toast']
+export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress', 'tagger:progress', 'export:auto', 'cart:auto', 'app:toast']

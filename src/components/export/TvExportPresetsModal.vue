@@ -19,9 +19,10 @@ import TvInput from '../base/TvInput.vue'
 import TvSelect from '../base/TvSelect.vue'
 import TvCheckbox from '../base/TvCheckbox.vue'
 import TvSourceChips from '../filter/TvSourceChips.vue'
+import TvCartPresetSection from '../cart/TvCartPresetSection.vue'
 import { api } from '@/utils/api.js'
 import { useUiStore } from '@/stores/useUiStore.js'
-import { nfmt, bytes, ts as fmtTs } from '@/utils/format.js'
+import { nfmt, bytes, dur, ts as fmtTs } from '@/utils/format.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -64,7 +65,40 @@ watch(() => props.modelValue, (v) => {
   if (!v) { editing.value = null; return }
   editing.value = null
   load()
+  loadDelay()
 })
+
+/* ---------------------------------------------------- 延迟(全局设置) */
+
+/**
+ * 「ban 完之后等多久才导」—— **全局一个值**, 不是每个预设各一份。
+ * 起因(2026-09-24 用户诉求): 连着 ban 好几个标签时, 每个都各触发一次 3~4 秒的
+ * 同步导出太磨人; 等几分钟, 中间所有改动合并成一次。
+ *
+ * 档位从主进程带回来(见 export:preset:state): 渲染层不自己写一份,
+ * 免得两边漂移 —— 一边改了档位、另一边还按旧值显示, 用户会看到"选了 1 分钟却等 3 分钟"。
+ */
+const delayMs = ref(0)
+const delayOpts = ref([])
+
+async function loadDelay() {
+  try {
+    const s = await api.exportPresetState()
+    delayMs.value = Number(s?.delayMs) || 0
+    delayOpts.value = (s?.delayOptions || []).map((v) => ({ value: v, label: dur(v) }))
+  } catch { /* 浏览器降级 / 主进程没注册: 不显示这一行就行 */ }
+}
+
+async function onDelayChange(v) {
+  try {
+    const r = await api.exportPresetDelay(v)
+    delayMs.value = Number(r?.delayMs) || Number(v)
+    ui.ok(`⏱ 已改成 ${dur(delayMs.value)} 后自动导出`, 2200)
+  } catch (e) {
+    ui.err('改延迟失败: ' + e.message)
+    await loadDelay()          // 取回真实值, 免得界面停在没生效的选项上
+  }
+}
 
 /* ------------------------------------------------------------ 表单 */
 
@@ -214,7 +248,18 @@ function shortDir(d) {
       <div class="tip">
         预设 = <b>一份筛选条件快照</b> + <b>目标目录/文件名</b>。
         勾了「黑名单变更后自动导出」的预设, 在你 ban / 取消 ban 之后
-        <b>原地覆盖</b>导出一次(1.5s 内多次改动只导一次), 不用再手动点导出。
+        <b>原地覆盖</b>导出一次, 不用再手动点导出。
+      </div>
+
+      <!-- 延迟: 全局设置。连着 ban 好几个标签时, 等一会再导 —— 只导一次 -->
+      <div v-if="delayOpts.length" class="delayrow">
+        <span class="lb">ban 完之后等</span>
+        <TvSelect :model-value="delayMs" size="sm" :options="delayOpts" @update:model-value="onDelayChange" />
+        <span class="faint">再自动导出(期间改多少次都只导一次)。改完<b>立刻生效</b>。</span>
+      </div>
+      <div class="faint delayrow-tip">
+        等待期间首页侧栏会出现「待导出 mm:ss」角标 —— <b>点它一下可以跳过等待立刻导</b>;
+        这时候关窗口也会先把这次导出跑完再退。
       </div>
 
       <div v-if="loading" class="muted">读取中...</div>
@@ -260,6 +305,16 @@ function shortDir(d) {
       <div class="pfoot">
         <TvButton variant="primary" @click="startNew">＋ 新建预设</TvButton>
         <span class="faint">新建时用首页当前的筛选条件做初值(来源、搜索词、各开关)</span>
+      </div>
+
+      <!-- 购物车那条是**独立的一份预设**(只有一个, 也不需要筛选快照) ——
+           跟上面这些共用同一个台面, 只是为了让"自动导出"只有一个地方可找。 -->
+      <div class="csec">
+        <div class="csec-t">
+          🛒 购物车自动导出
+          <span class="faint">（独立的一份，跟随购物车变化，与上面的筛选预设互不影响）</span>
+        </div>
+        <TvCartPresetSection />
       </div>
     </template>
 
@@ -356,6 +411,12 @@ function shortDir(d) {
 .faint { color: var(--faint); font-size: 11px; }
 .err { color: var(--danger, #d93025); font-size: 12px; margin-top: 8px; }
 
+/* ---------------- 延迟(全局设置) ---------------- */
+.delayrow { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.delayrow .lb { flex: 0 0 auto; }
+.delayrow :deep(.tv-select) { flex: 0 0 110px; }
+.delayrow-tip { display: block; margin-bottom: 12px; }
+
 /* ---------------- 列表 ---------------- */
 .plist { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; padding-right: 2px; }
 .prow {
@@ -382,6 +443,10 @@ function shortDir(d) {
   margin-right: auto;
 }
 .pfoot { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+
+/* ---------------- 购物车自动导出(独立一份预设) ---------------- */
+.csec { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+.csec-t { font-size: 13px; color: var(--text); margin-bottom: 8px; }
 
 /* ---------------- 表单 ---------------- */
 .frow { margin-bottom: 10px; }
