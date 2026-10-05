@@ -151,6 +151,6 @@ npm start          :: 启动（等价于双击启动脚本）
 
 | 项 | 现状 |
 | --- | --- |
-| 打包成 exe | 目前靠 `启动看板.bat` 直接调 Electron 运行时；如需单文件分发再加 electron-builder |
+| 打包 | 绿色分发包已有（`npm run pack:green`，解压双击即用）；缺的只是「单文件 exe」这种形态，需要时再加 electron-builder |
 | 数据目录切换 | `electron/core/workspace.js` 支持 `TV_DATA_DIR` 环境变量；UI 里还没有入口 |
 | 文件夹库的排序 | 按名字/路径过滤、「显示已移出」开关都已有了；排序目前固定为登记顺序，还没有排序选项 |
