@@ -6,7 +6,7 @@
  * 这里把主进程推上来的 parse/stats 进度画成进度条, 并在失败时把错误与
  * 数据目录直接摆出来(这是最常见的"起不来"原因: 配置里的路径不存在)。
  */
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import TvButton from '../base/TvButton.vue'
 import { useAppStore } from '@/stores/useAppStore.js'
 import { nfmt, ms } from '@/utils/format.js'
@@ -25,11 +25,112 @@ const pct = computed(() => Math.max(0, Math.min(100, app.progress.percent || 0))
 
 /**
  * 「一个数据源都还没配」和「配了但读不到」是两种完全不同的处境, 给的引导也该不一样:
- *   前者是新装/换机器的正常起点  -> 告诉他去哪儿放配置文件
+ *   前者是新装/绿色包的正常起点  -> 不用碰任何文件, 直接选个文件夹登记, 马上开始
  *   后者是配置写错的排障问题    -> 告诉他去核对哪个字段
  * workspace.configExists 由主进程在 initWorkspace 时探明并随 app:status 下发。
  */
 const noSourceYet = computed(() => app.workspace.configExists === false)
+
+/** 首次登记: 就地选文件夹 -> 登记成看板来源(自动接同步与反推) -> 等第一批记录落库 -> 重新载入数据集 */
+const picking = ref(false)
+const pickErr = ref('')
+/**
+ * 登记后**入库是异步的** —— 登记完立刻 reload, images 表还是空的,
+ * bootstrap 会误报"没有可用的标签数据"(2026-10-02 用户在绿色包实测踩中)。
+ * 所以登记后主动拉一次同步, 然后轮询等第一批记录落库, 再进看板。
+ */
+const scanning = ref(false)
+const scanNote = ref('')
+
+async function startWithFolder() {
+  if (picking.value) return
+  picking.value = true
+  pickErr.value = ''
+  try {
+    const picked = await api.pickFolder({ title: '选择一个装满图片的文件夹' })
+    if (picked?.canceled) return
+    const list = picked.paths || (picked.path ? [picked.path] : [])
+    if (!list.length) return
+    for (const p of list) {
+      const r = await api.addFolder({ path: p, as_source: true, as_scan: false, recursive: true })
+      if (r?.error) { pickErr.value = `${p}: ${r.error}`; return }
+    }
+    // 已在跑就静默跳过(登记跃迁本身会自动接同步; 这里兜底)
+    api.ingestRun().catch(() => {})
+    scanning.value = true
+    const ok = await waitFirstRecords(10 * 60 * 1000)
+    if (!ok) {
+      // 2026-10-03: 别再把"入队等反推"误报成"没扫到图" —— 拉一次队列状态区分
+      try {
+        const st = await api.ingestStatus()
+        const q = st?.queue || {}
+        const total = Number(q.total) || 0
+        if (total > 0) {
+          pickErr.value = `已扫到 ${total} 张图并在后台反推打标中（已完成 ${Number(q.done) || 0} 张）—— 点「重试」查看进度，反推完成后自动进入看板`
+        } else {
+          pickErr.value = '扫描完成但没找到支持的图片 —— 确认这个文件夹里真的有图片，然后点「重试」'
+        }
+      } catch { pickErr.value = '扫描未产生入库记录 —— 请点「重试」再试一次' }
+      return
+    }
+    await reload()
+  } catch (e) {
+    pickErr.value = String(e?.message || e)
+  } finally {
+    picking.value = false
+    scanning.value = false
+  }
+}
+
+/** 轮询 ingest:status, 等到 stats.inserted > 0(第一批图真正落库)或超时。
+ *  完成判定: lastRunAt 晚于我们的起点 && 已不在跑 —— 说明这一轮扫完了。
+ *  2026-10-03: 裸图(无内嵌提示词)不落 images 表、只进打标队列 —— 所以第二个
+ *  放行条件是 queue.done ≥ 10(反推已产出前 10 张), 不能死等 inserted。 */
+function waitFirstRecords(timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  const SYNC_RUNNING = new Set(['running', 'enum', 'compare', 'read', 'dims', 'folder-done', 'rebuild-tags'])
+  let startedAt = 0
+  let taggerKicked = false
+  return new Promise((resolve) => {
+    const tick = async () => {
+      try {
+        const st = await api.ingestStatus()
+        const ins = Number(st?.stats?.inserted) || 0
+        const q = st?.queue || {}
+        const done = Number(q.done) || 0
+        const total = Number(q.total) || 0
+        const running = !!(st?.running || SYNC_RUNNING.has(st?.phase))
+        /* 新装机引导流程要自己拉反推(2026-10-03): 全局的 onIngestDone 已不再自动
+         * scheduleTagging(移动一张图不该为 1 张裸图加载模型), 但"登记文件夹首扫"
+         * 的下一步就是反推 —— 队列建出来了、反推没在跑, 就拉一次(tagger:run 自带
+         * 防重入), 否则裸图场景永远等不到 done≥10, 10 分钟后误报超时。 */
+        if (!taggerKicked && total > 0) {
+          taggerKicked = true
+          api.taggerRun().catch(() => {})
+        }
+        if (ins > 0) {
+          scanNote.value = `正在扫描入库… 已入库 ${ins} 张`
+          resolve(true)
+          return
+        }
+        if (done >= 10) {
+          scanNote.value = `正在反推打标… 已入库 ${done} / ${total} 张`
+          resolve(true)
+          return
+        }
+        if (total > 0) scanNote.value = `已扫到 ${total} 张图，正在反推打标… 已入库 ${done} 张`
+        else if (!running && Number(st?.lastRunAt || 0) > startedAt) { resolve(false); return }
+        else scanNote.value = '正在扫描入库…'
+      } catch { /* 主进程忙, 下一拍再看 */ }
+      if (Date.now() > deadline) { resolve(false); return }
+      setTimeout(tick, 500)
+    }
+    api.ingestStatus()
+      .then((s0) => { startedAt = Number(s0?.lastRunAt) || 0 })
+      .catch(() => {})
+      .finally(tick)
+  })
+}
 
 async function reveal() {
   try { await api.openPath(app.workspace.dataDir) } catch { /* 忽略 */ }
@@ -37,6 +138,50 @@ async function reveal() {
 async function reload() {
   try { await app.reload() } catch { /* 错误已进 store */ }
 }
+
+/* ---- 反推暂态放行(2026-10-03) ----
+ * 库里 folders 有行、队列压着裸图、images 还是 0 → 数据集加载 phase=error,
+ * 错误文案是 dataset.js 的"…正在打标队列里等待反推入库"。这是**暂态**不是死局:
+ * 反推在后台跑, 队列 done 涨到 10 张时重载数据集就能进看板, 反推继续在后台跑完。
+ * 90 秒一张没动 → 大概率反推降级(没 python/模型), 把降级原因亮出来别让用户干等。 */
+const taggingWait = computed(() => app.phase === 'error' && /打标队列|等待反推/.test(app.error || ''))
+const tagQ = ref({ done: 0, total: 0, pending: 0 })
+const tagWarn = ref('')
+const tagPct = computed(() => {
+  const { done, total } = tagQ.value
+  return total > 0 ? Math.max(0, Math.min(100, Math.round((done / total) * 100))) : 0
+})
+let tagPollStarted = false
+
+function startTagPoll() {
+  if (tagPollStarted) return
+  tagPollStarted = true
+  let lastDone = -1
+  let stallSince = Date.now()
+  const tick = async () => {
+    if (app.ready || !taggingWait.value) return          // 已放行 / 状态已变, 停
+    try {
+      const st = await api.ingestStatus()
+      const q = st?.queue || {}
+      tagQ.value = { done: Number(q.done) || 0, total: Number(q.total) || 0, pending: Number(q.pending) || 0 }
+      if (tagQ.value.done !== lastDone) {
+        lastDone = tagQ.value.done
+        stallSince = Date.now()
+        tagWarn.value = ''
+      } else if (tagQ.value.pending > 0 && Date.now() - stallSince > 90 * 1000) {
+        const ts = await api.taggerStatus().catch(() => null)
+        if (ts?.degraded) tagWarn.value = `反推未在运行: ${ts.reason || '未知原因'}（修好环境后重启应用即可接着跑，队列里的图不会丢）`
+      }
+      if (tagQ.value.done >= 10) {
+        await reload()
+        if (app.ready) return                            // 放行成功, 遮罩随 app.ready 消失
+      }
+    } catch { /* 主进程忙, 下一拍再看 */ }
+    setTimeout(tick, 1000)
+  }
+  tick()
+}
+watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
 </script>
 
 <template>
@@ -47,23 +192,59 @@ async function reload() {
         <div class="ttl">Tag 可视化看板</div>
 
         <template v-if="app.phase === 'error'">
-          <div class="err">{{ noSourceYet ? '👋 还没有配置标签数据源' : '❌ 数据加载失败' }}</div>
-          <pre class="msg">{{ app.error }}</pre>
-          <div class="hint">
-            数据目录: <code>{{ app.workspace.dataDir || '(未设置)' }}</code><br>
-            <template v-if="noSourceYet">
-              这个目录下还没有 <code>tag_viewer_config.json</code>。<br>
-              建一个, 用 <code>data_files_dir</code> 指向存放 <code>tags_*.txt</code> 的目录,<br>
-              然后点「重试」即可。
-            </template>
-            <template v-else>
+          <!-- 反推暂态: 图已入队、正在后台打标 —— 给进度条, done≥10 自动放行进看板 -->
+          <template v-if="taggingWait">
+            <div class="err" style="color: var(--accent);">🖼️ 图片已全部扫到，正在反推打标</div>
+            <div class="bar"><div class="fill" :style="{ width: `${tagPct}%` }" /></div>
+            <div class="nums">
+              <span>{{ tagPct }}%</span>
+              <span>已入库 {{ nfmt(tagQ.done) }} / {{ nfmt(tagQ.total) }} 张</span>
+            </div>
+            <div class="hint">
+              反推在后台跑，入库满 10 张自动进入看板，之后反推继续在后台完成。<br>
+              期间关掉窗口也没关系，下次启动会接着跑（队列不会丢）。
+            </div>
+            <div v-if="tagWarn" class="err2">{{ tagWarn }}</div>
+            <div class="btns">
+              <TvButton variant="secondary" @click="reveal">打开数据目录</TvButton>
+              <TvButton variant="secondary" @click="reload">重试</TvButton>
+            </div>
+          </template>
+
+          <template v-else-if="noSourceYet">
+            <div class="err">👋 还没有登记图片文件夹</div>
+            <pre class="msg">{{ app.error }}</pre>
+
+            <!-- 首次使用: 不用碰任何配置文件, 选个文件夹登记就开跑 -->
+            <div class="hint">
+              点下面的按钮选一个装满图的文件夹，登记后自动扫描入库。<br>
+              中文标签已内置，开箱即有。数据目录: <code>{{ app.workspace.dataDir || '(未设置)' }}</code>
+            </div>
+            <div v-if="pickErr" class="err2">{{ pickErr }}</div>
+            <div class="btns">
+              <TvButton variant="primary" :loading="picking || scanning" @click="startWithFolder">
+                📁 选择图片文件夹，马上开始
+              </TvButton>
+            </div>
+            <div v-if="scanning" class="hint">{{ scanNote }}（完成后自动进入看板）</div>
+            <div class="btns">
+              <TvButton variant="secondary" @click="reveal">打开数据目录</TvButton>
+              <TvButton variant="secondary" @click="reload">重试</TvButton>
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="err">❌ 数据加载失败</div>
+            <pre class="msg">{{ app.error }}</pre>
+            <div class="hint">
+              数据目录: <code>{{ app.workspace.dataDir || '(未设置)' }}</code><br>
               检查 <code>tag_viewer_config.json</code> 里的 <code>data_files_dir</code> 是否存在。
-            </template>
-          </div>
-          <div class="btns">
-            <TvButton variant="primary" @click="reload">重试</TvButton>
-            <TvButton variant="secondary" @click="reveal">打开数据目录</TvButton>
-          </div>
+            </div>
+            <div class="btns">
+              <TvButton variant="primary" @click="reload">重试</TvButton>
+              <TvButton variant="secondary" @click="reveal">打开数据目录</TvButton>
+            </div>
+          </template>
         </template>
 
         <template v-else>
@@ -121,6 +302,7 @@ async function reload() {
 .hint code { color: var(--accent); }
 
 .err { color: var(--danger); font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.err2 { color: var(--danger); font-size: 11px; margin-top: 10px; word-break: break-all; }
 .msg {
   text-align: left; white-space: pre-wrap; word-break: break-all;
   background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-sm);

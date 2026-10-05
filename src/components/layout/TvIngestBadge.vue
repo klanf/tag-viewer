@@ -18,6 +18,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useAppStore } from '@/stores/useAppStore.js'
 import { nfmt } from '@/utils/format.js'
+import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 
 const app = useAppStore()
 
@@ -168,6 +169,8 @@ onBeforeUnmount(clearTimer)
         <!-- 降级: 不是错误, 只是这台机器上没条件反推 -->
         <template v-if="degraded">
           <div class="note wrap">{{ s.note }}</div>
+          <!-- 2026-10-02: 降级不该是死胡同 —— 给一条能走通的路(弹「怎么装」引导) -->
+          <div class="note dim"><a href="#" @click.prevent="openTaggerSetup">没有反推环境? 看看怎么装 →</a></div>
         </template>
 
         <div v-else-if="failed" class="note wrap">{{ s.note }}</div>

@@ -148,7 +148,7 @@ db.prepare(`INSERT INTO images (path, src_id, tags, folder_id, tags_src, gone)
             VALUES (?, 0, ?, NULL, 'wd14', 0)`).run(pB, '1girl, smile')
 
 const seen = []
-readRecords((r) => seen.push(r))
+await readRecords((r) => seen.push(r))
 const a = seen.find((r) => r.path === pA)
 const b = seen.find((r) => r.path === pB)
 eq('有尺寸的行带出 px_w', a?.px_w, 832)

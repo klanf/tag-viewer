@@ -187,26 +187,29 @@ export function getSeries(raw = {}) {
       for (const i of idSet) if (srcOk(i)) ids.add(i)
       if (!ids.size) continue
     }
-    let chars = ds.seriesChars.get(name) || new Map()
-    if (srcSet) {
-      const m = new Map()
-      for (const [t, cids] of chars) {
-        const kept = new Set()
-        for (const i of cids) if (srcOk(i)) kept.add(i)
-        if (kept.size) m.set(t, kept)
+    // 角色数按**合并后**的组数算(见 mergeCharVariants) —— 不然列表页写 9 个角色、
+    // 点进详情页只有 6 张卡, 两处对不上
+    const groups = mergeCharVariants(ds.seriesChars.get(name) || new Map())
+    const groupsShown = new Map()
+    for (const [short, g] of groups) {
+      let ids = g.ids
+      if (srcSet) {
+        ids = new Set()
+        for (const i of g.ids) if (srcOk(i)) ids.add(i)
+        if (!ids.size) continue
       }
-      chars = m
+      groupsShown.set(short, ids.size)
     }
     // 合并 custom_chars 里该系列下的补充角色 —— 不算上的话, 列表页的角色数/图片数
     // 会和该系列详情页对不上
-    const extra = (meta.custom_chars[name] || []).filter((t) => !chars.has(t))
+    const extra = (meta.custom_chars[name] || []).filter((t) => !groups.has(charShortName(t)))
     let extraImgs = 0
     for (const t of extra) extraImgs += tagCounter.get(t) || 0
 
     items.push({
       name,
       images: ids.size + extraImgs,
-      characters: chars.size + extra.length,
+      characters: groupsShown.size + extra.length,
       thumb: ds.records[ids.size ? coverIdx(ids) : 0].path,
       category: cats[name] || guessCategory(name),
     })
@@ -246,6 +249,46 @@ export function getSeries(raw = {}) {
   }
 }
 
+/**
+ * 同一角色的两种 tag 写法合并(2026-10-04)
+ * ==============================================
+ * WD14 对同一个角色有时打短名(`frieren`)、有时打带作品的全名
+ * (`frieren_(sousou_no_frieren)`), 而 charlib 两种写法**都**登记成角色
+ * (chars 表里 frieren=src:cooccur, frieren_(...)=src:paren) ->
+ * seriesChars 里就是两个 key -> 系列页同一个角色出现两张卡。
+ * 用户 10-04 实测: 芙莉莲 249 张 + frieren 17 张、菲伦 504 + 蕨类植物 92、
+ * 奥拉 19 + 光环 10 —— 一共 9 个"角色"里 3 个是重复的。
+ *
+ * 合并口径: 同一系列内按**短名**分组。
+ *   · 代表 tag 优先取带括号的完整形式 —— 完整形式跨系列无歧义, 而且它才是
+ *     「角色表」该有的样子(用户要导出的就是 `frieren_(sousou_no_frieren)`,
+ *     而不是裸的 `frieren`)。只有短名存在时才用短名。
+ *   · alt 带回其余写法: 角色图集那边用 exact 多 tag 搜索, 把两种写法的图一次收齐
+ *     (用短名做 contains 会顺带命中别的作品角色, exact 不会)。
+ *   · 张数相加, 缩略图从合并后的集合里挑(按记录顺序, 与原口径一致)。
+ *
+ * @param {Map<string, Set<number>>} chars seriesChars 的一项
+ * @returns {Map<string, {tags: string[], ids: Set<number>}>} 短名 -> 组
+ */
+export function mergeCharVariants(chars) {
+  const groups = new Map()
+  for (const [tag, idSet] of chars) {
+    const short = charShortName(tag)
+    let g = groups.get(short)
+    if (!g) { g = { tags: [], ids: new Set() }; groups.set(short, g) }
+    g.tags.push(tag)
+    for (const i of idSet) g.ids.add(i)
+  }
+  return groups
+}
+
+/** 组 -> 代表 tag + alt 列表(代表优先带括号的完整形式) */
+function charRep(g) {
+  const full = g.tags.find((t) => t !== charShortName(t))
+  const rep = full || g.tags[0]
+  return { rep, alt: g.tags.filter((t) => t !== rep) }
+}
+
 export function getCharacters(raw = {}) {
   const series = typeof raw.series === 'string' ? raw.series : ''
   const p = parseQuery(raw)
@@ -260,16 +303,18 @@ export function getCharacters(raw = {}) {
     return v
   }
 
-  for (const [tag, idSet] of chars) {
-    let ids = idSet
+  for (const [, g] of mergeCharVariants(chars)) {
+    let ids = g.ids
     if (srcSet) {
       ids = new Set()
-      for (const i of idSet) if (srcOk(i)) ids.add(i)
+      for (const i of g.ids) if (srcOk(i)) ids.add(i)
       if (!ids.size) continue
     }
+    const { rep, alt } = charRep(g)
     items.push({
-      tag,
-      name: charShortName(tag),
+      tag: rep,
+      alt,
+      name: charShortName(rep),
       images: ids.size,
       thumb: ds.records[coverIdx(ids)].path,
     })
@@ -279,8 +324,11 @@ export function getCharacters(raw = {}) {
   const meta = loadUserMeta()
   const [tagCounter, , ] = statsFor(srcSet)
   const recs = recordsFor(srcSet)
+  const groups = mergeCharVariants(chars)
   for (const tag of meta.custom_chars[series] || []) {
-    if (chars.has(tag)) continue
+    // 跟"合并后"的组比, 不是跟原始 chars 比 —— 否则用户补的 `frieren` 会跟
+    // 合并组(代表 tag = frieren_(sousou_no_frieren)) 又撞出一张重复卡
+    if (groups.has(charShortName(tag))) continue
     const c = tagCounter.get(tag) || 0
     let thumb = ''
     if (c > 0) {
@@ -288,10 +336,10 @@ export function getCharacters(raw = {}) {
         if (rec.tags.includes(tag)) { thumb = rec.path; break }
       }
     }
-    items.push({ tag, name: charShortName(tag), images: c, thumb })
+    items.push({ tag, alt: [], name: charShortName(tag), images: c, thumb })
   }
 
-  items.sort((a, b) => b.images - a.images)
+  items.sort((a, b) => b.images - a.images || a.name.localeCompare(b.name, 'en'))
   return { series, total: items.length, characters: items }
 }
 

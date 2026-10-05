@@ -13,12 +13,13 @@
  *     旧版踩过坑: 只在当前页过滤会导致结果空掉
  *   · 导出时剔除黑名单、应用替换规则、按需补背景标签(都由主进程完成)
  */
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onActivated, onDeactivated } from 'vue'
 import TvSourceChips from '@/components/filter/TvSourceChips.vue'
 import TvTagBars from '@/components/tag/TvTagBars.vue'
 import TvTabs from '@/components/base/TvTabs.vue'
 import TvTagSuggestInput from '@/components/tag/TvTagSuggestInput.vue'
 import TvSelect from '@/components/base/TvSelect.vue'
+import TvReplaceSetPicker from '@/components/export/TvReplaceSetPicker.vue'
 import TvCheckbox from '@/components/base/TvCheckbox.vue'
 import TvInput from '@/components/base/TvInput.vue'
 import TvButton from '@/components/base/TvButton.vue'
@@ -27,6 +28,7 @@ import TvRulesEditorModal from '@/components/rules/TvRulesEditorModal.vue'
 import TvExportPresetsModal from '@/components/export/TvExportPresetsModal.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
 import { useSearchHistory } from '@/composables/useSearchHistory.js'
+import { LS } from '@/utils/lskey.js'
 import { useAppStore } from '@/stores/useAppStore.js'
 import { useSourceStore } from '@/stores/useSourceStore.js'
 import { useFavStore } from '@/stores/useFavStore.js'
@@ -52,7 +54,6 @@ const hist = useSearchHistory()
 const q = ref('')
 const mode = ref('all')
 const match = ref('contains')
-const exclude = ref('')
 const nameFilter = ref('')   // 文件名子串过滤(如 "Anima-" 找 ComfyUI 生成的图)
 const excludeChar = ref(true)
 /* 排序从 prefs 读、改完写回 —— 用户明确要求"记住排序", 每次进来不用重点一遍 */
@@ -74,6 +75,9 @@ const stripCharExport = ref(true)  // 导出时剔除角色/系列标签(含无�
 const stripViewExport = ref(false) // 导出时剔除视角/机位标签(词表 data/export_view_tags.txt, 来自随机机位交接文档)
 const safeOnlyExport = ref(false)  // 导出时剔除敏感tag(只导出安全模式的标签, 口径跟随安全模式档位)
 const replaceExport = ref(true)    // 导出时应用替换规则(默认开; 关了就导原始标签, 主进程 exporter 本来就认 replace=0)
+/* 替换规则组(2026-10-04): 选中哪一套。多套规则时导出时挑一套, 见 🔁 规则编辑器。
+ * 列表与"纠正成真实 id"都由 TvReplaceSetPicker 自己干(它挂载时会 emit), 这里只留值。 */
+const replaceSet = ref('')
 
 /** 预设弹窗里「新建预设」的初值 = 首页当前筛选条件(建完之后就是快照, 不再联动) */
 const presetSnapshot = computed(() => ({
@@ -81,7 +85,7 @@ const presetSnapshot = computed(() => ({
   q: q.value,
   mode: mode.value,
   match: match.value,
-  exclude: exclude.value,
+  exclude: '',
   exclude_char: excludeChar.value,
   spaces: true,
   blacklist: true,
@@ -91,6 +95,7 @@ const presetSnapshot = computed(() => ({
   strip_view: stripViewExport.value,
   safe_only: safeOnlyExport.value,
   with_path: false,
+  replace_set: replaceSet.value,
 }))
 
 const presetTitle = computed(() => (autoPresetCount.value
@@ -136,8 +141,15 @@ const feed = useImageFeed({ infinite: true, pageSize: 60 })
 const shownResults = computed(() => safety.filterItems(feed.results.value))
 const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boolean))
 
-// 换页 / 换一批后就地同步, 免得光箱还拿着上一批的顺序
-watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
+// 换页 / 换一批后就地同步, 免得光箱还拿着上一批的顺序。
+// ⚠️ 必须带**激活守卫**: 光箱全站唯一, 本视图被 KeepAlive 休眠时这些 watch
+// 依然活跃 —— 用户在扫描页开着光箱, 这边 epoch++ 后台重查, 若照旧 setList
+// 会把看板的列表塞进光箱(当前图不在其中 -> index 丢失), 用户再移一张图
+// removeCurrent 就会清空列表并 close() —— "光箱自己关了"(2026-10-03 实锤)。
+const homeActive = ref(true)
+onActivated(() => { homeActive.value = true })
+onDeactivated(() => { homeActive.value = false })
+watch(imgPaths, (arr) => { if (homeActive.value && lb.visible) lb.setList(arr) })
 
 /** 组装查询参数 —— 与后端 parseQuery 的字段名一一对应 */
 function buildQuery(offset = 0) {
@@ -145,7 +157,6 @@ function buildQuery(offset = 0) {
     q: q.value,
     mode: mode.value,
     match: match.value,
-    exclude: exclude.value,
     exclude_char: excludeChar.value ? '1' : '0',
     sort: sort.value,
     offset,
@@ -230,6 +241,7 @@ async function doExport(withPath) {
     params.strip_view = stripViewExport.value ? '1' : '0'
     params.safe_only = safeOnlyExport.value ? '1' : '0'
     params.replace = replaceExport.value ? '1' : '0'
+    params.replace_set = replaceSet.value
     const r = await api.exportSave(params)
     if (r?.canceled) { ui.toast('已取消导出', 'info'); return }
     if (r?.error) { ui.err('导出失败: ' + r.error); return }
@@ -358,9 +370,6 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
           />
         </div>
 
-        <label class="lab">排除标签(可选, 生图时过滤掉角色/外观等)</label>
-        <TvInput v-model="exclude" placeholder="red hair, cat ears, ..." @enter="doSearch" />
-
         <div class="checks">
           <TvCheckbox v-model="excludeChar" label="过滤角色标签(含括号的 xxx_(系列))" />
         </div>
@@ -432,6 +441,9 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
                   label="导出时应用替换规则"
                   title="导出结果先过一遍替换规则(🔁 替换规则里配的那些); 不想要替换后的版本就关掉, 导出原始标签"
                 />
+              </div>
+              <div v-if="replaceExport" class="mopt">
+                <TvReplaceSetPicker v-model="replaceSet" label="用哪套规则" />
               </div>
               <div class="mopt">
                 <TvCheckbox

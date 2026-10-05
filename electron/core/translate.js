@@ -21,14 +21,16 @@
  *   ② 配置为空 / 路径不存在     -> 在**数据目录下**自动找 `weilin_data*`
  *      (paths.js 的 KNOWLEDGE_DIR_PREFIXES 早就把这类目录定义为"知识目录",
  *       所以放进数据目录就该直接被认出来, 不需要用户再手写一遍绝对路径)
- *   ③ 都没有                    -> 不启用翻译, 并把 dirMissing 标成 true
+ *   ③ 数据目录也没有            -> 回落到**仓库内置**的 knowledge/(2026-10-02 起
+ *      随仓库分发, 见 knowledge/README.md) —— 新装机器零配置就有中文标签
+ *   ④ 连内置都没有              -> 不启用翻译, 并把 dirMissing 标成 true
  * 实际用了哪个目录、配置里的路径是不是失效了, 都通过 translateInfo() 如实报出去。
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { dataFile, getWorkspace } from './workspace.js'
-import { KNOWLEDGE_DIR_PREFIXES } from './paths.js'
+import { BUNDLED_KNOWLEDGE_DIR, KNOWLEDGE_DIR_PREFIXES } from './paths.js'
 
 const state = {
   map: new Map(),        // 小写标签 -> 中文
@@ -42,7 +44,7 @@ const state = {
   dirWanted: '',
   /** 配置写了路径但那个目录不存在 —— 界面/日志据此提示"翻译库没找到" */
   dirMissing: false,
-  /** 这批目录是怎么定下来的: 'config'(配置有效) | 'auto'(自动发现) | 'none' */
+  /** 这批目录是怎么定下来的: 'config'(配置有效) | 'auto'(自动发现) | 'bundled'(仓库内置) | 'none' */
   dirSource: 'none',
 }
 
@@ -102,33 +104,42 @@ function loadLocal() {
 }
 
 /**
- * 在**数据目录**下找 weilin_data* 目录(见 paths.js 的 KNOWLEDGE_DIR_PREFIXES)。
+ * 在某个目录下找 weilin_data* 子目录(paths.js 的 KNOWLEDGE_DIR_PREFIXES 约定)。
  * 排序后返回, 保证多台机器/多次启动的结果稳定。找到几个就返回几个 ——
  * 允许用户把翻译库拆成多个 weilin_data(...) 目录放进来。
  */
-function findWeiLinDirsInDataDir() {
-  const { dataDir } = getWorkspace()
-  if (!dataDir) return []
+function findWeiLinDirsIn(baseDir) {
+  if (!baseDir) return []
   let names = []
-  try { names = fs.readdirSync(dataDir).sort() } catch { return [] }
+  try { names = fs.readdirSync(baseDir).sort() } catch { return [] }
   const out = []
   for (const n of names) {
     if (!KNOWLEDGE_DIR_PREFIXES.some((p) => n.startsWith(p))) continue
-    const fp = path.join(dataDir, n)
+    const fp = path.join(baseDir, n)
     if (isDir(fp)) out.push(fp)
   }
   return out
+}
+
+function findWeiLinDirsInDataDir() {
+  return findWeiLinDirsIn(getWorkspace().dataDir)
 }
 
 /**
  * 决定这次要用哪些 WeiLin 目录。
  *   ① 配置路径有效        -> 只用配置里那个(人家明确指定了, 就不要自作主张再合并别的)
  *   ② 否则自动发现        -> 用数据目录下的 weilin_data*
- *   ③ 都没有              -> []
+ *   ③ 数据目录没有        -> 回落到仓库内置的 knowledge/(BUNDLED_KNOWLEDGE_DIR,
+ *                            随仓库分发的那份, 见 knowledge/README.md) —— 新装机器零配置
+ *   ④ 连内置都没有        -> []
  *
- * @returns {{dirs: string[], source: 'config'|'auto'|'none', wanted: string, missing: boolean}}
+ * @param {string} translateDir 配置里的 translate_dir
+ * @param {{autoDetect?: boolean, bundledDir?: string}} [opts]
+ *   autoDetect=false 时严格按配置来(②③都跳过, 给测试用);
+ *   bundledDir 可注入替换(测试用它扮演"内置也没有")。
+ * @returns {{dirs: string[], source: 'config'|'auto'|'bundled'|'none', wanted: string, missing: boolean}}
  */
-export function resolveWeiLinDirs(translateDir, { autoDetect = true } = {}) {
+export function resolveWeiLinDirs(translateDir, { autoDetect = true, bundledDir = BUNDLED_KNOWLEDGE_DIR } = {}) {
   const wanted = String(translateDir || '').trim()
   if (wanted && isDir(wanted)) {
     return { dirs: [wanted], source: 'config', wanted, missing: false }
@@ -136,6 +147,8 @@ export function resolveWeiLinDirs(translateDir, { autoDetect = true } = {}) {
   if (autoDetect) {
     const auto = findWeiLinDirsInDataDir()
     if (auto.length) return { dirs: auto, source: 'auto', wanted, missing: !!wanted }
+    const bundled = findWeiLinDirsIn(bundledDir)
+    if (bundled.length) return { dirs: bundled, source: 'bundled', wanted, missing: !!wanted }
   }
   return { dirs: [], source: 'none', wanted, missing: !!wanted }
 }

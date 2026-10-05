@@ -245,13 +245,13 @@ console.log('\n[9] 空显示名的来源 & 「移出来源 = 从看板隐藏」'
   db.prepare(`INSERT INTO images (path, src_id, folder_id, tags, tags_src)
               VALUES (?,0,?,?,'wd14')`).run(norm(path.join(DIR_A, 'p0.png')), fidA, '1girl,solo')
 
-  const mine = () => {
+  const mine = async () => {
     const out = []
-    store.readRecords((r) => out.push(r))
+    await store.readRecords((r) => out.push(r))
     return out.filter((r) => r.path.startsWith(norm(DIR_A)))
   }
-  eq('入库的图能被读到', mine().length, 1)
-  eq('记录的 source 与来源名同口径(不是空串)', mine()[0] && mine()[0].source, baseA)
+  eq('入库的图能被读到', (await mine()).length, 1)
+  eq('记录的 source 与来源名同口径(不是空串)', (await mine())[0]?.source, baseA)
   eq('卡片上的「已反推」数算得出来',
     listScan().find((f) => f.path === norm(DIR_A)).tagged, 1)
 
@@ -259,12 +259,12 @@ console.log('\n[9] 空显示名的来源 & 「移出来源 = 从看板隐藏」'
      所以它是非破坏、可逆的, 也不会和 gone 那套"文件不见了"的语义打架。 */
   folders.updateFolder({ path: DIR_A, as_source: false })
   eq('移出后来源名单里没有它', store.sourceNameList().includes(baseA), false)
-  eq('图从看板消失(readRecords 不再返回)', mine().length, 0)
+  eq('图从看板消失(readRecords 不再返回)', (await mine()).length, 0)
   eq('但库里的记录一张没少(这才是"可恢复"的前提)',
     db.prepare('SELECT COUNT(*) n FROM images WHERE folder_id = ?').get(fidA).n, 1)
 
   folders.updateFolder({ path: DIR_A, as_source: true })
-  eq('打回来源: 图立刻回到看板', mine().length, 1)
+  eq('打回来源: 图立刻回到看板', (await mine()).length, 1)
 }
 
 /* ---------------------------------------------------------- 收尾 */

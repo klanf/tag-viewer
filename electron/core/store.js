@@ -138,7 +138,7 @@ const IMAGES_V2_COLS = [
   ['folder_id', 'INTEGER'],
   ['mtime_ms', 'INTEGER'],
   ['size', 'INTEGER'],
-  ['tags_src', "TEXT"],          // meta=图内原生元数据 / wd14=反推 / legacy=旧 txt
+  ['tags_src', "TEXT"],          // meta=图内原生 / wd14=反推 / meta+wd14=原生+反推合并 / legacy=旧 txt
   ['gone', 'INTEGER DEFAULT 0'], // 磁盘上已不存在(灰显保留, 不删记录)
   ['tagged_at', 'INTEGER'],
 ]
@@ -421,7 +421,7 @@ export function folderRows(db, { usage = 'all' } = {}) {
       FROM folders f
       LEFT JOIN (
         SELECT folder_id, COUNT(*) AS n,
-               SUM(CASE WHEN tags_src = 'wd14' THEN 1 ELSE 0 END) AS tagged
+               SUM(CASE WHEN tags_src IN ('wd14', 'meta+wd14') THEN 1 ELSE 0 END) AS tagged
         FROM images GROUP BY folder_id
       ) c ON c.folder_id = f.id
       ${where}
@@ -842,8 +842,14 @@ export function rebuildTags() {
 /**
  * 分块顺序读出所有记录(按 images.id = 插入顺序)。
  * @param {(rec: {path: string, source: string, tags: string[]}) => void} onRecord
+ *
+ * ⚠️ async(2026-10-04): 整库 7 万行即使分块读, 同步连跑也是数秒级 —— 期间
+ * 主进程事件循环完全卡死, 所有 IPC(光箱翻页/缩略图/搜索)全部排队, 界面表现
+ * 为"卡住几秒动不了"。现在每读完一块(4000 行)就 setImmediate 让出一次事件
+ * 循环, 积压的 IPC 得以插进来处理 —— 后台重载不再打断正在翻图的用户。
+ * 消费方必须 await(返回 Promise<number>, n = 记录数)。
  */
-export function readRecords(onRecord, onProgress = () => {}) {
+export async function readRecords(onRecord, onProgress = () => {}) {
   const db = openDb()
   const srcNames = new Map(db.prepare('SELECT id, name FROM src').all().map((r) => [Number(r.id), r.name]))
   // 来源名兜底: 增量入库进来的记录不属于任何 txt 源(src_id=0),
@@ -899,6 +905,9 @@ export function readRecords(onRecord, onProgress = () => {}) {
       n++
     }
     onProgress({ phase: 'db-read', records: n })
+    // 每块让出一次事件循环(见函数头注释) —— node:sqlite 是同步 API,
+    // 不主动让路的话 7 万行连跑期间整个主进程对 IPC 是"失联"的。
+    await new Promise((r) => setImmediate(r))
   }
   return n
 }

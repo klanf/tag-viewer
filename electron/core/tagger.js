@@ -51,6 +51,10 @@ const MAX_RESTARTS = 3
 const MODEL_BASENAME = 'wd-pixai-tagger-v0.9'
 const MODEL_FILE = `${MODEL_BASENAME}.onnx`
 const CSV_FILE = `${MODEL_BASENAME}.csv`
+// HuggingFace 仓库(deepghs/pixai-tagger-v0.9-onnx)里的**原始文件名** ——
+// 下载后不改名直接丢进 models/ 也要认(见 assetCandidates, 2026-10-02)
+const MODEL_FILE_ORIG = 'model.onnx'
+const CSV_FILE_ORIG = 'selected_tags.csv'
 
 /* ------------------------------------------------------------ 状态 */
 
@@ -59,7 +63,7 @@ export const taggerState = {
   note: '',
   done: 0,
   total: 0,
-  provider: '',        // CUDAExecutionProvider / CPUExecutionProvider
+  provider: '',        // CUDAExecutionProvider / DmlExecutionProvider / CPUExecutionProvider
   python: '',
   degraded: false,
   reason: '',          // 降级原因(给人看的一句话)
@@ -79,7 +83,7 @@ function emptyStats() {
     tagged: 0,           // 成功反推并写库
     created: 0,          // 其中"新插入 images 行"的数量
     updated: 0,          // 其中"覆盖已有 wd14 标签"的数量
-    skippedExisting: 0,  // 防御性跳过: 路径这会儿已有非 wd14 标签
+    skippedExisting: 0,  // 防御性跳过: 路径这会儿已有 legacy/未知来源标签
     noResult: 0,         // 反推跑通但一条标签都没过阈值
     missing: 0,          // 磁盘上已不存在
     failed: 0,           // 单张失败(仍会重试)
@@ -155,6 +159,11 @@ function commandCandidates(opts = {}) {
   push(process.env.TV_PYTHON)
   try { push(getSettings().pythonPath) } catch { /* 命令行工具可能没 initWorkspace */ }
 
+  // 包内自带解释器(绿色包 v2.1.0 起随包发 python/, embeddable + onnxruntime-directml)。
+  // 排在显式配置之后 —— 用户在设置里指了 python 就尊重用户; 排在系统常见位置之前 ——
+  // 包里带了就用包里的, 免依赖开箱即用。开发仓库里没有 python/ 目录, 这条是 no-op。
+  push(path.join(PROJECT_ROOT, 'python', 'python.exe'))
+
   const home = process.env.USERPROFILE || process.env.HOME || ''
   // ProgramData 不写字面盘符 —— preflight 有一条"仓库里不许出现盘符绝对路径"的检查
   // (开源后它们指向别人的机器)。SystemDrive 是 Windows 自己给的环境变量(通常 C:)。
@@ -176,9 +185,11 @@ function commandCandidates(opts = {}) {
   return out
 }
 
-/** 模型 / 标签表候选。显式 > 环境变量 > 仓库内 models/ > 数据目录 models/ */
+/** 模型 / 标签表候选。显式 > 环境变量 > 仓库内 models/ > 数据目录 models/。
+ *  每个目录里**改名版与原始版都认**(原始版排后 —— 两种名字同时存在时, 认改名版)。 */
 function assetCandidates(kind, opts = {}) {
   const file = kind === 'model' ? MODEL_FILE : CSV_FILE
+  const orig = kind === 'model' ? MODEL_FILE_ORIG : CSV_FILE_ORIG
   const envKey = kind === 'model' ? 'TV_WD14_MODEL' : 'TV_WD14_CSV'
   const setKey = kind === 'model' ? 'wd14Model' : 'wd14Csv'
   const out = []
@@ -189,8 +200,13 @@ function assetCandidates(kind, opts = {}) {
   const oldRoot = process.env.TV_OLD_ROOT
   if (oldRoot) push(path.join(oldRoot, 'model', file))
   push(path.join(PROJECT_ROOT, 'models', file))
+  push(path.join(PROJECT_ROOT, 'models', orig))
   if (dataFile) {
-    try { push(path.join(path.dirname(dataFile('tags.db')), 'models', file)) } catch { /* 忽略 */ }
+    try {
+      const dir = path.dirname(dataFile('tags.db'))
+      push(path.join(dir, 'models', file))
+      push(path.join(dir, 'models', orig))
+    } catch { /* 忽略 */ }
   }
   return out
 }
@@ -480,10 +496,31 @@ export function stopTagger() {
 /* ------------------------------------------------------------ 队列消费 */
 
 /**
+ * 标签合并 —— meta 部分在前、WD14 新增在后, 逗号分隔去重(大小写不敏感,
+ * 保留先出现的大小写写法)。并集操作天然幂等: 同一张图反复合并结果稳定。
+ */
+function mergeTagStrings(cur, add) {
+  const seen = new Set()
+  const out = []
+  for (const raw of `${cur},${add}`.split(',')) {
+    const s = raw.trim()
+    if (!s) continue
+    const k = s.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(s)
+  }
+  return out.join(',')
+}
+
+/**
  * 写一条反推结果。
  *
  * 三件事按顺序: ①防御性复查 ②写 images ③结清队列。
- * **只有 tags_src='wd14' 允许被覆盖** —— meta/legacy 一律让路。
+ * 写回语义(2026-10-02 起, 用户拍板的合并方案):
+ *   · tags_src='wd14'        -> 直接覆盖(反推结果可以刷新反推结果)
+ *   · tags_src='meta'/'meta+wd14' -> **合并**(meta 部分永不丢, 来源标变 'meta+wd14')
+ *   · legacy / 未知来源      -> 一律让路(skipped) —— 老手工导入的标签是孤本
  *
  * @returns {'created'|'updated'|'skipped'}
  */
@@ -492,11 +529,14 @@ function applyTags(db, row, tags, mtimeMs, size, now) {
   const cur = db.prepare('SELECT id, tags, tags_src FROM images WHERE path = ? ORDER BY id LIMIT 1').get(p)
   if (cur) {
     const src = String(cur.tags_src || '')
-    const hasTags = String(cur.tags || '').trim().length > 0
-    if (hasTags && src !== 'wd14') return 'skipped'   // 铁律: 不覆盖 meta / legacy
-    db.prepare(`UPDATE images SET tags = ?, tags_src = 'wd14', mtime_ms = ?, size = ?,
+    const curTags = String(cur.tags || '')
+    const hasTags = curTags.trim().length > 0
+    if (hasTags && src !== 'wd14' && src !== 'meta' && src !== 'meta+wd14') return 'skipped'
+    const nextTags = hasTags && src !== 'wd14' ? mergeTagStrings(curTags, tags) : tags
+    const nextSrc = hasTags && src !== 'wd14' ? 'meta+wd14' : 'wd14'
+    db.prepare(`UPDATE images SET tags = ?, tags_src = ?, mtime_ms = ?, size = ?,
                 gone = 0, tagged_at = ? WHERE id = ?`)
-      .run(tags, mtimeMs, size, now, cur.id)
+      .run(nextTags, nextSrc, mtimeMs, size, now, cur.id)
     return 'updated'
   }
   const srcId = Number(row.src_id) || 0
@@ -620,9 +660,12 @@ export async function runTagger({ onProgress, limit = 0, ...svcOpts } = {}) {
       const row = rows[i]
       const base = path.basename(row.path)
 
-      // ---- 防御性复查: 这会儿已经有非 wd14 标签了就不碰它 ----
+      // ---- 防御性复查: legacy/未知来源的已有标签不碰(孤本); meta/meta+wd14/wd14
+      //      都放行 —— wd14 覆盖, meta 与 meta+wd14 走合并(applyTags 里分流)。
+      //      并发场景下队列里可能躺着一张"这会儿刚被别的路子打上 legacy 标签"的图。
       const cur = db.prepare('SELECT tags, tags_src FROM images WHERE path = ? ORDER BY id LIMIT 1').get(row.path)
-      if (cur && String(cur.tags || '').trim() && String(cur.tags_src || '') !== 'wd14') {
+      const curSrc = String(cur?.tags_src || '')
+      if (cur && String(cur.tags || '').trim() && curSrc !== 'wd14' && curSrc !== 'meta' && curSrc !== 'meta+wd14') {
         batch.push({ kind: 'skip', row, attempts: Number(row.attempts) || 0, note: '已有标签, 跳过' })
         continue
       }
@@ -713,7 +756,7 @@ export async function runTagger({ onProgress, limit = 0, ...svcOpts } = {}) {
     stats.ms = Date.now() - t0
     const parts = [
       `反推成功 ${stats.tagged}`,
-      stats.updated ? `覆盖旧反推 ${stats.updated}` : '',
+      stats.updated ? `合并/覆盖 ${stats.updated}` : '',
       stats.noResult ? `无结果 ${stats.noResult}` : '',
       stats.skippedExisting ? `已有标签跳过 ${stats.skippedExisting}` : '',
       stats.missing ? `磁盘已无 ${stats.missing}` : '',

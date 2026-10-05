@@ -278,14 +278,17 @@ class Tagger(object):
         avail = ort.get_available_providers()
         want = {
             'cuda': 'CUDAExecutionProvider',
+            'dml': 'DmlExecutionProvider',
             'cpu': 'CPUExecutionProvider',
         }
         if self.provider in want:
             chain = [want[self.provider]]
         else:
-            # auto: CUDA 优先, 拿不到就 CPU —— 用户机器上装的是 CPU 版 onnxruntime 时
-            # 不该整条管道报废, 只是慢一些(单张 ~1.2s, 60 张也就一分多钟)
-            chain = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            # auto: CUDA > DirectML > CPU。绿色包 v2.1.0 起随包发的是
+            # onnxruntime-directml(走 DirectX 12, N/A/I 卡通吃, Windows 10/11 自带 DX12,
+            # 用户零配置); 用户自己装了 onnxruntime-gpu + CUDA 时仍然 CUDA 优先。
+            # 都拿不到就 CPU —— 只是慢一些, 不该整条管道报废。
+            chain = ['CUDAExecutionProvider', 'DmlExecutionProvider', 'CPUExecutionProvider']
         picked = [p for p in chain if p in avail]
         if not picked:
             picked = [avail[0]]
@@ -383,7 +386,8 @@ def main():
     ap = argparse.ArgumentParser(description='WD14 反推常驻服务 (JSON-lines over stdio)')
     ap.add_argument('--model', required=True, help='WD14/PixAI onnx 模型路径')
     ap.add_argument('--csv', required=True, help='标签表 csv 路径')
-    ap.add_argument('--provider', choices=['auto', 'cuda', 'cpu'], default='auto')
+    ap.add_argument('--provider', choices=['auto', 'cuda', 'dml', 'cpu'], default='auto',
+                    help='cuda=只走N卡GPU; dml=只走DirectML(任意DX12显卡); cpu=纯CPU; auto=按 cuda>dml>cpu 自动挑')
     ap.add_argument('--threshold', type=float, default=0.35, help='普通标签阈值')
     ap.add_argument('--char-threshold', type=float, default=0.85, help='角色标签阈值')
     args = ap.parse_args()

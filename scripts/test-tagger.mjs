@@ -3,13 +3,15 @@
  * =======================================
  * 它要守住的**不是"能跑"**, 而是这几条容易被后续改动破坏的性质:
  *
- *   ① **不覆盖 meta** —— 图内原生提示词是作者留下的唯一一份。谁把"重反推覆盖一切"
- *      写进去, 就会被"a.png 的 meta 标签一字未改"这条抓住。
- *   ② **已经在库里的图, 反推调用数必须是 0** —— 队列只装 ingest 判定过的裸图。
+ *   ① **meta 部分永不丢(2026-10-02 合并语义)** —— meta 图也反推, 但原生标签必须
+ *      原样保留、WD14 新标签并进去(tags_src 变 'meta+wd14')。谁把"反推覆盖一切"
+ *      写进去, 就会被"a.png 的原生标签原样留在合并结果里"这条抓住。
+ *   ② **tagger 只消费队列, 不自造工作** —— 发给模型的每张图都必须是 ingest
+ *      判定过的(裸图或待合并的 meta 图), 队列外的一次都不发。
  *   ③ **反推写完库, 下一轮同步不再重读 PNG** —— 指纹是这时写进去的, 漏了它
  *      每次启动都要把那批图重读一遍。
- *   ④ **防御性复查真的会拦住"已有标签"的行** —— 并发场景下队列里可能躺着一张
- *      这会儿已经有标签的图, 那时必须跳过而不是覆盖。
+ *   ④ **防御性复查真的会拦住 legacy 标签** —— 并发场景下队列里可能躺着一张
+ *      这会儿已经被迁移/手工打了 legacy 标签的图, 那时必须跳过而不是污染。
  *   ⑤ **服务崩了要自己重启并接着跑** —— python 子进程崩溃是常态(显存、驱动、坏图)。
  *   ⑥ **缺依赖时降级而不是报错** —— 队列原样留着, 看板照常。
  *   ⑦ **反推无结果的行要结清** —— 留 pending 会让它每轮被重读+重推, 永远循环。
@@ -175,7 +177,7 @@ console.log('\n[0] 建登记表: 一个看板来源 + 一个纯扫描夹')
 
 /* ---------------------------------------------------------- 第一轮 */
 
-console.log('\n[1] 同步: 带元数据的直接入库, 裸图入队')
+console.log('\n[1] 同步: 带元数据的直接入库, 裸图入队, meta 图也入队(等合并)')
 const A = writeImg(IMG_DIR, 'a.png', 'hatsune_miku, blue_hair', 300)
 const B = writeImg(IMG_DIR, 'b.png', '', 300)
 const C = writeImg(IMG_DIR, 'c.png', '', 300)
@@ -183,22 +185,23 @@ writeImg(SCAN_ONLY, 'd.png', '', 300)          // 扫描夹 -> 不进这条流�
 {
   const st = await ingest.runIngest({})
   eq('入库 1 张(自带元数据)', st.inserted, 1)
-  eq('入队 2 张(裸图)', st.queued, 2)
-  eq('队列 pending=2', ingest.queueStats().pending, 2)
+  eq('入队 3 张(裸图 2 + meta 1)', st.queued, 3)
+  eq('队列 pending=3', ingest.queueStats().pending, 3)
   eq('扫描夹的图没入队', dbGet(`SELECT COUNT(*) n FROM tag_queue WHERE path LIKE '%d.png'`).n, 0)
 }
 
 /* ---------------------------------------------------------- 正常反推 */
 
-console.log('\n[2] 反推: 裸图打上标签写库, 原生元数据一字不动')
+console.log('\n[2] 反推: 裸图打标入库; meta 图合并(原生标签保留 + WD14 并入)')
 useFake('ok')
 resetFakeLog()
 const t1 = await tagger.runTagger({})
 {
-  eq('取出的条数 2', t1.picked, 2)
-  eq('真正发给模型 2 张', t1.inferCalls, 2)
-  eq('反推成功 2', t1.tagged, 2)
-  eq('新插入 images 行 2', t1.created, 2)
+  eq('取出的条数 3(a/b/c, meta 也入队)', t1.picked, 3)
+  eq('真正发给模型 3 张', t1.inferCalls, 3)
+  eq('反推成功 3', t1.tagged, 3)
+  eq('新插入 images 行 2(裸图 b/c)', t1.created, 2)
+  eq('合并更新 1(a)', t1.updated, 1)
   eq('provider 以回执为准(CUDA)', t1.provider, 'CUDAExecutionProvider')
 
   const rb = dbGet('SELECT tags, tags_src FROM images WHERE path=?', norm(B))
@@ -206,19 +209,19 @@ const t1 = await tagger.runTagger({})
   eq('b 的来源标 wd14', rb.tags_src, 'wd14')
   eq('c 的来源标 wd14', dbGet('SELECT tags_src FROM images WHERE path=?', norm(C)).tags_src, 'wd14')
 
-  // ---- 铁律 ①: meta 不许被动 ----
+  // ---- 铁律 ①(合并语义): meta 部分原样保留, WD14 标签并进去 ----
   const ra = dbGet('SELECT tags, tags_src FROM images WHERE path=?', norm(A))
-  eq('a 的原生标签没被改', ra.tags, 'hatsune_miku,blue_hair')
-  eq('a 的来源仍是 meta', ra.tags_src, 'meta')
+  eq('a = 原生标签在前 + 反推新增在后', ra.tags, 'hatsune_miku,blue_hair,fake_tag,name_a')
+  eq('a 的来源标 meta+wd14', ra.tags_src, 'meta+wd14')
 
-  // ---- 铁律 ②: 已入库的图一次都不该发给模型 ----
+  // ---- 铁律 ②: 只发队列里的(a/b/c), 队列外的一次不发 ----
   const calls = fakeCalls()
-  eq('模型共收到 2 次调用', calls.length, 2)
-  eq('a.png 从未发给模型', calls.some((p) => p.includes('a.png')), false)
+  eq('模型共收到 3 次调用', calls.length, 3)
+  eq('a.png 也发了(合并语义)', calls.some((p) => p.includes('a.png')), true)
   eq('d.png(扫描夹) 从未发给模型', calls.some((p) => p.includes('d.png')), false)
 
   eq('队列已结清', ingest.queueStats().pending, 0)
-  eq('队列 done=2', ingest.queueStats().done, 2)
+  eq('队列 done=3', ingest.queueStats().done, 3)
   eq('库里 images 3 行', dbGet('SELECT COUNT(*) n FROM images').n, 3)
 }
 
@@ -241,7 +244,7 @@ console.log('\n[4] 反推写完库之后, 下一轮同步不再重读 PNG(铁律
 
 /* ---------------------------------------------------------- 防御性复查 */
 
-console.log('\n[5] 防御性复查: 队列里的图已经有非 wd14 标签 -> 跳过, 不覆盖(铁律 ④)')
+console.log('\n[5] 防御性复查: 队列里的图已经有 legacy 标签 -> 跳过, 不污染(铁律 ④)')
 {
   const db = store.openDb()
   // 人为制造"并发场景": 队列里塞一条, 但库里这张图已经有了 legacy 标签
@@ -350,6 +353,33 @@ console.log('\n[9] 静态配置自检 + 暂停语义')
   const st = tagger.taggerStatus()
   eq('status 带队列信息', typeof st.queue.pending, 'number')
   eq('status 带配置信息', typeof st.config.available, 'boolean')
+}
+
+console.log('\n[9.5] 原始名兼容: 只放 HuggingFace 原始文件名(model.onnx / selected_tags.csv)也认')
+{
+  const MODEL_NAME_ONNX = 'wd-pixai-tagger-v0.9.onnx'   // 应用首选的改名版(与 tagger.js 的 MODEL_FILE 一致)
+  // 显式指定的候选优先 —— 先摘掉, 才能验"落在目录候选上的原始名"
+  delete process.env.TV_WD14_MODEL
+  delete process.env.TV_WD14_CSV
+  const modelsDir = path.join(DATA, 'models')
+  fs.mkdirSync(modelsDir, { recursive: true })
+  // 内容无所谓, 静态配置只验"文件存在"
+  fs.writeFileSync(path.join(modelsDir, 'model.onnx'), 'stub')
+  fs.writeFileSync(path.join(modelsDir, 'selected_tags.csv'), 'tag_id,name,category,count')
+
+  const cfg = tagger.taggerConfig()
+  eq('原始名模型被认出', cfg.modelExists, true)
+  eq('原始名标签表被认出', cfg.csvExists, true)
+  eq('不改名也静态可用', cfg.available, true)
+
+  // 两种名字同时存在时, 认改名版 —— 显式语义要稳
+  fs.writeFileSync(path.join(modelsDir, MODEL_NAME_ONNX), 'stub')
+  const cfg2 = tagger.taggerConfig()
+  eq('改名版优先于原始版', path.basename(cfg2.model), MODEL_NAME_ONNX)
+
+  fs.rmSync(modelsDir, { recursive: true, force: true })
+  const cfg3 = tagger.taggerConfig()
+  eq('删掉后回到不可用', cfg3.available, false)
 }
 
 /* ---------------------------------------------------------- 收尾 */

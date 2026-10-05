@@ -20,7 +20,7 @@ import { registerIpc } from './ipc.js'
 import { initWorkspace, getWorkspace } from './core/workspace.js'
 import { resolveLogDir, setLogDir, logFile, readyFlag } from './core/paths.js'
 import { bootstrap, status } from './core/app-state.js'
-import { runIngest, queueStats } from './core/ingest.js'
+import { runIngest, queueStats, backfillMetaQueue } from './core/ingest.js'
 import { runTagger, stopTagger, taggerState } from './core/tagger.js'
 import { ds } from './core/dataset.js'
 import { flushPendingNow, hasPendingAuto } from './core/exportPresets.js'
@@ -239,8 +239,8 @@ async function runIngestOnce() {
     const changed = st && !st.skipped && !st.error
       && (st.inserted || st.metaUpdated || st.goneSet || st.goneCleared)
     if (changed) {
-      log('ok', `同步有改动(新增 ${st.inserted} / 更新 ${st.metaUpdated} / 消失 ${st.goneSet}), 重载数据集`)
-      await startLoad()
+      log('ok', `同步有改动(新增 ${st.inserted} / 更新 ${st.metaUpdated} / 消失 ${st.goneSet}), 静默重载数据集`)
+      await startLoad({ quiet: true })
     }
   } catch (e) {
     log('warn', `后台增量同步失败: ${e?.stack || e}`)
@@ -289,8 +289,9 @@ async function runTagOnce() {
     if (st && st.tagged) {
       // 反推把新标签写进了库 -> 内存里的数据集已经过期, 必须重载, 否则
       // 界面看不到刚反推出来的标签(库是新的、界面是旧的)。
-      log('ok', `反推新增 ${st.tagged} 张标签, 重载数据集`)
-      await startLoad()
+      // quiet: 用户正在浏览/管理图片, 后台重载不该盖全屏遮罩(2026-10-03)。
+      log('ok', `反推新增 ${st.tagged} 张标签, 静默重载数据集`)
+      await startLoad({ quiet: true })
     }
   } catch (e) {
     log('warn', `后台反推失败: ${e?.stack || e}`)
@@ -300,11 +301,23 @@ async function runTagOnce() {
 let loading = false
 /** 退出前 flush 自动导出时置真 —— 防止 before-quit 被自己递归触发 */
 let quitting = false
-async function startLoad() {
+/**
+ * 数据集加载。
+ * @param {{quiet?: boolean}} [opts]
+ *   quiet=true: 后台触发的重载(同步/反推/标签编辑完成后), **不推全屏进度** ——
+ *   渲染端保持 ready、界面完全可操作, 完成后 app:reloaded 带新 stats 原地刷新
+ *   (2026-10-03: 旧行为是移动一张图 -> 同步完成 -> 全屏遮罩十几秒, 反推完成
+ *   再来一遍, 用户根本没法用)。启动首载 / 菜单 Ctrl+R 等用户主动加载仍走
+ *   全屏进度。数据侧由 dataset.js 的双缓冲保证: 重载期间查询读到旧数据, 不闪空。
+ */
+async function startLoad(opts = {}) {
+  const quiet = !!opts.quiet
   if (loading) return
   loading = true
   try {
-    const push = (p) => { if (win && !win.isDestroyed()) win.webContents.send('app:progress', p) }
+    const push = quiet
+      ? () => {}
+      : (p) => { if (win && !win.isDestroyed()) win.webContents.send('app:progress', p) }
     push({ phase: 'parse', done: 0, total: 1, percent: 0, records: 0 })
     const st = await bootstrap({ onProgress: push })
     // bootstrap() 自己会 catch(它返回 status() 而不是抛), 所以这里必须显式看 phase。
@@ -313,6 +326,11 @@ async function startLoad() {
     if (st.phase === 'error') {
       log('warn', `数据集加载失败: ${st.error}`)
       log('warn', `dataDir=${st.workspace?.dataDir} configPath=${st.workspace?.configPath} (存在=${st.workspace?.configExists})`)
+      if (quiet && win && !win.isDestroyed()) {
+        // 后台静默重载失败: 界面维持原状(继续用旧数据), 只弹一条全局提示 ——
+        // 别把还能用的界面打成全屏错误页; 下一轮同步/反推成功会再次重载。
+        win.webContents.send('app:toast', { text: `后台数据重载失败: ${st.error}`, tone: 'err', dur: 6000 })
+      }
     } else {
       log('ok', `数据集就绪: ${JSON.stringify(ds.stats)}`)
       // 翻译库单独记一行 —— 2026-09-19 就因为没这行, "翻译整体消失" 只能靠肉眼发现:
@@ -321,7 +339,8 @@ async function startLoad() {
       const tr = st.translate || {}
       const src = tr.dirSource === 'config' ? '配置'
         : tr.dirSource === 'auto' ? '数据目录自动发现'
-          : '未启用'
+          : tr.dirSource === 'bundled' ? '仓库内置'
+            : '未启用'
       const line = `翻译库: WeiLin ${tr.weilin ?? 0} 条 + 本地补译 ${tr.local ?? 0} 条`
         + ` = ${tr.total ?? 0} 条 · 来源=${src}`
         + ` · dir=${(tr.dirs || []).join(' | ') || '（无）'}`
@@ -329,12 +348,34 @@ async function startLoad() {
       else if (!tr.weilin) log('warn', `${line} —— 一条 WeiLin 都没读到, 标签只会有本地补译的中文`)
       else log('ok', line)
     }
-    if (win && !win.isDestroyed()) win.webContents.send('app:reloaded', st)
-    if (st.phase !== 'error') scheduleIngest()
+    if (win && !win.isDestroyed() && !(quiet && st.phase === 'error')) win.webContents.send('app:reloaded', st)
+    if (st.phase !== 'error') {
+      // 存量 meta 图一次性补推(2026-10-02 合并语义配套): 改语义前入库的 meta 图
+      // 从没进过反推队列, 首次启动补队一次(meta 表打标记, 之后启动直接跳过)。
+      // 放在 scheduleIngest 之前 —— 这样首轮同步结束接上反推时, 队列已经齐了。
+      try {
+        const bf = backfillMetaQueue()
+        if (bf.queued) log('ok', `存量 meta 图补推: 已入队 ${bf.queued} 张, 由后台反推逐步合并`)
+      } catch (e) {
+        log('warn', `存量 meta 补推失败(不影响启动): ${e?.message || e}`)
+      }
+    }
+    // scheduleIngest 必须无条件执行 —— 2026-10-03 实锤: 全新库 + 已登记文件夹 +
+    // 0 images 时, 数据集加载 phase=error, 若把同步关在 phase!=='error' 里面,
+    // 就没人跑 ingest、也没人接 scheduleTagging, tag_queue 里的裸图永远没人
+    // 消费 -> images 永远 0 -> 数据集永远 error = 死锁(另一台机器 633 张全卡死)。
+    // 同步只是"磁盘 <-> tags.db 对齐", 不依赖数据集就绪; 就算库真坏了,
+    // runIngestOnce 自己有 try/catch, 最多 warn 一行。
+    scheduleIngest()
   } catch (e) {
     log('fatal', `数据集加载失败: ${e?.stack || e}`)
     if (win && !win.isDestroyed()) {
-      win.webContents.send('app:reloaded', { phase: 'error', error: e?.message || String(e) })
+      if (quiet) {
+        // 同 error 分支: 后台重载失败不动界面, toast 一声
+        win.webContents.send('app:toast', { text: `后台数据重载失败: ${e?.message || e}`, tone: 'err', dur: 6000 })
+      } else {
+        win.webContents.send('app:reloaded', { phase: 'error', error: e?.message || String(e) })
+      }
     }
   } finally {
     loading = false
@@ -415,8 +456,11 @@ app.whenReady().then(() => {
     // 没有 settings.json / TV_DATA_DIR 时数据目录取 <userData>/data —— 每个用户各自的**可写**目录,
     // 而不是改造前那个指向开发机的绝对路径。开发期本机由 settings.json 指向项目内 data/,
     // 行为不变; 新装用户则由下一轮的首次启动向导来选定。
+    // allowPortable(2026-10-02): 与应用同目录存在可写 data/ 时优先用它 —— 绿色包的数据
+    // 随包走(删文件夹即卸载), 仓库开发态同样命中。显式配置仍最优先, 打包态(asar)自动回落。
     initWorkspace(app.getPath('userData'), {
       defaultDataDir: path.join(app.getPath('userData'), 'data'),
+      allowPortable: true,
     })
     const ws = getWorkspace()
     log('ok', `dataDir=${ws.dataDir}`)
@@ -432,11 +476,16 @@ app.whenReady().then(() => {
     registerHandler()
     registerIpc({
       onReload: () => { /* 数据集重载后由渲染进程自己重取 */ },
-      // 手动「立即同步」跑完: 内存里的数据集已经过期, 必须重载一次,
-      // 否则看板数字和搜索索引还停在同步前(库是新的、界面是旧的)。
-      onIngestDone: () => { startLoad(); scheduleTagging() },
-      // 手动「反推」跑完: 同理, 新标签要进内存才看得见
-      onTaggerDone: () => { startLoad() },
+      // 同步跑完: 内存里的数据集已经过期, 必须重载一次, 否则看板数字和搜索
+      // 索引还停在同步前(库是新的、界面是旧的)。quiet(2026-10-03): 移动一张图
+      // 就会走这条链路, 全屏遮罩会打断浏览 —— 后台双缓冲重载, 完成后原地刷新。
+      // ⚠️ 这里**不再接 scheduleTagging**(2026-10-03 用户拍板): 移动一张图就为
+      // 1 张裸图加载 1.27GB 模型, 还弹进度胶囊打扰看图 —— 本次会话新入队的
+      // 裸图攒着, 下次启动由启动链路(runIngestOnce -> scheduleTagging)统一推。
+      // 主动入口保留: 顶栏胶囊「再反推一次」/ 扫描页手动反推 / 新装机引导流程。
+      onIngestDone: () => { startLoad({ quiet: true }) },
+      // 手动「反推」跑完: 新标签要进内存才看得见
+      onTaggerDone: () => { startLoad({ quiet: true }) },
     })
     buildMenu()
     log('ok', 'ipc / protocol / menu 注册完成')

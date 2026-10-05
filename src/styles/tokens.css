@@ -77,24 +77,25 @@
 html[data-theme="light"] {
   color-scheme: light;
 
-  --bg: #f4f6fa;
+  --bg: #f4f6f9;
   --panel: #ffffff;
-  --panel2: #eef1f6;
-  --panel3: #e3e8ef;
-  --border: #d6dce5;
-  --border-strong: #b6c0cc;
+  --panel2: #eef1f5;
+  --panel3: #e4e9f0;
+  --border: #dde3ea;
+  --border-strong: #bcc6d2;
   --overlay: rgba(28, 32, 38, .82);
   --mask: rgba(28, 32, 38, .5);
 
   --text: #1d2229;
-  --muted: #63707f;
-  --faint: #8b97a5;
+  --muted: #66717f;
+  --faint: #8d99a8;
   --on-accent: #ffffff;
 
-  --accent: #1f6fd0;
-  --accent-soft: rgba(31, 111, 208, .12);
-  --accent2: #1f9d55;
-  --accent2-soft: rgba(31, 157, 85, .12);
+  /* 2026-10-02 重调: 主色降饱和(#1f6fd0 -> 雾蓝), 往护眼绿同档的舒适度靠 */
+  --accent: #3573b9;
+  --accent-soft: rgba(53, 115, 185, .11);
+  --accent2: #2f9e63;
+  --accent2-soft: rgba(47, 158, 99, .12);
   /* 同上: 浅色底上红要压暗一档才够重(亮红铺在白底上会发糊), 但谷底仍要看得见 */
   --lastview: #d93025;
   --lastview-glow: rgba(217, 48, 37, .45);
@@ -109,13 +110,237 @@ html[data-theme="light"] {
   --char: #b87514;
   --char-bg: rgba(184, 117, 20, .12);
 
-  --img-bg: #e6eaf0;
-  --bar-from: #7fb0e8;
-  --toast-bg: #1f6fd0;
+  --img-bg: #e8ecf1;
+  --bar-from: #3573b9;
+  --toast-bg: #3573b9;
 
   --shadow-1: 0 6px 18px rgba(24, 34, 48, .12);
   --shadow-2: 0 6px 20px rgba(24, 34, 48, .16);
   --shadow-pop: 0 2px 10px rgba(24, 34, 48, .12);
+}
+
+/* 护眼绿(2026-10-02 按 ruankao-software-designer 浅色重调 —— 用户点名"这个浅色
+   看着很舒服"): 灰绿米白底 #f6f7f3 + 纯白卡片 + 墨绿主色 #2f6d52。旧版是满屏
+   豆沙绿 #cfe4cd, 绿得太均匀反而显脏; 这版底只是"微微发绿的白", 绿交给主色。 */
+html[data-theme="eye"] {
+  color-scheme: light;
+
+  --bg: #f6f7f3;
+  --panel: #ffffff;
+  --panel2: #eef1ea;
+  --panel3: #e3e6dc;
+  --border: #e3e6dc;
+  --border-strong: #c6cdbf;
+  --overlay: rgba(24, 30, 26, .82);
+  --mask: rgba(24, 30, 26, .5);
+
+  --text: #26302b;
+  --muted: #6d776e;
+  --faint: #97a19a;
+  --on-accent: #ffffff;
+
+  --accent: #2f6d52;
+  --accent-soft: rgba(47, 109, 82, .12);
+  --accent2: #16a34a;
+  --accent2-soft: rgba(22, 163, 74, .12);
+  --lastview: #c62828;
+  --lastview-glow: rgba(198, 40, 40, .5);
+  --lastview-glow-dim: rgba(198, 40, 40, .28);
+  --danger: #c93636;
+  --danger-soft: rgba(201, 54, 54, .12);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, .12);
+  --fav: #8a6508;
+  --fav-soft: rgba(138, 101, 8, .15);
+
+  --char: #8a5a00;
+  --char-bg: rgba(138, 90, 0, .1);
+
+  --img-bg: #e9ece5;
+  --bar-from: #2f6d52;
+  --toast-bg: #2f6d52;
+
+  --shadow-1: 0 6px 18px rgba(30, 40, 32, .12);
+  --shadow-2: 0 6px 20px rgba(30, 40, 32, .16);
+  --shadow-pop: 0 2px 10px rgba(30, 40, 32, .12);
+}
+
+/* 纸墨(暖米白): 仿纸阅读感。2026-10-02 与护眼绿同配方重调 —— 旧版满屏深米黄
+   #eee5d0 黄得太浓, 改成米白底 + 白卡片, 暖意交给陶棕主色。 */
+html[data-theme="paper"] {
+  color-scheme: light;
+
+  --bg: #f7f1e6;
+  --panel: #fffcf5;
+  --panel2: #f1e9d8;
+  --panel3: #e7dcc4;
+  --border: #e2d6bc;
+  --border-strong: #c9b995;
+  --overlay: rgba(38, 30, 16, .85);
+  --mask: rgba(38, 30, 16, .5);
+
+  --text: #3a3226;
+  --muted: #7d6f55;
+  --faint: #a3967c;
+  --on-accent: #ffffff;
+
+  --accent: #9c6a2b;
+  --accent-soft: rgba(156, 106, 43, .12);
+  --accent2: #5f8a46;
+  --accent2-soft: rgba(95, 138, 70, .12);
+  --lastview: #c62828;
+  --lastview-glow: rgba(198, 40, 40, .48);
+  --lastview-glow-dim: rgba(198, 40, 40, .27);
+  --danger: #b04a34;
+  --danger-soft: rgba(176, 74, 52, .13);
+  --warn: #96660e;
+  --warn-soft: rgba(150, 102, 14, .13);
+  --fav: #8a6508;
+  --fav-soft: rgba(138, 101, 8, .15);
+
+  --char: #8a5a00;
+  --char-bg: rgba(138, 90, 0, .12);
+
+  --img-bg: #ece3cf;
+  --bar-from: #b08a45;
+  --toast-bg: #9c6a2b;
+
+  --shadow-1: 0 6px 18px rgba(48, 38, 20, .16);
+  --shadow-2: 0 6px 20px rgba(48, 38, 20, .2);
+  --shadow-pop: 0 2px 10px rgba(48, 38, 20, .16);
+}
+
+/* 蜜桃(暖白 + 柿橙): 2026-10-02 新增浅色系。护眼绿同配方, 暖色版。 */
+html[data-theme="peach"] {
+  color-scheme: light;
+
+  --bg: #faf2ec;
+  --panel: #ffffff;
+  --panel2: #f4e9e1;
+  --panel3: #ecdfd4;
+  --border: #ecdcd0;
+  --border-strong: #d4b8a5;
+  --overlay: rgba(40, 26, 18, .82);
+  --mask: rgba(40, 26, 18, .5);
+
+  --text: #3b2f28;
+  --muted: #82705f;
+  --faint: #a89a8b;
+  --on-accent: #ffffff;
+
+  --accent: #bd5d3a;
+  --accent-soft: rgba(189, 93, 58, .12);
+  --accent2: #4f9e6b;
+  --accent2-soft: rgba(79, 158, 107, .12);
+  --lastview: #c62828;
+  --lastview-glow: rgba(198, 40, 40, .5);
+  --lastview-glow-dim: rgba(198, 40, 40, .28);
+  --danger: #bc4038;
+  --danger-soft: rgba(188, 64, 56, .12);
+  --warn: #a3641c;
+  --warn-soft: rgba(163, 100, 28, .12);
+  --fav: #96660e;
+  --fav-soft: rgba(150, 102, 14, .15);
+
+  --char: #8a5a00;
+  --char-bg: rgba(138, 90, 0, .1);
+
+  --img-bg: #f0e4da;
+  --bar-from: #bd5d3a;
+  --toast-bg: #bd5d3a;
+
+  --shadow-1: 0 6px 18px rgba(56, 38, 26, .12);
+  --shadow-2: 0 6px 20px rgba(56, 38, 26, .16);
+  --shadow-pop: 0 2px 10px rgba(56, 38, 26, .12);
+}
+
+/* 薰衣草(冷白 + 藤紫): 2026-10-02 新增浅色系。护眼绿同配方, 冷色版。 */
+html[data-theme="lavender"] {
+  color-scheme: light;
+
+  --bg: #f5f3f9;
+  --panel: #ffffff;
+  --panel2: #edeaf4;
+  --panel3: #e2ddee;
+  --border: #e0daee;
+  --border-strong: #c3b9da;
+  --overlay: rgba(28, 22, 40, .82);
+  --mask: rgba(28, 22, 40, .5);
+
+  --text: #302b3d;
+  --muted: #6f6885;
+  --faint: #948da9;
+  --on-accent: #ffffff;
+
+  --accent: #6f5bb5;
+  --accent-soft: rgba(111, 91, 181, .12);
+  --accent2: #3f8f7a;
+  --accent2-soft: rgba(63, 143, 122, .12);
+  --lastview: #c62828;
+  --lastview-glow: rgba(198, 40, 40, .5);
+  --lastview-glow-dim: rgba(198, 40, 40, .28);
+  --danger: #b34248;
+  --danger-soft: rgba(179, 66, 72, .12);
+  --warn: #a3641c;
+  --warn-soft: rgba(163, 100, 28, .12);
+  --fav: #8a6508;
+  --fav-soft: rgba(138, 101, 8, .15);
+
+  --char: #8a5a00;
+  --char-bg: rgba(138, 90, 0, .1);
+
+  --img-bg: #eae6f2;
+  --bar-from: #6f5bb5;
+  --toast-bg: #6f5bb5;
+
+  --shadow-1: 0 6px 18px rgba(38, 30, 56, .12);
+  --shadow-2: 0 6px 20px rgba(38, 30, 56, .16);
+  --shadow-pop: 0 2px 10px rgba(38, 30, 56, .12);
+}
+
+/* 深海蓝(暗色变体): 比默认深色更蓝更沉, 偏冷。红呼吸高亮保持不变 —— 深蓝底上
+   红的稀缺性反而更高。 */
+html[data-theme="ocean"] {
+  color-scheme: dark;
+
+  --bg: #10151f;
+  --panel: #17202f;
+  --panel2: #1d2a40;
+  --panel3: #243550;
+  --border: #2b3a52;
+  --border-strong: #3d5275;
+  --overlay: rgba(3, 7, 14, .9);
+  --mask: rgba(3, 7, 14, .74);
+
+  --text: #d7e2f2;
+  --muted: #8fa1bd;
+  --faint: #61799a;
+  --on-accent: #08121f;
+
+  --accent: #6cb2ff;
+  --accent-soft: rgba(108, 178, 255, .15);
+  --accent2: #6fe3c0;
+  --accent2-soft: rgba(111, 227, 192, .14);
+  --lastview: #ff5f56;
+  --lastview-glow: rgba(255, 95, 86, .65);
+  --lastview-glow-dim: rgba(255, 95, 86, .34);
+  --danger: #ff7b72;
+  --danger-soft: rgba(255, 123, 114, .14);
+  --warn: #ffb454;
+  --warn-soft: rgba(255, 180, 84, .12);
+  --fav: #ffd479;
+  --fav-soft: rgba(255, 212, 121, .18);
+
+  --char: #ffb454;
+  --char-bg: rgba(255, 180, 84, .12);
+
+  --img-bg: #0a0e16;
+  --bar-from: #3d6ea8;
+  --toast-bg: #2f6fbe;
+
+  --shadow-1: 0 6px 18px rgba(0, 0, 0, .5);
+  --shadow-2: 0 6px 20px rgba(0, 0, 0, .6);
+  --shadow-pop: 0 2px 10px rgba(0, 0, 0, .5);
 }
 
 /* ---------------------------------------------------------- reset */

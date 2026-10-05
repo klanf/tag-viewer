@@ -18,14 +18,24 @@ logs/
 # 模板见 local.config.example.json
 local.config.json
 
+# 绿色分发包产物（scripts/pack-green.mjs 的输出）
+release/
+
+# 使用教程视频工程（Remotion）
+.video-tools/
+tutorial-video/node_modules/
+tutorial-video/out/
+
 # ---------------- 数据目录 ----------------
 # data/ 是**用户自己的数据**，一律不进仓库：
 #   · 用户数据(绝不出机器): 黑名单 / 替换规则 / 背景补全 / 收藏备注 / 购物车历史 /
 #     扫描文件夹记录 / 缩略图缓存      —— 里面全是本机文件路径
 #   · 可再生派生物: tags.db(由标签 txt 同步生成) / scan_cache.json(重扫即可重建)
 #   · 知识类: local_translations.json / character_library.json / weilin_data*/
-#     内容是标签翻译与系列角色映射(不含图片)，将来作为「知识包」单独分发，
-#     在此之前需要先核实数据来源与授权(见 README 的合规说明)
+#     内容是标签翻译与系列角色映射(不含图片)。
+#     WeiLin 翻译库(2026-10-02)已随仓库内置在 knowledge/ —— data/ 下这份是本机
+#     副本(优先级更高)，仍不进仓库免得两份漂移；另外两个 json 是用户自己的
+#     补译/映射，不进仓库。来源与授权现状见 knowledge/README.md
 # 只放行 *.example.json 模板 —— 用 data/* 而不是 data/，这样否定规则才生效
 data/*
 !data/*.example.json
@@ -48,3 +58,12 @@ Desktop.ini
 # 这类文档含有本机真实路径与私有目录名，对外分发前需要先脱敏
 交接日志.md
 docs/数据源合并与增量入库方案.md
+
+# 运行期缓存(扫描页目录快照; 可再生, 与 data/scan_cache.json 同性质)
+cache/
+
+# 另一个项目的工程(Remotion 教程视频), 含 node_modules —— 不属于本仓库
+tutorial-video/
+
+# 根目录的孤儿数据库(测试残留); 真正的库在 data/tags.db, 已由 data/* 覆盖
+/tags.db

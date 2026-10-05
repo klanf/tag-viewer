@@ -2,13 +2,13 @@
  * 空数据目录下的启动降级测试
  * ============================
  * 守的是**全新用户第一次打开**这条路 —— 这也是开源发布后最多人走的那条:
- * 机器上一个标签文件都没有, 没有 tag_viewer_config.json, 数据目录是空的。
+ * 机器上一个标签文件都没有, 没有登记过任何文件夹, 数据目录是空的。
  *
  * 要求(缺一不可):
  *   1. 主进程不能崩, 窗口要真的显示出来(不是白屏、不是"双击没反应");
  *   2. 不能把空当成"用户把来源都删了"去清库 —— 由 scripts/test-db-safety.mjs 单独守;
- *   3. 界面要给出**可操作的引导**(告诉他去放 tag_viewer_config.json),
- *      而不是只甩一句技术错误。
+ *   3. 界面要给出**可操作的引导**(就地选个文件夹登记就能开始),
+ *      而不是只甩一句技术错误、更不是教新用户去写配置文件。
  *
  * 第 3 条靠读 DOM 上的实际文案来断言, 不是读源码里的字符串 —— 免得改了模板还以为过了。
  *
@@ -134,19 +134,20 @@ try {
   const bootText = await (async () => {
     for (let i = 0; i < 100; i++) {
       const t = await cdp.eval("return document.querySelector('.boot') ? document.body.innerText : ''")
-      if (t && (t.includes('数据加载失败') || t.includes('还没有配置标签数据源'))) return t
+      if (t && (t.includes('数据加载失败') || t.includes('还没有登记图片文件夹'))) return t
       await sleep(300)
     }
     return await cdp.eval("return document.body.innerText")
   })()
 
   ok('窗口不是白屏(遮罩出来了)', () => assert.ok(bootText.length > 0, 'boot 遮罩没有渲染出任何文字'))
-  ok('走的是"还没配置数据源"的引导, 而不是笼统报错', () => {
-    assert.ok(bootText.includes('还没有配置标签数据源'), `实际文案:\n${bootText.slice(0, 300)}`)
+  ok('走的是"还没登记文件夹"的引导, 而不是笼统报错', () => {
+    assert.ok(bootText.includes('还没有登记图片文件夹'), `实际文案:\n${bootText.slice(0, 300)}`)
     assert.ok(!bootText.includes('❌ 数据加载失败'), '空的配置不该落到笼统错误分支')
   })
-  ok('引导里点明了要放 tag_viewer_config.json', () => {
-    assert.ok(bootText.includes('tag_viewer_config.json'), `实际文案:\n${bootText.slice(0, 300)}`)
+  ok('引导是一键即用的: 有「选择图片文件夹」入口, 不再教人写配置文件', () => {
+    assert.ok(bootText.includes('选择图片文件夹'), `实际文案:\n${bootText.slice(0, 300)}`)
+    assert.ok(!bootText.includes('tags_*.txt'), '新用户引导里不该再出现 tags_*.txt 话术')
   })
   ok('引导里给出了出错的数据目录(可操作)', () => {
     assert.ok(bootText.includes('数据目录'), '缺"数据目录"提示')

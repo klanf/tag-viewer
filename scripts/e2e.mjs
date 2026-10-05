@@ -344,7 +344,13 @@ async function main() {
     stdio: ['ignore', 'pipe', 'pipe'],
     // TV_E2E_CTX_MOVE: 让主进程的右键菜单跳过原生 popup, 直接当成用户点了
     //   「移动到 <MOVED_DIR>」—— 原生菜单 CDP 点不到, 但不点它就测不到生产端。
-    env: electronEnv({ TV_DATA_DIR: DATA_DIR, TV_E2E_CTX_MOVE: MOVED_DIR }),
+    // TV_OLD_ROOT 指到一个不存在的目录: 本机(local.config.json 的 oldRoot)有真模型,
+    //   不堵上它, 反推环境的"静态缺失"永远造不出来, 扫描页的「怎么装」引导测不到。
+    env: electronEnv({
+      TV_DATA_DIR: DATA_DIR,
+      TV_E2E_CTX_MOVE: MOVED_DIR,
+      TV_OLD_ROOT: path.join(ROOT, '.e2e-work', 'no-such-old-root'),
+    }),
   })
   let childExited = null
   /* 主进程 stdout 里混着**渲染进程转发**的 console —— `electron/main.js` 的
@@ -402,7 +408,8 @@ async function main() {
     check('渲染进程挂载 + 顶栏渲染', true)
 
     const navCount = await cdp.eval(`return __t.count('.hdr .nv')`)
-    check('顶栏导航项 = 7(含新增的收藏页与来源页)', navCount === 7, `实际 ${navCount}`)
+    // 2026-10-04: 「来源」从顶栏挪到扫描页标题旁(用户反馈不常用), 7→6 项
+    check('顶栏导航项 = 6(来源页已挪到扫描页入口)', navCount === 6, `实际 ${navCount}`)
 
     const phase = await waitFor(cdp, `
       const s = await window.tv.invoke('app:status')
@@ -1269,9 +1276,12 @@ async function main() {
     const expStats = (over) => cdp.eval(`
       return await (async () => {
         const r = await window.tv.invoke('export:text', ${JSON.stringify({ ...baseQ, ...over })})
-        const has = (tag) => String(r.text).split('\\n').some((l) => l.split(',').map((s) => s.trim()).includes(tag))
+        const lines = String(r.text).split('\\n').filter(Boolean)
+        const has = (tag) => lines.some((l) => l.split(',').map((s) => s.trim()).includes(tag))
         return {
           count: r.count, viewStripped: r.viewStripped || 0, safeStripped: r.safeStripped || 0,
+          appendAdded: r.appendAdded || 0,
+          appendPrefixed: lines.length > 0 && lines.every((l) => l.startsWith('e2e marker, ')),
           hasLooking: has('looking at viewer'), hasNude: has('nude'),
         }
       })()
@@ -1290,6 +1300,12 @@ async function main() {
     const viewRestored = await expStats({ q: 'looking_at_viewer', strip_view: '0' })
     check('导出剔除视角: 关掉开关内容恢复(开关可逆, 不动库)',
       viewRestored.hasLooking, `count=${viewRestored.count}`)
+
+    /* 追加标签(2026-10-03): 每行第一个 tag 前插入; 不传时 appendAdded 恒 0(负向控制)。 */
+    const appendExp = await expStats({ q: 'looking_at_viewer', append: 'e2e_marker' })
+    check('导出追加标签: 每行开头都插入(spaces 转换后为 e2e marker)',
+      baseExp.appendAdded === 0 && appendExp.appendAdded > 0 && appendExp.appendPrefixed && appendExp.hasLooking,
+      `基线 appendAdded=${baseExp.appendAdded} · 追加后=${appendExp.appendAdded} · 行数=${appendExp.count}`)
 
     const safeBase = await expStats({ q: 'nude', safe_only: '0' })
     const safeExp = await expStats({ q: 'nude', safe_only: '1' })
@@ -1715,6 +1731,25 @@ async function main() {
     /* ---------------- 9. 扫描文件夹(文件夹库) ---------------- */
     await cdp.eval(`__t.clickText('.hdr .nv', '扫描'); return true`)
     await waitFor(cdp, `!!document.querySelector('.scan-view .tv-input')`, { label: '扫描页', timeout: 20000 })
+
+    // 反推未就绪引导(2026-10-02): e2e 用 TV_OLD_ROOT 指向不存在的目录 + 沙箱没有 models/,
+    // 所以反推环境的"静态缺失"是确定成立的 —— 扫描页应当常驻一条可操作的引导,
+    // 点开是三步装法与下载地址, 而不是一句干瘪的"已跳过"。
+    const taggerChip = await cdp.eval(`
+      const w = document.querySelector('.scan-view .tagger-warn')
+      return { has: !!w, text: w ? w.textContent.replace(/\\s+/g, ' ') : '' }
+    `)
+    check('扫描: 反推未就绪时有「怎么装」引导条', taggerChip.has, JSON.stringify(taggerChip))
+    check('扫描: 引导条点名了缺什么', /缺/.test(taggerChip.text) && /模型|标签表/.test(taggerChip.text), taggerChip.text)
+    await cdp.eval(`document.querySelector('.scan-view .tagger-warn a').click(); return true`)
+    await waitFor(cdp, `!!document.querySelector('.mask .box')`, { label: '反推引导弹窗', timeout: 8000 })
+    const setupModal = await cdp.eval(`
+      const t = document.querySelector('.mask .box').textContent
+      return { onnx: /model\\.onnx/.test(t), mirror: /hf-mirror\\.com/.test(t), rt: /onnxruntime/.test(t), py: /Python/.test(t) }
+    `)
+    check('扫描: 引导弹窗给出三步装法与下载地址', setupModal.onnx && setupModal.mirror && setupModal.rt && setupModal.py, JSON.stringify(setupModal))
+    await cdp.eval(`document.querySelector('.mask .box .head .x').click(); return true`)
+    await waitFor(cdp, `!document.querySelector('.mask .box')`, { label: '引导弹窗关闭', timeout: 8000 })
 
     const scanEmpty = await cdp.eval(`return { cards: __t.count('.scan-view .grid.folders .ecard') }`)
     check('文件夹库: 首次进入是空列表', scanEmpty.cards === 0, `${scanEmpty.cards} 张`)
@@ -2501,23 +2536,45 @@ async function main() {
       `${detailRes.tags} 个标签, 图片加载=${detailRes.img}, path=${detailRes.path.slice(-40)}`)
     await cdp.shot('15-detail')
 
-    /* ---------------- 11. 主题切换 ---------------- */
-    const theme = await cdp.eval(`
-      const before = document.documentElement.dataset.theme || 'dark'
-      const btn = [...document.querySelectorAll('.hdr .tv-btn')].pop()
-      btn.click()
-      await new Promise(r => setTimeout(r, 500))
-      const after = document.documentElement.dataset.theme
-      const bg = getComputedStyle(document.body).backgroundColor
-      return { before, after, bg }
+    /* ---------------- 11. 主题切换(2026-10-01 五套; 10-02 七套浅色系在前) ----------------
+     * 走真实 UI: 点顶栏 🎨 打开色板 -> 逐个点主题圆点 -> 断 data-theme 跟着变 +
+     * body 背景色真的各不相同(防"圆点点了但变量组没接上"); 序列末站 dark 复原。 */
+    const THEME_SEQ = ['eye', 'light', 'paper', 'peach', 'lavender', 'ocean', 'dark']
+    const themeRows = await cdp.eval(`
+      const seq = ${JSON.stringify(THEME_SEQ)}
+      const out = []
+      for (const want of seq) {
+        document.querySelector('[data-test="hdr-theme"]')?.click()
+        await new Promise(r => setTimeout(r, 150))
+        const dot = document.querySelector('[data-test="theme-dot-' + want + '"]')
+        if (!dot) { out.push({ want, err: 'no dot' }); continue }
+        dot.click()
+        await new Promise(r => setTimeout(r, 300))
+        out.push({
+          want,
+          got: document.documentElement.dataset.theme,
+          bg: getComputedStyle(document.body).backgroundColor,
+          popClosed: !document.querySelector('[data-test="theme-pop"]'),
+        })
+      }
+      return out
     `)
-    check('主题: 深色 <-> 浅色可切换', theme.before !== theme.after, `${theme.before} -> ${theme.after} (bg=${theme.bg})`)
+    for (const r of themeRows) {
+      check(`主题: 色板切到「${r.want}」生效`, r.got === r.want && !r.err,
+        `data-theme ${r.got || '(无)'} · bg=${r.bg || r.err || ''} · 色板已收起=${r.popClosed}`)
+    }
+    const themeBgs = new Set(themeRows.map((r) => r.bg))
+    check('主题: 7 套的背景色真的各不相同', themeBgs.size >= 6,
+      `${themeBgs.size} 种背景色(阈值 6)`)
     await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
     await cdp.eval(`__t.click('.hdr .nv', 0); return true`)
     await sleep(1200)
     await cdp.shot('16-home-light')
-    await cdp.eval(`[...document.querySelectorAll('.hdr .tv-btn')].pop().click(); return true`)
-    await sleep(500)
+    // 复原: 序列最后一站是 light(给上面截图), 后续段仍按深色基线跑
+    await cdp.eval(`document.querySelector('[data-test="hdr-theme"]')?.click(); return true`)
+    await sleep(150)
+    await cdp.eval(`document.querySelector('[data-test="theme-dot-dark"]')?.click(); return true`)
+    await sleep(400)
 
     /* ---------------- 11b. 来源管理页(文件夹登记表) ----------------
      * 这一页是"来源不再写死"的落点: 来源与扫描夹是同一张表上的两个开关。
@@ -2530,7 +2587,11 @@ async function main() {
      * 刻意**不点**「同步」: 那会去 stat 用户真实的 F 盘几万张图(沙箱配置里的
      * data_files_dir 指向真实目录), 与 TV_INGEST=0 要防的是同一件事。
      */
-    await cdp.eval(`location.hash = '#/sources'; return true`)
+    // 走**真实入口**: 扫描页标题旁的「🗄️ 来源管理」按钮(2026-10-04 从顶栏挪来),
+    // 顺便验证这个入口还在 —— 直接 hash 跳转就绕过了入口, 测不到。
+    await cdp.eval(`location.hash = '#/scan'; return true`)
+    await waitFor(cdp, `!!document.querySelector('[data-test="goto-sources"]')`, { label: '扫描页的来源管理入口', timeout: 20000 })
+    await cdp.eval(`document.querySelector('[data-test="goto-sources"]').click(); return true`)
     await waitFor(cdp, `!!document.querySelector('.source-view')`, { label: '来源管理页', timeout: 20000 })
     await waitFor(cdp, `__t.count('.source-view .rows .row') > 0`, { label: '登记表行', timeout: 20000 })
 
@@ -2542,10 +2603,11 @@ async function main() {
         switches: __t.count('.source-view .row:first-child .uses .tv-check'),
         acts: __t.count('.source-view .row:first-child .acts .tv-btn'),
         navLabel: __t.text('.hdr .nv.on'),
+        hash: location.hash,
         first: __t.text('.source-view .rows .row .nm'),
       }
     `)
-    check('来源管理: 顶栏里能进到「来源」页', srcPage.navLabel.includes('来源'), srcPage.navLabel)
+    check('来源管理: 从扫描页的入口能进到「来源」页', /#\/sources/.test(srcPage.hash || ''), '标题旁按钮 → ' + srcPage.hash)
     check('来源管理: 列出的行数 = 登记表里的目录数', srcPage.rows >= 7, `${srcPage.rows} 行`)
     check('来源管理: 计数文案报出「N 个来源」', /\d+ 个来源/.test(srcPage.cnt), srcPage.cnt)
     check('来源管理: 每行三个独立开关(来源 / 扫描 / 自动反推)', srcPage.switches === 3, `${srcPage.switches} 个`)
@@ -4020,9 +4082,50 @@ async function main() {
         `)
         check('快速移动: 光箱打开时工具条收起(只有 📤 圆钮, 无路径按钮)',
           qmMini.fab && qmMini.btns === 0, `fab=${qmMini.fab} btns=${qmMini.btns}`)
-        await cdp.eval(`__t.click('.lightbox [data-test="qm-fab"]'); return true`)
-        await waitFor(cdp, `__t.count('.lightbox .lb-qm .qm-btn[data-test^="qm-btn-"]') > 0`,
-          { label: '快速移动: 点圆钮展开按钮条', timeout: 5000 })
+
+        // 2026-10-01 晚重做: FAB 自身可拖 —— pointerdown 后移动 ≥5px 判拖动,
+        // 原地松手才算点击展开; 拖完那次合成 click 被吞, 条**不许**自己展开。
+        const fabDrag = await cdp.eval(`
+          const f = document.querySelector('.lightbox [data-test="qm-fab"]')
+          if (!f) return { ok: false }
+          const r0 = f.getBoundingClientRect()
+          const before = localStorage.getItem('lb-qm-pos')
+          const opts = { bubbles: true, cancelable: true, pointerId: 1, isPrimary: true }
+          f.dispatchEvent(new PointerEvent('pointerdown', { ...opts, button: 0, clientX: r0.left + 20, clientY: r0.top + 20 }))
+          for (let i = 1; i <= 6; i++) {
+            window.dispatchEvent(new PointerEvent('pointermove', { ...opts, button: 0, clientX: r0.left + 20 + i * 12, clientY: r0.top + 20 - i * 8 }))
+            await new Promise(r2 => setTimeout(r2, 16))
+          }
+          window.dispatchEvent(new PointerEvent('pointerup', { ...opts, button: 0, clientX: r0.left + 20 + 72, clientY: r0.top + 20 - 48 }))
+          await new Promise(r2 => setTimeout(r2, 200))
+          const r1 = f.getBoundingClientRect()
+          // 拖完再原地"按一下"松开 —— 真实用户的下一次按压(pointerdown)会重置拖动抑制,
+          // 这里模拟它; 程序化 el.click() 没有前导 pointer, 不补这步会被吞掉(r15 实锤)。
+          f.dispatchEvent(new PointerEvent('pointerdown', { ...opts, button: 0, clientX: r0.left + 20 + 72, clientY: r0.top + 20 - 48 }))
+          window.dispatchEvent(new PointerEvent('pointerup', { ...opts, button: 0, clientX: r0.left + 20 + 72, clientY: r0.top + 20 - 48 }))
+          await new Promise(r2 => setTimeout(r2, 120))
+          return {
+            ok: true,
+            moved: Math.abs(r1.left - r0.left) > 20 || Math.abs(r1.top - r0.top) > 20,
+            stillCollapsed: !document.querySelector('.lightbox .qm-bar'),
+            saved: localStorage.getItem('lb-qm-pos') !== before,
+          }
+        `)
+        check('快速移动: 收起态圆钮按住可拖(拖完不自己展开, 位置落盘)',
+          fabDrag.ok && fabDrag.moved && fabDrag.stillCollapsed && fabDrag.saved,
+          `moved=${fabDrag.moved} · 仍收起=${fabDrag.stillCollapsed} · 已存位=${fabDrag.saved}`)
+        /* 点圆钮展开(r18/r20 两次同点偶发超时后改成轮询内重试点击):
+           waitFor 每轮先查条是否已出现, 没有就补一次 click ——
+           兼容「程序化 click 打在 Transition 重渲染前的旧节点上被丢」等竞态。
+           真实用户不受影响: 下一次按压自带 pointerdown, 组件里的抑制必然重置。
+           ⚠️ 必须用「多语句 + 语句级 return」的形式: cdp.eval 会把表达式包进
+           (async () => { ... })(), 同步 IIFE (()=>{...})() 的返回值会被当
+           语句丢弃 -> 每轮 eval 恒为 undefined -> 必挂(r21 实锤, 表现为
+           「最后值: undefined」而非 err)。 */
+        await waitFor(cdp, `
+          if (__t.count('.lightbox .lb-qm .qm-btn[data-test^="qm-btn-"]') > 0) return true
+          document.querySelector('.lightbox [data-test="qm-fab"]')?.click()
+          return false`, { label: '快速移动: 点圆钮展开按钮条(点击重试)', timeout: 8000 })
 
         const strip0 = await cdp.eval(`
           return {

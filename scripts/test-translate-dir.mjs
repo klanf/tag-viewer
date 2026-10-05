@@ -9,7 +9,8 @@
  * 现在规则是(见 electron/core/translate.js 的 resolveWeiLinDirs):
  *   ① 配置路径有效      -> 用配置的(config 优先, 允许指向数据目录外面)
  *   ② 配置空 / 路径失效 -> 在数据目录下自动找 weilin_data*(paths.js 的"知识目录"约定)
- *   ③ 都没有            -> 不启用, 且必须把 dirMissing 标出来, 不许静默
+ *   ③ 数据目录也没有    -> 回落仓库内置 knowledge/(2026-10-02 起随仓库分发)
+ *   ④ 连内置都没有      -> 不启用, 且必须把 dirMissing 标出来, 不许静默
  *
  * 用法: node scripts/test-translate-dir.mjs
  * 沙箱: .e2e-work/translate-test/(每次只用写不用删, 建库时整文件覆盖)
@@ -38,7 +39,7 @@ const USER_DATA = path.join(WORK, 'userdata')
 const WEILIN_NAME = 'weilin_data(测试用)'
 const WEILIN_DIR = path.join(DATA, WEILIN_NAME)
 const OTHER_DIR = path.join(WORK, '翻译库放这儿也能用')
-/** 一个完全空的数据目录, 用来验"哪儿都找不到翻译库"这条降级路径 */
+/** 一个完全空的数据目录, 用来验"内置回落"与"哪儿都找不到"两条路径 */
 const EMPTY_DATA = path.join(WORK, 'empty-data')
 for (const d of [WORK, DATA, USER_DATA, WEILIN_DIR, OTHER_DIR, EMPTY_DATA]) fs.mkdirSync(d, { recursive: true })
 
@@ -99,7 +100,7 @@ ok('配置路径有效 -> 用配置的, 不被自动发现抢走', () => {
   assert.equal(r.missing, false)
 })
 
-ok('配置留空且 autoDetect=false -> 不启用(测试里要能关掉自动发现)', () => {
+ok('配置留空且 autoDetect=false -> 不启用(测试里要能关掉自动发现, 内置回落也一起关)', () => {
   const r = resolveWeiLinDirs('', { autoDetect: false })
   assert.equal(r.source, 'none')
   assert.deepEqual(r.dirs, [])
@@ -110,6 +111,19 @@ ok('配置失效且 autoDetect=false -> dirs 为空但 missing 仍为 true', () 
   assert.equal(r.source, 'none')
   assert.deepEqual(r.dirs, [])
   assert.equal(r.missing, true)
+})
+
+ok('数据目录没有但仓库内置有 -> source=bundled(2026-10-02 新语义)', () => {
+  initWorkspace(USER_DATA, { defaultDataDir: EMPTY_DATA })
+  try {
+    const r = resolveWeiLinDirs('')
+    assert.equal(r.source, 'bundled')
+    assert.equal(r.dirs.length, 1, '内置库只有一个 weilin_data* 目录')
+    assert.ok(r.dirs[0].includes('knowledge'), `应指向仓库 knowledge/, 实际: ${r.dirs[0]}`)
+    assert.equal(r.missing, false, '配置留空不算"路径失效"')
+  } finally {
+    initWorkspace(USER_DATA, { defaultDataDir: DATA })   // 还原, 免得影响后续断言
+  }
 })
 
 /* ---------------- 2. 真的把翻译读出来 ---------------- */
@@ -141,11 +155,25 @@ ok('配置路径有效 -> dirSource=config', () => {
   assert.equal(ti.dirMissing, false)
 })
 
-ok('两头都没有 -> 不崩, 只是没有翻译(而不是抛异常)', () => {
-  // 换一个**空**数据目录重新初始化 workspace —— 自动发现也该一无所获
+ok('数据目录没有但内置有 -> 端到端查得到中文(零配置新装机器的路径)', () => {
   initWorkspace(USER_DATA, { defaultDataDir: EMPTY_DATA })
   try {
     loadTranslations('')
+    const ti = translateInfo()
+    assert.equal(ti.dirSource, 'bundled')
+    assert.ok(ti.weilin > 0, `内置库应有词条, 实际 ${ti.weilin}`)
+    assert.ok(Object.keys(translateMany(['1girl'])).length >= 0, '不抛异常即可')
+  } finally {
+    initWorkspace(USER_DATA, { defaultDataDir: DATA })   // 还原, 免得影响后续断言
+  }
+})
+
+ok('连内置都没有(注入空 bundledDir) -> 不崩, 只是没有翻译(而不是抛异常)', () => {
+  // 换一个**空**数据目录重新初始化 workspace —— 自动发现也该一无所获;
+  // 再注入一个不存在的 bundledDir, 把"仓库内置"这条路也堵上, 才是真·两头都没有
+  initWorkspace(USER_DATA, { defaultDataDir: EMPTY_DATA })
+  try {
+    loadTranslations('', { bundledDir: path.join(WORK, '内置也没有') })
     const ti = translateInfo()
     assert.equal(ti.weilin, 0)
     assert.equal(ti.dirSource, 'none')

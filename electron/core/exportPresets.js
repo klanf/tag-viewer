@@ -165,7 +165,10 @@ export function setAutoDelayMs(ms) {
 
 /* ------------------------------------------------------------ 归一化 */
 
-const PARAM_STRS = ['q', 'exclude', 'sort']
+// replace_set = 用哪一套替换规则(2026-10-04 规则组); 空串 = 默认组。
+// append 已于 10-04 移除 UI(用户改用替换规则), 但**留在白名单里**:
+// 老预设文件里可能存过这个键, 归一化时丢掉它等于静默改掉老预设的行为。
+const PARAM_STRS = ['q', 'exclude', 'sort', 'append', 'replace_set']
 const PARAM_ENUMS = {
   mode: ['any', 'all'],
   match: ['contains', 'exact'],

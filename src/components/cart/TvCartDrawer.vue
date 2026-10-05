@@ -20,6 +20,7 @@ import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { api } from '@/utils/api.js'
 import { useCartPresetBadge } from '@/composables/useCartPresetBadge.js'
+import TvReplaceSetPicker from '@/components/export/TvReplaceSetPicker.vue'
 
 const cart = useCartStore()
 const ui = useUiStore()
@@ -120,6 +121,7 @@ async function revealItem(it) {
           </div>
 
           <div class="acts">
+            <TvReplaceSetPicker v-model="cart.replaceSet" />
             <TvButton size="sm" variant="success" :loading="busy" @click="exportAll">⬇ 导出全部</TvButton>
             <TvButton size="sm" variant="warn" :disabled="!cart.count" @click="showCheckout = true">💳 结算</TvButton>
             <TvButton size="sm" variant="secondary" @click="showHistory = true">🕘 历史</TvButton>

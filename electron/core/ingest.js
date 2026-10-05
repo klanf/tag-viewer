@@ -12,10 +12,18 @@
  * 规则落地(自上而下, 命中即止):
  *   1. 库有 + 指纹(mtime+size)一致        -> 跳过(不读图)
  *   2. 库有 + 指纹变了                    -> 重读元数据; 读到就覆盖, 读不到则保留原标签并重新入队
- *   3. 库无 + 图内**有**元数据            -> 直接入库(tags_src='meta')
+ *   3. 库无 + 图内**有**元数据            -> 直接入库(tags_src='meta'), **并且入队反推**(见下)
  *   4. 库无 + 图内**无**元数据            -> 入 tag_queue(等阶段 3 的反推管道消费)
  *   5. 库有 + 磁盘已不见                  -> gone=1(**保留记录**, 保护收藏与历史)
  *   6. 库有 gone=1 + 磁盘又出现           -> 清 gone, 按规则 2 处理
+ *
+ * **2026-10-02 语义变更(用户拍板): meta 图也要反推**。此前规则 3 只吃图内提示词、
+ * 从不发给模型; 现在 meta 图同样入队, 反推结果**合并**进已有标签
+ * (meta 部分永不丢, tags_src 变成 'meta+wd14', 见 tagger.js applyTags)。
+ * 动机: 图内提示词是"作者写的原始串", WD14 给的才是规范化 danbooru 标签 ——
+ * 角色高亮/标签搜索都以后者为准, 只吃 meta 会让带元数据的图永远缺角色标签。
+ * 代价可控: 只有新图/图变了才重读重推(规则 1 照旧跳过), 存量 meta 图由
+ * backfillMetaQueue 一次性补队。
  *
  * 首轮多一条「回填」: 从 txt 迁移过来的 legacy 行 mtime_ms/size **全是 NULL**
  * (迁移只搬数据, 不 stat 磁盘), 于是规则 1 在首轮永远不成立。所以第一次跑会
@@ -24,7 +32,7 @@
  *
  * 三个落点(职责不重叠):
  *   · images    —— **有标签的图**(看板/搜索/系列的数据源)
- *   · tag_queue —— **待反推的裸图**, 持久化在 DB, 进程重启不丢
+ *   · tag_queue —— **待反推的图**(裸图 + 待合并的 meta 图), 持久化在 DB, 进程重启不丢
  *   · folders   —— 登记表, 只有 as_source=1 的目录参与本流程
  *
  * as_scan=1 / as_source=0 的目录(如「只看新生成的 AI 图」那个)在这里**直接跳过** ——
@@ -101,6 +109,37 @@ CREATE TABLE IF NOT EXISTS tag_queue (
 );
 CREATE INDEX IF NOT EXISTS idx_queue_state ON tag_queue(state, added_at);
 `)
+}
+
+/**
+ * 存量 meta 图一次性补队(2026-10-02 合并语义的配套迁移)。
+ *
+ * 改语义之前入库的 meta 图(实测 6575 张)从没进过队列 —— 得补一次, 否则只有
+ * "今后新增/变更"的图才享受合并。用 meta 表(key='wd14_meta_backfill_v1')做
+ * **一次性标记**: 补完就不再补。幂等性双保险:
+ *   · 标记在 -> 直接跳过;
+ *   · INSERT...SELECT ... ON CONFLICT(path) DO NOTHING -> 已在队列里的行不受扰
+ *     (不会把 done/failed 重置成 pending, 也不重复计费)。
+ * 门闸: TV_INGEST=0(测试/dev)直接跳过 —— 沙箱库的 folders 指向真实盘符,
+ * 绝不能在测试里偷偷把真图塞进沙箱队列污染断言。
+ *
+ * @returns {{queued?:number, skipped?:boolean, reason?:string}}
+ */
+export function backfillMetaQueue(db = openDb()) {
+  if (process.env.TV_INGEST === '0') return { skipped: true, reason: 'ingest-gate' }
+  ensureQueueTable(db)
+  const flag = db.prepare("SELECT value FROM meta WHERE key = 'wd14_meta_backfill_v1'").get()
+  if (flag) return { skipped: true, reason: 'already-done' }
+  const r = db.prepare(`
+    INSERT INTO tag_queue (path, folder_id, src_id, size, mtime_ms, state, added_at)
+    SELECT path, COALESCE(folder_id, 0), COALESCE(src_id, 0),
+           COALESCE(size, 0), COALESCE(mtime_ms, 0), 'pending', ?
+    FROM images WHERE gone = 0 AND tags_src = 'meta'
+    ON CONFLICT(path) DO NOTHING
+  `).run(Date.now())
+  db.prepare("INSERT INTO meta (key, value) VALUES ('wd14_meta_backfill_v1', ?)").run(String(r.changes))
+  flog('tagger', `存量 meta 补推: 入队 ${r.changes} 张`)
+  return { queued: r.changes }
 }
 
 export function queueStats(db = openDb()) {
@@ -364,11 +403,14 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
       const tags = p.tags.join(',')
       if (item.kind === 'new') plan.inserts.push({ path: item.path, tags, m: item.m, s: item.s, dim })
       else plan.metaUpdates.push({ id: item.id, path: item.path, tags, m: item.m, s: item.s, dim })
-    } else {
-      // 裸图: 不动已有标签(legacy 值可能是世上唯一一份), 只更新指纹 + 入队
-      if (item.kind === 'changed') plan.fpUpdates.push({ id: item.id, m: item.m, s: item.s, dim })
-      plan.queue.push({ path: item.path, m: item.m, s: item.s })
+    } else if (item.kind === 'changed') {
+      // 裸图: 不动已有标签(legacy 值可能是世上唯一一份), 只更新指纹
+      plan.fpUpdates.push({ id: item.id, m: item.m, s: item.s, dim })
     }
+    // **无条件入队**(2026-10-02 合并语义): 裸图等反推打标; meta 图等 WD14 把规范化
+    // 标签**合并**进来(applyTags 保证 meta 部分永不丢)。文件没变的图走规则 1 跳过,
+    // 不会反复入队 —— 只有新图/图变了才到这里。
+    plan.queue.push({ path: item.path, m: item.m, s: item.s })
   }
   const ins = plan.inserts.length
   const metaUpd = plan.metaUpdates.length
@@ -414,10 +456,9 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
       const dimStmt = db.prepare('UPDATE images SET px_w = ?, px_h = ? WHERE id = ?')
       for (const [w, h, id] of dimRows) dimStmt.run(w, h, id)
 
-      // 已有元数据 -> 不必再反推(可能之前入过队, 比如图被换成了带元数据的版本)
-      const qDel = db.prepare('DELETE FROM tag_queue WHERE path = ?')
-      for (const x of plan.inserts) qDel.run(x.path)
-      for (const x of plan.metaUpdates) qDel.run(x.path)
+      // (2026-10-02 起 meta 图也入队, 不再有"有元数据就从队列里划掉"这回事 ——
+      //  之前这行 qDel 是防"图被换成带元数据的版本后队列残留旧裸图记录",
+      //  现在队列本来就要收它, 交给下面 queue.push 的 UPSERT 重置成 pending。)
 
       // 入队 = 把「已登记待反推」这个事实持久化, 避免下次启动再读一遍图
       const qStmt = db.prepare(`

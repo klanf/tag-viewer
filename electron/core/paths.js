@@ -27,6 +27,13 @@ import { fileURLToPath } from 'node:url'
 /** 仓库根目录(本文件在 electron/core/ 下, 往上两级) */
 export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
+/**
+ * 仓库内置的「知识」目录 —— 随仓库分发的那份 WeiLin 翻译库住这里
+ * (来源与授权见 knowledge/README.md)。数据目录下自动发现不到 weilin_data* 时,
+ * translate.js 回落到这里, 让新装机器**零配置**就有中文标签。
+ */
+export const BUNDLED_KNOWLEDGE_DIR = path.join(PROJECT_ROOT, 'knowledge')
+
 /** 数据目录的默认名 —— 挂 <userData>/data 或 <仓库>/data */
 export const DATA_DIR_NAME = 'data'
 
@@ -39,12 +46,19 @@ export const DATA_DIR_NAME = 'data'
  *   打包后 __dirname 在 asar 里, 写不进去; 而 userData 是每个用户各自的**可写**目录。
  *   开发期由 main.js 注入, 命令行工具由 scripts/local-config.mjs 注入。
  *
- * @param {{settingsDataDir?:string, envDataDir?:string, defaultDataDir?:string, appDir?:string}} o
+ * @param {{settingsDataDir?:string, envDataDir?:string, defaultDataDir?:string, appDir?:string, allowPortable?:boolean}} o
+ *   allowPortable: 仅 main.js(绿色包/仓库开发形态)开启 —— 与应用同目录存在**可写**的
+ *   data/ 就优先用它(数据随包走, 删文件夹即卸载)。显式配置(settings.json/TV_DATA_DIR)
+ *   仍然优先; CLI 工具与测试不传, 解析行为不变。electron-builder 打包态下同目录在
+ *   asar 里, 可写探测必然失败, 自动回落 <userData>/data, 无需分支。
  */
-export function resolveDataDir({ settingsDataDir, envDataDir, defaultDataDir, appDir } = {}) {
+export function resolveDataDir({ settingsDataDir, envDataDir, defaultDataDir, appDir, allowPortable } = {}) {
   const cands = [
     settingsDataDir,
     envDataDir,
+    allowPortable && dirWritable(path.join(PROJECT_ROOT, DATA_DIR_NAME))
+      ? path.join(PROJECT_ROOT, DATA_DIR_NAME)
+      : '',
     defaultDataDir,
     appDir ? path.join(appDir, DATA_DIR_NAME) : '',
   ]
@@ -53,6 +67,19 @@ export function resolveDataDir({ settingsDataDir, envDataDir, defaultDataDir, ap
   }
   // 最后的兜底也是**仓库内相对路径**, 不是机器绝对路径 —— 开源后仍然成立
   return path.resolve(PROJECT_ROOT, DATA_DIR_NAME)
+}
+
+/** 目录存在、是目录、且真能创建/删除文件(asar 与只读位置都过不了这一关) */
+function dirWritable(p) {
+  try {
+    if (!fs.statSync(p).isDirectory()) return false
+    const probe = path.join(p, `.tv-write-probe-${process.pid}`)
+    fs.writeFileSync(probe, '')
+    fs.unlinkSync(probe)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** 配置文件名(带 // 行注释的宽松 JSON, 解析在 core/config.js 的 parseLooseJson) */
@@ -117,7 +144,8 @@ export const readyFlag = () => path.join(getLogDir(), READY_NAME)
 /**
  * K 知识 —— 内容是"标签/角色/系列映射"这类知识, 不含图片, 是**可分发**的。
  * 下一轮做成知识包(带版本号, 见交接日志 P1)时的素材清单。
- * ⚠️ 授权待核实: weilin_data 目录名里带第三方署名, 来源与许可需在开源文档里写清。
+ * WeiLin 翻译库(2026-10-02)已随仓库内置在 knowledge/, 来源与授权现状写在
+ * knowledge/README.md —— 目录名里的第三方署名原样保留, 权利人要求即移除。
  */
 export const KNOWLEDGE_FILES = ['local_translations.json', 'character_library.json']
 export const KNOWLEDGE_DIR_PREFIXES = ['weilin_data']
@@ -203,6 +231,8 @@ export const DATA_ROUTE = Object.freeze({
   'export_presets.json': { kind: 'user' },
   // 购物车自动导出预设(单份, 同样含目标目录这类本机路径) -> user/cart_preset.json
   'cart_preset.json': { kind: 'user' },
+  // 替换规则组(2026-10-04, 多套规则手动命名、导出时选) -> user/replace_sets.json
+  'replace_sets.json': { kind: 'user' },
   // 登记表: 真源是 tags.db 的 folders 表, 这份 json 降级为「导出备份 + 首次导入源」
   'scan_folders.json': { kind: 'user', as: 'folders.json' },
   // U 规则: 导出词表

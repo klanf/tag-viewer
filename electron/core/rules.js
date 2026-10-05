@@ -4,23 +4,37 @@
  * 三个文件都在 dataDir 下, 与 Python 版共用同一份:
  *   export_blacklist.txt   每行一条, 支持 * 通配, # 为注释
  *   export_replace.txt     每行 '模式 -> 替换标签(可多个,逗号分隔)'
+ *                          替换侧里写 {tag} 表示"命中时的原标签", 用来做追加/改写:
+ *                            *_hair   -> {tag}, hair_focus      (保留原标签 + 追加)
+ *                            painting -> {tag}_style            (原标签改写, 见 replaceTag)
+ *
+ * 通配两种写法(黑名单 / 替换规则 / 视角词表 三处通用):
+ *   *  星号 = 纯子串语义 —— 下划线只是普通字符, 所以 *boy* 会连 tomboy/boyish/xxxboy 一起命中
+ *   @  整段 = 按 _ 切段后逐段比, 段内也能用 *(不能跨段):
+ *            @boy@     boy / boy_xx / xx_boy / xx_boy_yy 命中; tomboy/boyish/xxxboy 不命中
+ *            @boy*@    段以 boy 开头     @*hair@  段以 hair 结尾     @*color*@  段含 color
+ *       (# 是注释前缀, 所以段的界符用 @)
  *   export_bg.txt          [kw] 段=背景检测关键词, [append] 段=缺背景时追加的标签
  *
  * 全部带 mtime 缓存 —— 用户在编辑器里改了文件, 下次读取自动生效, 不用重启。
  */
 import fs from 'node:fs'
+import path from 'node:path'
 import { dataFile } from './workspace.js'
 
 const cache = {
   blacklist: { path: '', mtime: -1, value: null },
-  replace: { path: '', mtime: -1, value: null },
   bg: { path: '', mtime: -1, value: null },
   view: { path: '', mtime: -1, value: null },
 }
+// 替换规则改成**按组**缓存(2026-10-04): Map<setId, {text, value}>,
+// text 一致就复用编译结果 —— 存盘/改组名后调用方 clear 一下即可。
+const replaceCache = new Map()
 
 const BL_NAME = 'export_blacklist.txt'
 const RP_NAME = 'export_replace.txt'
 const BG_NAME = 'export_bg.txt'
+const RS_NAME = 'replace_sets.json'
 
 function mtimeOf(p) {
   try { return fs.statSync(p).mtimeMs } catch { return -1 }
@@ -47,7 +61,9 @@ export function isBlocked(tag, rules) {
   if (!rules || !rules.length) return false
   const t = tag.toLowerCase()
   for (const rule of rules) {
-    if (rule.startsWith('*') && rule.endsWith('*') && rule.length > 2) {
+    if (isSegPat(rule)) {
+      if (segHit(t, rule.slice(1, -1))) return true
+    } else if (rule.startsWith('*') && rule.endsWith('*') && rule.length > 2) {
       if (t.includes(rule.slice(1, -1))) return true
     } else if (rule.startsWith('*')) {
       if (t.endsWith(rule.slice(1))) return true
@@ -68,9 +84,15 @@ function compileFast(rules) {
   const pre = []
   const suf = []
   const con = []
+  const seg = []
   const parts = []
   for (const r of rules) {
-    if (!r.includes('*')) {
+    if (isSegPat(r)) {
+      // 整段规则不能落进 exact(它本身不含 *), 必须单独一档
+      const inner = r.slice(1, -1)
+      seg.push(inner)
+      parts.push(segRe(inner))
+    } else if (!r.includes('*')) {
       exact.add(r)
     } else if (r.startsWith('*') && r.endsWith('*') && r.length > 2) {
       const c = r.slice(1, -1)
@@ -89,7 +111,7 @@ function compileFast(rules) {
   return {
     rules,
     exact,
-    pre, suf, con,
+    pre, suf, con, seg,
     regex: parts.length ? new RegExp(parts.map((x) => `(?:${x})`).join('|')) : null,
   }
 }
@@ -105,12 +127,28 @@ export function blacklistMatcher() {
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
 
+/** 一个字符串对一条通配模式(精确/前缀/后缀/包含)的匹配 */
+function wildHit(s, pat) {
+  if (pat.startsWith('*') && pat.endsWith('*') && pat.length > 2) return s.includes(pat.slice(1, -1))
+  if (pat.startsWith('*')) return s.endsWith(pat.slice(1))
+  if (pat.endsWith('*')) return s.startsWith(pat.slice(0, -1))
+  return s === pat
+}
+
+/** '@xxx@' = "整段"匹配: 按 _ 切段逐段比, 段内还能用 * (但不能跨段)。# 是注释前缀, 故用 @ 当界符 */
+function isSegPat(pat) { return pat.length > 2 && pat.charAt(0) === '@' && pat.endsWith('@') }
+function segHit(lowerTag, inner) { return lowerTag.split('_').some((seg) => wildHit(seg, inner)) }
+
+/** 段模式转正则片段: @boy@ -> (?:^|_)boy(?:_|$); 段内的 * 不能跨段, 用 [^_]* */
+function segRe(inner) { return '(?:^|_)' + inner.split('*').map(escapeRe).join('[^_]*') + '(?:_|$)' }
+
 /** compileFast 产物的单标签快速命中(不做空格/下划线归一, 调用方自己决定) */
 function fastHit(t, m) {
   if (m.exact.has(t)) return true
   for (let i = 0; i < m.pre.length; i++) if (t.startsWith(m.pre[i])) return true
   for (let i = 0; i < m.suf.length; i++) if (t.endsWith(m.suf[i])) return true
   for (let i = 0; i < m.con.length; i++) if (t.includes(m.con[i])) return true
+  for (let i = 0; i < m.seg.length; i++) if (segHit(t, m.seg[i])) return true
   return false
 }
 
@@ -305,32 +343,122 @@ export function toggleBlacklistTag(tag) {
 
 // ---------------------------------------------------------------- 替换规则
 
-/** [{ pat, replTags }] —— 例: *boy -> [boy, shota] (1boy/2boy/boy 都会命中) */
-export function loadReplaceRules() {
-  const p = dataFile(RP_NAME)
-  const mt = mtimeOf(p)
-  if (cache.replace.path !== p || cache.replace.mtime !== mt) {
-    const out = []
-    for (const line of readText(p).split('\n')) {
-      const s = line.trim()
-      if (!s || s.startsWith('#')) continue
-      const i = s.indexOf('->')
-      if (i < 0) continue
-      const pat = s.slice(0, i).trim().toLowerCase()
-      const replTags = s.slice(i + 2).split(',').map((x) => x.trim()).filter(Boolean)
-      if (pat && replTags.length) out.push({ pat, replTags })
-    }
-    cache.replace = { path: p, mtime: mt, value: out }
+/* ------------------------------------------------------------------
+ * 规则组(2026-10-04): 一份规则不够用了 —— 用户不同导出目的要不同替换方案
+ * (给 ComfyUI 出图补质量词 / 传 Danbooru 的清洗版 / 角色表专用...)。
+ * 存法: user/replace_sets.json = { active, sets: [{id, name, text}] }。
+ *
+ * 迁移: 首次读时 json 不存在, 就把现有 data/export_replace.txt 的内容建成
+ * 「默认」组并落盘。**原 txt 一个字都不动**(留着当备份/回滚), 行为也完全不变。
+ * ------------------------------------------------------------------ */
+
+const DEFAULT_SET_ID = 'default'
+
+/** 文本 -> [{pat, replTags}]; 行格式与旧 txt 一模一样(兼容) */
+function parseReplaceRules(text) {
+  const out = []
+  for (const line of String(text ?? '').split('\n')) {
+    const s = line.trim()
+    if (!s || s.startsWith('#')) continue
+    const i = s.indexOf('->')
+    if (i < 0) continue
+    const pat = s.slice(0, i).trim().toLowerCase()
+    const replTags = s.slice(i + 2).split(',').map((x) => x.trim()).filter(Boolean)
+    if (pat && replTags.length) out.push({ pat, replTags })
   }
-  return cache.replace.value
+  return out
 }
 
-/** 对单个标签套用替换规则, 返回替换后的标签数组(未命中则原样返回它) */
+function writeSets(obj) {
+  const p = dataFile(RS_NAME)
+  fs.mkdirSync(path.dirname(p), { recursive: true })
+  const tmp = `${p}.tmp${process.pid}`
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8')
+  try { fs.renameSync(tmp, p) } catch { fs.writeFileSync(p, JSON.stringify(obj, null, 2), 'utf8') }
+}
+
+/** 全部规则组 + 当前默认组; 缺文件时从旧 txt 迁移出「默认」组 */
+export function replaceSets() {
+  const p = dataFile(RS_NAME)
+  let raw = null
+  try { raw = JSON.parse(readText(p)) } catch { raw = null }
+  const sets = []
+  const seen = new Set()
+  for (const s of (Array.isArray(raw?.sets) ? raw.sets : [])) {
+    const id = String(s?.id || '').trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    sets.push({ id, name: String(s?.name || id).trim() || id, text: String(s?.text ?? '') })
+  }
+  if (!sets.length) {
+    sets.push({ id: DEFAULT_SET_ID, name: '默认', text: readText(dataFile(RP_NAME)) })
+    writeSets({ active: DEFAULT_SET_ID, sets })
+  }
+  let active = String(raw?.active || '').trim()
+  if (!sets.some((s) => s.id === active)) active = sets[0].id
+  return { active, sets }
+}
+
+/** 存整套规则组; 返回落盘后的结构(前端拿它刷新) */
+export function saveReplaceSets(body = {}) {
+  const cur = replaceSets()
+  const incoming = Array.isArray(body.sets) ? body.sets : cur.sets
+  const sets = []
+  const seen = new Set()
+  for (const s of incoming) {
+    const name = String(s?.name || '').trim() || String(s?.id || '').trim()
+    if (!name) continue
+    // id 允许留空(新建组): 用名字生成, 重名再加后缀 —— 稳定且可读
+    let id = String(s?.id || '').trim() || `set_${name.replace(/\s+/g, '_').slice(0, 24)}`
+    while (seen.has(id)) id = `${id}_x`
+    seen.add(id)
+    sets.push({ id, name, text: String(s?.text ?? '') })
+  }
+  if (!sets.length) return { error: '至少要保留一套替换规则' }
+  let active = String(body.active || '').trim()
+  if (!sets.some((s) => s.id === active)) active = sets.find((s) => s.id === cur.active)?.id || sets[0].id
+  writeSets({ active, sets })
+  replaceCache.clear()
+  return { active, sets }
+}
+
+/** 按组 id 取编译好的规则; id 空/找不到 = 当前默认组 */
+export function loadReplaceRulesGroup(setId = '') {
+  const { active, sets } = replaceSets()
+  const set = sets.find((s) => s.id === setId) || sets.find((s) => s.id === active) || sets[0]
+  if (!set) return []
+  const hit = replaceCache.get(set.id)
+  if (hit && hit.text === set.text) return hit.value
+  const value = parseReplaceRules(set.text)
+  replaceCache.set(set.id, { text: set.text, value })
+  return value
+}
+
+/** 兼容旧调用点: 现在的"默认组"就是以前的单份规则 */
+export function loadReplaceRules() { return loadReplaceRulesGroup('') }
+
+/** 替换侧里的 {tag} 占位符 = 命中时的原标签(大小写不敏感) */
+const TAG_PLACEHOLDER = /\{tag\}/gi
+
+/**
+ * 对单个标签套用替换规则, 返回替换后的标签数组(未命中则原样返回它)
+ *
+ * 替换侧可以写 {tag} 引用"命中的原标签", 于是同一条规则既能改前缀通配又能留住原值:
+ *   *_hair    -> {tag}, hair_focus    =>  blue_hair 变成 blue_hair, hair_focus
+ *   painting  -> {tag}_art            =>  painting  变成 painting_art
+ *   *comment* -> illustration, {tag}  =>  画风词归并到统一标签, 原词保留
+ * 模式侧还可以写 @xxx@ 表示"xxx 是独立的一段"(@ 是界符, # 是注释):
+ *   @boy@     -> {tag}, male_focus   =>  只有 boy/boy_xx/xx_boy/xx_boy_yy 会加, tomboy 不会
+ *
+ * 不写 {tag} 时是纯替换(原标签被丢掉), 与旧行为完全一致。
+ */
 export function replaceTag(tag, rules) {
   const out = []
   for (const { pat, replTags } of rules) {
     let hit = false
-    if (pat.startsWith('*') && pat.endsWith('*') && pat.length > 2) {
+    if (isSegPat(pat)) {
+      hit = segHit(tag.toLowerCase(), pat.slice(1, -1))
+    } else if (pat.startsWith('*') && pat.endsWith('*') && pat.length > 2) {
       hit = tag.toLowerCase().includes(pat.slice(1, -1))
     } else if (pat.startsWith('*')) {
       hit = tag.toLowerCase().endsWith(pat.slice(1))
@@ -339,17 +467,26 @@ export function replaceTag(tag, rules) {
     } else {
       hit = tag.toLowerCase() === pat
     }
-    if (hit) for (const r of replTags) if (!out.includes(r)) out.push(r)
+    if (!hit) continue
+    for (const r of replTags) {
+      // 用函数式替换, 免得原标签里的 $& / $1 被当成替换模式吃掉
+      const v = r.replace(TAG_PLACEHOLDER, () => tag)
+      if (!out.includes(v)) out.push(v)
+    }
   }
   return out.length ? out : [tag]
 }
 
-export function replaceText() { return readText(dataFile(RP_NAME)) }
+/** 兼容旧调用点: 读/写**当前默认组**的规则正文(等价于单份规则时代的语义) */
+export function replaceText() {
+  const { active, sets } = replaceSets()
+  return (sets.find((s) => s.id === active) || sets[0])?.text || ''
+}
 
 export function saveReplaceText(text) {
-  fs.writeFileSync(dataFile(RP_NAME), String(text ?? ''), 'utf8')
-  cache.replace.mtime = -1
-  return { ok: true, rules: loadReplaceRules() }
+  const { active, sets } = replaceSets()
+  const next = sets.map((s) => (s.id === active ? { ...s, text: String(text ?? '') } : s))
+  return saveReplaceSets({ active, sets: next })
 }
 
 // ---------------------------------------------------------------- 背景补全
@@ -410,6 +547,6 @@ export function hasBgTagFast(tags, bg) {
 /** 规则文件的外部改动可能不更新 mtime 精度, 提供手动失效 */
 export function invalidateRuleCaches() {
   cache.blacklist.mtime = -1
-  cache.replace.mtime = -1
   cache.bg.mtime = -1
+  replaceCache.clear()   // 替换规则现在是按组缓存(text 一致才复用), 整表清掉最稳
 }

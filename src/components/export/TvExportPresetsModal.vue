@@ -17,7 +17,9 @@ import TvModal from '../base/TvModal.vue'
 import TvButton from '../base/TvButton.vue'
 import TvInput from '../base/TvInput.vue'
 import TvSelect from '../base/TvSelect.vue'
+import TvReplaceSetPicker from './TvReplaceSetPicker.vue'
 import TvCheckbox from '../base/TvCheckbox.vue'
+import TvChip from '../base/TvChip.vue'
 import TvSourceChips from '../filter/TvSourceChips.vue'
 import TvCartPresetSection from '../cart/TvCartPresetSection.vue'
 import { api } from '@/utils/api.js'
@@ -49,7 +51,20 @@ const isNew = computed(() => !!editing.value && !presets.value.some((p) => p.id 
 
 /* ------------------------------------------------------------ 读取 */
 
+/* 替换规则组(2026-10-04): 预设里存的是组 id, 界面上要显示组名 */
+const setOptions = ref([{ value: '', label: '默认组' }])
+const setName = (id) => setOptions.value.find((x) => x.value === id)?.label || ''
+async function loadReplaceSets() {
+  try {
+    const r = await api.replaceSets()
+    setOptions.value = [{ value: '', label: '默认组' },
+      ...(r.sets || []).map((x) => ({ value: x.id, label: x.name }))]
+  } catch { /* 读不到就用默认组 */ }
+}
+
 async function load() {
+  await loadReplaceSets()
+  await loadDirs()
   loading.value = true
   try {
     const r = await api.exportPresets()
@@ -120,15 +135,75 @@ function blankParams() {
     strip_view: !!s.strip_view,
     safe_only: !!s.safe_only,
     with_path: !!s.with_path,
+    replace_set: typeof s.replace_set === 'string' ? s.replace_set : '',
   }
+}
+
+/* 目标目录的默认值与"最近"(2026-10-04 用户反馈"导出地址要选两次太麻烦"):
+ *   优先级 = 全局默认目录 > 上次选过的目录(lastPickDir) > 数据目录
+ * 于是"新建预设"默认就带着一个能用的目录, 多数时候一句系统对话框都不用开。 */
+const defDirs = ref({ defaultDir: '', lastDir: '', dataDir: '' })
+async function loadDirs() {
+  try { defDirs.value = await api.exportDirs() } catch { /* 读不到就用空 */ }
+}
+/** 最近用过的目录: 显式默认 > 上次选的 > 各预设现用目录(去重, 最多 8 个) */
+const recentDirs = computed(() => {
+  const out = []
+  const seen = new Set()
+  const push = (d) => {
+    const v = String(d || '').trim()
+    const k = v.toLowerCase()
+    if (!v || seen.has(k)) return
+    seen.add(k); out.push(v)
+  }
+  push(defDirs.value.defaultDir)
+  push(defDirs.value.lastDir)
+  for (const p of presets.value) push(p.dir)
+  return out.slice(0, 8)
+})
+function useDir(d) {
+  if (editing.value) editing.value.dir = d
+}
+async function pickDirAsDefault() {
+  try {
+    const r = await api.pickExportDir()
+    if (r?.canceled || !r?.path) return
+    defDirs.value = { ...defDirs.value, defaultDir: r.path }
+    await api.exportDirSaveDefault(r.path)
+    if (editing.value) editing.value.dir = r.path
+    ui.ok('已设为全局默认目录(以后新建预选用它)', 2200)
+  } catch (e) {
+    ui.err('选择目录失败: ' + e.message)
+  }
+}
+async function clearDefaultDir() {
+  await api.exportDirSaveDefault('')
+  defDirs.value = { ...defDirs.value, defaultDir: '' }
+}
+
+/** 文件名跟随预设名(用户手改过文件名后就不再自动跟随, 别把人起的名冲掉) */
+const fileTouched = ref(false)
+function onNameInput(v) {
+  if (!editing.value) return
+  editing.value.name = v
+  if (!fileTouched.value) editing.value.file = defaultFileName(v)
+}
+function defaultFileName(name) {
+  const t = String(name || '').trim()
+  if (!t) return '筛选结果.txt'
+  // 文件名非法字符替换(与主进程 safeFileName 同一套口径)
+  return t.replace(/[<>:"/\\|?*]/g, '_').slice(0, 60) + '.txt'
 }
 
 function startNew() {
   formErr.value = ''
+  fileTouched.value = false
+  const d = defDirs.value
   editing.value = {
     id: '',
     name: '',
-    dir: '',
+    // 目录已经能用: 默认目录 > 上次选的 > 数据目录
+    dir: d.defaultDir || d.lastDir || d.dataDir || '',
     file: '筛选结果.txt',
     auto: true,
     params: blankParams(),
@@ -137,6 +212,7 @@ function startNew() {
 
 function startEdit(p) {
   formErr.value = ''
+  fileTouched.value = false
   editing.value = {
     id: p.id,
     name: p.name,
@@ -274,6 +350,7 @@ function shortDir(d) {
               {{ p.params.source.length }} 个来源
             </span>
             <span v-if="p.params.q" class="tag-q" :title="p.params.q">🔍 {{ p.params.q }}</span>
+            <span v-if="p.params.replace && setName(p.params.replace_set)" class="tag-set" :title="'替换规则组: ' + setName(p.params.replace_set)">🔁 {{ setName(p.params.replace_set) }}</span>
           </div>
           <div class="ppath" :title="p.dir + '\\' + p.file">
             {{ shortDir(p.dir) }}<span class="sep">\</span><b>{{ p.file }}</b>
@@ -322,7 +399,13 @@ function shortDir(d) {
     <template v-else>
       <div class="frow">
         <span class="lb">名称</span>
-        <TvInput v-model="editing.name" size="sm" placeholder="如: ComfyUI 提示词" />
+                <span class="lb">名称</span>
+        <TvInput
+          :model-value="editing.name"
+          size="sm"
+          placeholder="如: ComfyUI 提示词(文件名会跟着它变)"
+          @input="onNameInput"
+        />
       </div>
 
       <div class="fsec">
@@ -360,6 +443,14 @@ function shortDir(d) {
         <div class="switches">
           <TvCheckbox v-model="editing.params.blacklist" label="剔除黑名单命中的标签" />
           <TvCheckbox v-model="editing.params.replace" label="套用替换规则" />
+          <div v-if="editing.params.replace" class="setpick">
+            <TvReplaceSetPicker
+              v-model="editing.params.replace_set"
+              always
+              label="用哪套规则"
+            />
+            <span class="faint">(规则组在 🔁 替换规则弹窗里管理)</span>
+          </div>
           <TvCheckbox v-model="editing.params.bg" label="缺背景时补背景标签" />
           <TvCheckbox v-model="editing.params.strip_char" label="剔除角色/系列标签" />
           <TvCheckbox v-model="editing.params.strip_view" label="剔除视角/机位标签" title="去掉 from behind / high angle / dutch angle 等视角机位类标签, 词表 data/export_view_tags.txt 可自行增删" />
@@ -373,11 +464,37 @@ function shortDir(d) {
       <div class="fsec">
         <div class="fsec-t">💾 导出到</div>
         <div class="dirrow">
-          <TvInput v-model="editing.dir" size="sm" placeholder="目标目录 (点右边按钮选)" />
+          <TvInput
+            v-model="editing.dir"
+            size="sm"
+            placeholder="目标目录(可直接粘贴路径, 或点右边按钮选)"
+          />
           <TvButton size="sm" variant="secondary" @click="pickDir">📂 选择…</TvButton>
         </div>
+        <div v-if="recentDirs.length" class="dirrow recent">
+          <span class="rlab">最近</span>
+          <TvChip
+            v-for="d in recentDirs"
+            :key="d"
+            :label="d.split(/[\\/]/).pop() || d"
+            :title="d"
+            :active="editing.dir.toLowerCase() === d.toLowerCase()"
+            @click="useDir(d)"
+          />
+          <TvButton size="xs" variant="ghost" @click="pickDirAsDefault">
+            ⭐ 把选中的设为默认
+          </TvButton>
+          <TvButton v-if="defDirs.defaultDir" size="xs" variant="ghost" @click="clearDefaultDir">
+            清除默认
+          </TvButton>
+        </div>
         <div class="dirrow">
-          <TvInput v-model="editing.file" size="sm" placeholder="文件名, 如 筛选结果.txt" />
+          <TvInput
+            v-model="editing.file"
+            size="sm"
+            placeholder="文件名, 如 筛选结果.txt"
+            @input="fileTouched = true"
+          />
         </div>
         <div class="faint">同名文件会被<b>原地覆盖</b>(写临时文件再改名, 下游不会读到半截)</div>
       </div>
@@ -430,6 +547,11 @@ function shortDir(d) {
 .tag-on { font-size: 10px; color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 0 4px; }
 .tag-src { font-size: 10px; color: var(--char, #d19a00); }
 .tag-q { font-size: 11px; color: var(--muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-set { font-size: 10px; color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 0 4px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setpick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 6px; }
+.recent { align-items: center; }
+.recent .rlab { font-size: 12px; color: var(--muted); }
+.faint { color: var(--faint); font-size: 11px; }
 .ppath { font-size: 11px; color: var(--muted); margin-top: 4px; word-break: break-all; }
 .ppath b { color: var(--text); }
 .ppath .sep { padding: 0 1px; }

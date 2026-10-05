@@ -102,7 +102,7 @@ function decorate(row) {
     note: row.note || '',
     stats: row.stats_json ? safeParse(row.stats_json) : null,
     images: Number(row.images || 0),          // 库内已有的图片记录数
-    tagged: Number(row.tagged || 0),          // 其中由 WD14 反推来的(tags_src='wd14')
+    tagged: Number(row.tagged || 0),          // 其中含 WD14 标签的(tags_src='wd14' 或 'meta+wd14')
     exists: isDir(row.path),
   }
 }

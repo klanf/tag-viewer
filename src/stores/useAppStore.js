@@ -10,6 +10,23 @@ import { LS, readLS, writeLS } from '@/utils/lskey.js'
 import { useUiStore } from './useUiStore.js'
 import { nfmt, dur } from '@/utils/format.js'
 
+/** 2026-10-01 扩成 5 套: dark(默认) / light / eye(护眼绿) / paper(纸墨) / ocean(深海蓝)。
+ *  变量组全在 styles/tokens.css, 每套一个 html[data-theme=...] 覆盖块;
+ *  dark:true 的两套在「深浅快捷互换」里当暗色侧。 */
+/* 2026-10-01 五套; 2026-10-02 扩成七套且色板顺序浅色系在前(用户不喜欢深色):
+   eye / light / paper / peach / lavender + dark / ocean。
+   dot 用**主色**而不是底色 —— 浅色系底全是近白, 拿底色当圆点根本分不清。 */
+export const APP_THEMES = [
+  { key: 'eye',      label: '护眼绿', dot: '#2f6d52', dark: false },
+  { key: 'light',    label: '浅色',   dot: '#3573b9', dark: false },
+  { key: 'paper',    label: '纸墨',   dot: '#9c6a2b', dark: false },
+  { key: 'peach',    label: '蜜桃',   dot: '#bd5d3a', dark: false },
+  { key: 'lavender', label: '薰衣草', dot: '#6f5bb5', dark: false },
+  { key: 'dark',     label: '深色',   dot: '#1e2229', dark: true },
+  { key: 'ocean',    label: '深海蓝', dot: '#17202f', dark: true },
+]
+const THEME_KEYS = APP_THEMES.map((t) => t.key)
+
 export const useAppStore = defineStore('app', () => {
   const phase = ref('idle')          // idle | loading | ready | error
   const error = ref('')
@@ -112,18 +129,25 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  // 主题: 默认深色(与旧版一致, 也利于看图), 可切浅色
+  // 主题: 默认深色(与旧版一致, 也利于看图)。旧 localStorage 里只可能存过 dark/light,
+  // 其它一律回落 dark —— 不认的值别硬上, 免得哪天改了主题名单后旧值把整站打回无样式。
   const stored = typeof localStorage !== 'undefined' ? readLS(LS.theme.key) : ''
-  const theme = ref(stored === 'light' ? 'light' : 'dark')
+  const theme = ref(THEME_KEYS.includes(stored) ? stored : 'dark')
 
   function applyTheme() {
     if (typeof document === 'undefined') return
     document.documentElement.dataset.theme = theme.value
   }
-  function toggleTheme() {
-    theme.value = theme.value === 'dark' ? 'light' : 'dark'
-    writeLS(LS.theme.key, theme.value)
+  function setTheme(t) {
+    if (!THEME_KEYS.includes(t) || t === theme.value) return
+    theme.value = t
+    writeLS(LS.theme.key, t)
     applyTheme()
+  }
+  /* 深浅快捷互换(色板之外的快速路径): 暗色系(dark/ocean) -> light, 亮色系 -> dark */
+  function toggleTheme() {
+    const isDark = APP_THEMES.find((t) => t.key === theme.value)?.dark
+    setTheme(isDark ? 'light' : 'dark')
   }
   applyTheme()
 
@@ -237,7 +261,21 @@ export const useAppStore = defineStore('app', () => {
     if (st.progress) progress.value = st.progress
     const wasReady = phase.value === 'ready'
     phase.value = st.phase || phase.value
-    if (!wasReady && phase.value === 'ready') epoch.value++
+    if (phase.value === 'ready') {
+      if (!wasReady) {
+        // 首次就绪 / 手动重载(loading -> ready): 各视图从头初始化
+        epoch.value++
+      } else {
+        // ready -> ready: 后台静默重载(同步/反推完成后)推上来的 —— 界面一直
+        // 是可用的, 不能像 loading 那样全量重置视图。数据真的变了(记录数/标签数/
+        // 系列数)才 bump 一次 epoch 让各视图重查; 移动/删除引起的卡片剔除已由
+        // tv:moved / tv:trashed 事件在前端处理过, 不需要再惊动。
+        const s0 = stats.value, s1 = st.stats
+        if (s1 && (!s0 || s0.records !== s1.records || s0.tags !== s1.tags || s0.series !== s1.series)) {
+          epoch.value++
+        }
+      }
+    }
     error.value = st.error || ''
     if (st.stats) stats.value = st.stats
     if (st.translate) translate.value = st.translate
@@ -300,7 +338,7 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     phase, error, progress, stats, translate, workspace, config, sourcesInfo, loadMs, epoch,
-    theme, ready, loading, totalImages, ingest, tagger, autoExport,
+    theme, setTheme, ready, loading, totalImages, ingest, tagger, autoExport,
     init, reload, applyStatus, bumpEpoch, toggleTheme, applyTheme,
     ingestRun, ingestPause, taggerRun, taggerPause, taggerRefresh,
     pullAutoState, flushAutoNow, clearAutoPending,

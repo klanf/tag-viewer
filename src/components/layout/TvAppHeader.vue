@@ -12,9 +12,9 @@
  * 注意: 这里显示的数字是**数据集总量**(不随来源筛选变化) ——
  * 带来源筛选的统计在首页左栏, 两者语义不同, 不要混。
  */
-import { computed } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import TvButton from '../base/TvButton.vue'
-import { useAppStore } from '@/stores/useAppStore.js'
+import { useAppStore, APP_THEMES } from '@/stores/useAppStore.js'
 import { useCartStore } from '@/stores/useCartStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useRoute } from 'vue-router'
@@ -26,12 +26,14 @@ const cart = useCartStore()
 const ui = useUiStore()
 const route = useRoute()
 
+/* 2026-10-04: 「来源」曾在这里占一格, 用户反馈不常用(要改开关/追平时才进),
+ * 已挪到**扫描页标题旁**的按钮 —— 那两处本来就是同一类操作(管目录),
+ * tab 栏 7→6 项, 让常用的位置更宽。路由 /sources 保留, 入口在 ScanView。 */
 const NAV = [
   { to: '/', label: '看板', icon: '📊' },
   { to: '/series', label: '系列', icon: '🗂️' },
   { to: '/tags', label: '标签', icon: '🏷️' },
   { to: '/scan', label: '扫描', icon: '📂' },
-  { to: '/sources', label: '来源', icon: '🗄️' },
   { to: '/favs', label: '收藏', icon: '⭐' },
   { to: '/cart', label: '购物车', icon: '🛒' },
 ]
@@ -56,6 +58,20 @@ function toggleFavFilter() {
   // 首页在监听 onlyFav 变化, 会自己重搜; 其他视图只影响首页, 这里顺手带回去
   if (route.path !== '/') router.push('/')
 }
+
+/* ---- 主题色板(2026-10-01): 顶栏 ☀/🌙 二态按钮扩成 5 套主题下拉色板。
+   点外面收起 —— 挂在 window 上的捕获监听, 点在色板容器外就关。 */
+const showThemes = ref(false)
+const themeWrap = ref(null)
+function onDocClick(e) {
+  if (showThemes.value && themeWrap.value && !themeWrap.value.contains(e.target)) showThemes.value = false
+}
+function pickTheme(key) {
+  app.setTheme(key)
+  showThemes.value = false
+}
+onMounted(() => document.addEventListener('click', onDocClick))
+onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
 async function openDataDir() {
   try { await api.openPath('') } catch (e) { ui.err(e.message) }
@@ -96,12 +112,31 @@ async function openDataDir() {
     </div>
 
     <TvButton size="sm" variant="secondary" title="打开数据目录" @click="openDataDir">📁</TvButton>
-    <TvButton
-      size="sm"
-      variant="secondary"
-      :title="app.theme === 'dark' ? '切到浅色主题' : '切到深色主题'"
-      @click="app.toggleTheme()"
-    >{{ app.theme === 'dark' ? '☀️' : '🌙' }}</TvButton>
+    <!-- 主题色板: 点 🎨 弹出主题圆点列表, 点选即换; 当前项打勾 -->
+    <div ref="themeWrap" class="theme-wrap">
+      <TvButton
+        size="sm"
+        variant="secondary"
+        data-test="hdr-theme"
+        :title="'主题: ' + (APP_THEMES.find((t) => t.key === app.theme)?.label || app.theme)"
+        @click="showThemes = !showThemes"
+      >🎨</TvButton>
+      <div v-if="showThemes" class="theme-pop" data-test="theme-pop">
+        <button
+          v-for="t in APP_THEMES"
+          :key="t.key"
+          class="theme-opt"
+          :class="{ on: app.theme === t.key }"
+          type="button"
+          :data-test="`theme-dot-${t.key}`"
+          @click="pickTheme(t.key)"
+        >
+          <span class="dot" :style="{ background: t.dot }"></span>
+          <span class="lbl">{{ t.label }}</span>
+          <span v-if="app.theme === t.key" class="ck">✓</span>
+        </button>
+      </div>
+    </div>
   </header>
 </template>
 
@@ -111,7 +146,9 @@ async function openDataDir() {
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 12px;
   padding: 0 14px;
-  background: var(--panel);
+  /* 跟页面背景同色(2026-10-02 用户反馈: 浅色主题下 --panel 比背景白一截,
+   * 顶栏横着一条白很突兀)。内容卡片仍用 --panel, 层次靠这条边框撑。 */
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
   min-width: 0;
 }
@@ -148,4 +185,28 @@ async function openDataDir() {
 @media (max-width: 1180px) {
   .stats { display: none; }
 }
+
+/* 主题色板下拉 */
+.theme-wrap { position: relative; flex: 0 0 auto; }
+.theme-pop {
+  position: absolute; right: 0; top: calc(100% + 6px);
+  min-width: 132px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--r-md); box-shadow: var(--shadow-pop);
+  z-index: 120;
+}
+.theme-opt {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 6px 8px;
+  border-radius: var(--r-sm); font-size: 12px; color: var(--text);
+  text-align: left;
+}
+.theme-opt:hover { background: var(--panel2); }
+.theme-opt.on { background: var(--accent-soft); color: var(--accent); }
+.theme-opt .dot {
+  flex: 0 0 auto; width: 14px; height: 14px; border-radius: 50%;
+  border: 1px solid var(--border-strong);
+}
+.theme-opt .lbl { flex: 1 1 auto; }
+.theme-opt .ck { flex: 0 0 auto; font-size: 11px; }
 </style>

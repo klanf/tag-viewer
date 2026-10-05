@@ -116,7 +116,7 @@ console.log('\n[1] 第一轮: 新增分流 + 扫描夹被完全忽略')
   const st = await run()
   eq('读图 3 张(只有 imgs 里的)', st.readImages, 3)
   eq('入库 2 张(自带元数据)', st.inserted, 2)
-  eq('入队 1 张(裸图)', st.queued, 1)
+  eq('入队 3 张(裸图 1 + meta 2, 合并语义)', st.queued, 3)
   eq('跳过 0', st.skipped, 0)
   eq('消失 0', st.goneSet, 0)
 
@@ -128,9 +128,9 @@ console.log('\n[1] 第一轮: 新增分流 + 扫描夹被完全忽略')
   eq('folder_id 已写入', db.prepare('SELECT COUNT(*) n FROM images WHERE folder_id IS NULL').get().n, 0)
 
   const q = db.prepare('SELECT path, state FROM tag_queue').all()
-  eq('队列 1 条', q.length, 1)
-  eq('队列里是 b.png', path.basename(q[0].path), 'b.png')
-  eq('队列状态 pending', q[0].state, 'pending')
+  eq('队列 3 条(a/b/c)', q.length, 3)
+  eq('三条全是 pending', q.filter((x) => x.state === 'pending').length, 3)
+  eq('b.png 在队列', q.some((x) => path.basename(x.path) === 'b.png'), true)
 
   // 扫描夹的图必须**从未**进库 —— 连队列都不能有
   eq('扫描夹未入库', db.prepare(`SELECT COUNT(*) n FROM images WHERE path LIKE '%d.png'`).get().n, 0)
@@ -184,7 +184,7 @@ console.log('\n[4] 规则 5: 磁盘上删掉 -> 标记 gone, 记录保留')
 
   // gone 的行不该出现在运行时读取里(dataset 走 readRecords)
   let seen = 0
-  store.readRecords((r) => { if (r.path === norm(c)) seen++ })
+  await store.readRecords((r) => { if (r.path === norm(c)) seen++ })
   eq('readRecords 不再返回它', seen, 0)
 }
 
@@ -202,6 +202,7 @@ console.log('\n[5] 规则 6: 图又出现 -> 清 gone 并重读元数据')
   eq('标签更新为新的', row.tags, 'hatsune_miku,long_hair')
   eq('tags_src 仍为 meta', row.tags_src, 'meta')
   eq('总数未变(没有重复插入)', db.prepare('SELECT COUNT(*) n FROM images').get().n, 2)
+  eq('c 重新入队(meta 变更也要补反推)', db.prepare('SELECT COUNT(*) n FROM tag_queue WHERE path=?').get(norm(c)).n, 1)
 }
 
 console.log('\n[6] 幂等: 再跑一轮, 什么都不该发生')
@@ -225,6 +226,32 @@ console.log('\n[7] 预演模式: 只算不写')
   eq('预演报告新增 1', st.inserted, 1)
   eq('库未变', db.prepare('SELECT COUNT(*) n FROM images').get().n, before)
   eq('e.png 未入库', db.prepare('SELECT COUNT(*) n FROM images WHERE path=?').get(norm(e)).n, 0)
+}
+
+console.log('\n[8] backfillMetaQueue: 存量 meta 一次性补队 + 标记幂等 + TV_INGEST 门闸')
+{
+  const db = store.openDb()
+  // 直接插一张"改语义前就在库里"的 meta 图(不走 ingest, 所以队列里没有它;
+  // 磁盘上故意不造文件 —— backfill 只读库, 不影响任何后续用例)
+  db.prepare(`INSERT INTO images (path, src_id, tags, folder_id, mtime_ms, size, tags_src, gone)
+              VALUES (?, 1, 'old_meta_only_tag', 1, 111, 222, 'meta', 0)`)
+    .run(norm(path.join(IMG_DIR, 'zz-backfill-only.png')))
+
+  const r1 = ingest.backfillMetaQueue(db)
+  eq('补队 1 张', r1.queued, 1)
+  eq('进了队列且 pending',
+    db.prepare('SELECT state FROM tag_queue WHERE path=?').get(norm(path.join(IMG_DIR, 'zz-backfill-only.png'))).state,
+    'pending')
+
+  const r2 = ingest.backfillMetaQueue(db)
+  eq('第二次跳过(标记已打)', r2.skipped, true)
+
+  // 门闸: TV_INGEST=0(测试/dev)绝不偷跑 —— 清掉标记再验
+  db.prepare("DELETE FROM meta WHERE key='wd14_meta_backfill_v1'").run()
+  process.env.TV_INGEST = '0'
+  const r3 = ingest.backfillMetaQueue(db)
+  eq('TV_INGEST=0 时不补', r3.skipped, true)
+  delete process.env.TV_INGEST
 }
 
 // 必须显式关库: store.js 的句柄是模块级单例, 持有它就删不掉沙箱目录

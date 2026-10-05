@@ -17,7 +17,7 @@
  * 关键提示(原版专门写过警告, 保留): 如果一个文件夹里所有图的提示词**完全相同**,
  * 那不是"读取失败", 而是这批图本来就是同一提示词换种子刷出来的。
  */
-import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick } from 'vue'
 import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import TvInput from '@/components/base/TvInput.vue'
 import TvButton from '@/components/base/TvButton.vue'
@@ -31,9 +31,11 @@ import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { usePrefsStore } from '@/stores/usePrefsStore.js'
 import { useFavStore } from '@/stores/useFavStore.js'
+import { useAppStore } from '@/stores/useAppStore.js'
 import { useTrash } from '@/composables/useTrash.js'
 import { useJustifiedRows } from '@/composables/useJustifiedRows.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
 import { useFloatBack } from '@/composables/useFloatBack.js'
@@ -52,6 +54,14 @@ const safety = useSafetyStore()
 const fav = useFavStore()
 const trash = useTrash()
 const route = useRoute()
+/** 反推环境状态(config.available/missing 来自 tagger:status 的静态探测, 见 tagger.js) */
+const app = useAppStore()
+/** 反推环境不全时, 这页就是"事故现场" —— 常驻一条可操作的引导, 不让降级变成死胡同 */
+const taggerMissing = computed(() => {
+  const cfg = app.tagger?.config
+  return !!cfg && cfg.available === false
+})
+const taggerMissingText = computed(() => (app.tagger?.config?.missing || []).join('、'))
 
 /* ---------------- 一级: 文件夹库 ---------------- */
 const level = ref('list')            // list | folder
@@ -190,7 +200,15 @@ const { wrapEl: rowsEl, rows: scanRows } = useJustifiedRows(pagedItems, { base: 
  * 光箱还把它算在翻页序列里, 于是往后翻会翻到一张已经不在网格里的幽灵图。
  * (「删掉当前这张就前进」由 useLightboxStore 订阅 tv:trashed / tv:moved 自己负责,
  *  这里管的是另外那种情况: 被剔掉的是**别的**图。) */
-watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
+watch(imgPaths, (arr) => { if (scanActive.value && lb.visible) lb.setList(arr) })
+/* 激活守卫(2026-10-03): 本页被 KeepAlive 休眠时上面的 watch 依然活跃 —— 若用户
+ * 在别的页面(看板)开着光箱, 这边后台刷新把扫描列表塞进光箱会污染翻页序列
+ * (当前图不在其中 -> index 丢失 -> 再移一张图 removeCurrent 就 close())。
+ * setList 里另有一道"新列表不含当前图就不动"的守卫, 两道防线互补: 这道挡
+ * "恰好含当前图"的跨视图污染, 那道挡不含时的 index 丢失。 */
+const scanActive = ref(true)
+onActivated(() => { scanActive.value = true })
+onDeactivated(() => { scanActive.value = false })
 
 function fmtTime(ms) {
   if (!ms) return '从未'
@@ -274,11 +292,17 @@ async function removeFolder(f) {
   }
 }
 
+/* 就地改名 —— 不用 window.prompt: Electron 渲染进程不支持它, 点了静默没反应
+ * (与替换规则组那次同一个坑, 2026-10-04 顺手一起修)。点 ✏️ 变成输入框, 回车提交。 */
+const renaming = ref('')
+const renamingInput = ref('')
 async function renameFolder(f) {
-  const next = window.prompt('显示名(留空 = 用文件夹名)', f.label || '')
-  if (next === null) return
+  if (renaming.value !== f.path) { renaming.value = f.path; return }
+  const next = renamingInput.value
+  renaming.value = ''
+  renamingInput.value = ''
   try {
-    const r = await api.updateFolder({ path: f.path, label: next.trim() })
+    const r = await api.updateFolder({ path: f.path, label: String(next || '').trim() })
     if (r?.error) { ui.err(r.error); return }
     const i = folders.value.findIndex((x) => x.path.toLowerCase() === f.path.toLowerCase())
     if (i >= 0) folders.value[i] = r.folder
@@ -617,6 +641,17 @@ onActivated(() => {
 
 <template>
   <div class="scan-view">
+    <!-- 来源管理的入口(2026-10-04 从顶栏挪来, 用户反馈"不常用, 找个别的地方放"):
+         登记目录 / as_source·as_scan 开关 / 追平都在那边。它与"看图"是同一类
+         目录操作, 但用得少, 不该占顶栏一格; **放在层级判断之外**, 这样从
+         文件夹详情返回、或 KeepAlive 复用(level 还停在 folder)时入口也在。 -->
+    <RouterLink
+      to="/sources"
+      class="to-sources"
+      data-test="goto-sources"
+      title="文件夹登记表: 登记来源/扫描夹、开关用途、追平"
+    >🗄️ 来源管理</RouterLink>
+
     <!-- ==================== 一级: 文件夹库 ==================== -->
     <template v-if="level === 'list'">
       <div class="panel bar-panel">
@@ -624,6 +659,12 @@ onActivated(() => {
         <div class="tip">
           加入过的文件夹会一直留在这里, 下次点开即用(不用重新选目录)。<br>
           支持 ComfyUI / A1111 / NovelAI / InvokeAI 生成图的 png 元数据。
+        </div>
+
+        <!-- 反推环境不全: 常驻一条可操作的引导(点开是三步装法), 不是干瘪的"已跳过" -->
+        <div v-if="taggerMissing" class="tagger-warn">
+          ⚠️ 自动打标(WD14 反推)没有就绪<template v-if="taggerMissingText">：缺 {{ taggerMissingText }}</template>
+          —— <a href="#" @click.prevent="openTaggerSetup">看看怎么装</a>
         </div>
 
         <div class="bar">
@@ -694,7 +735,17 @@ onActivated(() => {
             </div>
             <div class="fmeta faint">上次扫描 {{ fmtTime(f.last_scan) }}</div>
             <div class="fbtns">
-              <button title="重命名显示名" @click.stop="renameFolder(f)">✏️</button>
+              <button v-if="renaming !== f.path" title="重命名显示名" @click.stop="renameFolder(f)">✏️</button>
+              <span v-else class="rename-box">
+                <TvInput
+                  v-model="renamingInput"
+                  size="sm"
+                  placeholder="显示名(留空 = 文件夹名)"
+                  @enter="renameFolder(f)"
+                />
+                <button class="mini" title="确定" @click.stop="renameFolder(f)">✓</button>
+                <button class="mini" title="取消" @click.stop="renaming = ''; renamingInput = ''">✕</button>
+              </span>
               <button title="从列表移除(不删文件)" @click.stop="removeFolder(f)">🗑</button>
             </div>
           </TvEntityCard>
@@ -872,6 +923,7 @@ onActivated(() => {
 
 <style scoped>
 .scan-view {
+  position: relative;
   flex: 1; min-height: 0;
   display: flex; flex-direction: column; gap: 10px;
   padding: 12px;
@@ -886,6 +938,17 @@ onActivated(() => {
 .path { flex: 1; min-width: 260px; }
 .kw { max-width: 320px; }
 .progress { color: var(--accent2); font-size: 12px; margin-top: 8px; }
+/* 反推未就绪的常驻引导条: 警示但不吓人, 入口("看看怎么装")才是重点 */
+.tagger-warn {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px dashed var(--warn, var(--accent));
+  border-radius: var(--r-md, 8px);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.tagger-warn a { color: var(--accent); font-weight: 600; }
 
 .info { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.7; }
 .info b { color: var(--accent2); }
@@ -969,4 +1032,21 @@ onActivated(() => {
   background: rgba(10, 13, 18, .78); color: #fff; font-size: 12px;
 }
 .fbtns button:hover { background: var(--accent); }
+/* 就地改名(不用 window.prompt, 见 renameFolder 注释) */
+.to-sources {
+  position: absolute; top: 10px; right: 14px; z-index: 3;
+  font-size: 12px; text-decoration: none;
+  color: var(--muted); background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--r-pill);
+  padding: 3px 12px;
+}
+.to-sources:hover { color: var(--accent); border-color: var(--accent); }
+.rename-box { display: inline-flex; align-items: center; gap: 4px; width: 100%; }
+.rename-box :deep(.tv-field) { flex: 1; min-width: 0; }
+.mini {
+  width: 22px; height: 22px; border-radius: 5px; flex: none;
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); font-size: 11px; line-height: 1;
+}
+.mini:hover { background: var(--accent); color: var(--on-accent); }
 </style>

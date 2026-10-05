@@ -46,12 +46,18 @@ const hasThumb = computed(() => !!props.thumb)
   >
     <span v-if="badge" :class="['badge', `b-${badgeTone}`]">{{ badge }}</span>
 
+    <!--
+      已加车时**按钮要留着并变成"已加车"态**, 再点一次就是取消(SeriesView 那边
+      走的是 cart.toggle)。2026-10-04 用户报"加完车按钮就没了没法取消" ——
+      这里的 `&& !inCart` 把按钮藏了, 而同一个 class 里的 `{ on: inCart }`
+      样式(金色高亮)因此永远轮不到生效, 可见本意就是要显示已加车态。
+    -->
     <button
-      v-if="inCart !== null && !selectable && !inCart"
+      v-if="inCart !== null && !selectable"
       :class="['cart-btn', { on: inCart }]"
-      title="加入购物车"
+      :title="inCart ? '已在购物车 — 再点一次移除' : '加入购物车'"
       @click.stop="emit('toggle-cart')"
-    >🛒</button>
+    >{{ inCart ? '✓' : '🛒' }}</button>
 
     <span v-if="selectable" class="ckbox" @click.stop="emit('toggle-select')">
       <input type="checkbox" :checked="selected" @click.stop="emit('toggle-select')">

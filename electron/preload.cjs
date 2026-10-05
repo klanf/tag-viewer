@@ -27,6 +27,10 @@ const CHANNELS = new Set([
   // 规则
   'blacklist:get', 'blacklist:save', 'blacklist:toggle',
   'replace:get', 'replace:save', 'bg:get', 'rules:reload',
+  // 替换规则组(2026-10-04): 多套规则手动命名、导出时选
+  'replace:sets', 'replace:sets:save',
+  // 导出默认目录(2026-10-04): 预填预设的目标目录, 省得每次开系统对话框
+  'export:dirs', 'export:dirs:saveDefault',
   // 安全模式(按标签集合隐藏露骨内容; 只做展示层过滤)
   'safety:get', 'safety:set', 'safety:text', 'safety:save', 'safety:toggle',
   // 购物车历史

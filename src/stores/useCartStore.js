@@ -131,10 +131,15 @@ export const useCartStore = defineStore('cart', () => {
   }
 
   /** 导出 wildcard; save=true 时走原生「另存为」。条目整包传(tag+extra), 附加标签跟行走 */
+  /* 角色表用哪套替换规则(2026-10-04 规则组)。localStorage 记忆, 跟看板/预设
+     各选各的 —— 三处是三个独立场景, 用同一套反而不一定对。 */
+  const replaceSet = ref(readLS(LS.cartReplaceSet.key, ''))
+  watch(replaceSet, (v) => writeLS(LS.cartReplaceSet.key, String(v || '')))
+
   async function exportFile(save = true) {
     const entries = list.value.map((c) => ({ tag: c.tag, extra: Array.isArray(c.extra) ? c.extra : [] }))
     if (!entries.length) return { error: '购物车是空的' }
-    return api.exportCart(entries, { save })
+    return api.exportCart(entries, { save, replace_set: replaceSet.value })
   }
 
   /** 结算: 导出 -> 存历史 -> 清空 */
@@ -145,7 +150,7 @@ export const useCartStore = defineStore('cart', () => {
 
     const ex = await api.exportCart(
       list.value.map((c) => ({ tag: c.tag, extra: Array.isArray(c.extra) ? c.extra : [] })),
-      { save: true })
+      { save: true, replace_set: replaceSet.value })
     if (ex?.canceled) return { canceled: true }
     if (ex?.error) return { error: ex.error }
 
@@ -157,9 +162,20 @@ export const useCartStore = defineStore('cart', () => {
     return { ok: true, count: cnt, exported: ex?.path || '' }
   }
 
+  /**
+   * 换某条目的缩略图(2026-10-02): 原文件没了(加载失败)或当前是横图想换竖图时,
+   * TvCartItem 搜到更合适的图后写回这里 —— watch(items, deep) 自动持久化。
+   * 注意: 自动导出指纹(cartPreset.fingerprint)只含 tag+extra, 换缩略图**不会**触发导出。
+   */
+  function setThumb(tag, thumb) {
+    const it = items.value[tag]
+    if (!it || !thumb || it.thumb === thumb) return
+    it.thumb = thumb
+  }
+
   return {
     items, list, ordered, count, keys, drawerOpen,
-    has, add, remove, setExtra, wildcardLine, toggle, replaceAll, clear, addMany,
-    exportFile, checkout,
+    has, add, remove, setExtra, setThumb, wildcardLine, toggle, replaceAll, clear, addMany,
+    exportFile, checkout, replaceSet,
   }
 })

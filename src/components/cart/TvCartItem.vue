@@ -4,9 +4,21 @@
  * ==============================
  * 旧版这段 innerHTML 在 series.html 的 renderCart() 和 cart.html 的 render() 里
  * 各写了一遍, 连缩略图宽度(200)都要对两次。
+ *
+ * 缩略图自愈(2026-10-02 用户两点要求):
+ *   ① 加载失败(文件被移走/删了, 卡片挂 ⚠) -> 按标签搜一批候选图, 逐张换着试,
+ *      成功一张就 setThumb 写回 store —— 下次进来直接就是好图;
+ *   ② 当前 thumb 是横图 -> 有真竖图(h > w)就换成最接近 3:4 的那张并写回
+ *     ("默认最好显示竖图")。候选挑选与后端 coverIdx 同判据(|w/h - 0.75| 最小)。
+ * 搜索走标签详情页同一出口 api.search({ q: tag, match: 'contains' }), 每个条目
+ * 只在"需要换图"时才发一次请求并缓存候选, 不是常驻轮询。
  */
-import { computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import TvImage from '../base/TvImage.vue'
+import { api } from '@/utils/api.js'
+import { useCartStore } from '@/stores/useCartStore.js'
+
+const cart = useCartStore()
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -15,15 +27,92 @@ const props = defineProps({
 })
 const emit = defineEmits(['remove', 'open', 'edit'])
 
-const thumb = computed(() => props.item.thumb || '')
+/** 当前实际展示的缩略图: 默认跟 item.thumb, 主动换图后以本地为准 */
+const cur = ref(props.item.thumb || '')
+const rootEl = ref(null)
+let swapped = false          // 本会话已主动换过(防"换完又评估"循环)
+let cands = null             // 候选缓存: 懒取一次
+let ci = 0                   // 失败轮换游标(候选里第几张)
+let swapping = false         // onLoaded/onFailed 共用锁
+
+watch(() => props.item.thumb, (v) => { if (!swapped) cur.value = v || '' })
+
+const thumb = computed(() => cur.value)
 /** 附加标签(如给哥伦比亚追加 closed_eyes): 有就显示在系列行里, 让"这行导出会带啥"一眼可见 */
 const extras = computed(() => (Array.isArray(props.item.extra) ? props.item.extra : []))
+
+/* ---- 候选图 ---- */
+async function fetchCands() {
+  if (cands) return cands
+  try {
+    const d = await api.search({ q: props.item.tag, match: 'contains', limit: 60 })
+    cands = (d?.results || []).filter((r) => r?.path)
+  } catch { cands = [] }
+  return cands
+}
+/** 在候选里挑"最接近 3:4 的真竖图"(h 必须 > w, 否则宁可不换) */
+function bestPortrait(exclude) {
+  let best = ''
+  let bs = Infinity
+  for (const r of cands || []) {
+    const w = Number(r.px_w) || 0
+    const h = Number(r.px_h) || 0
+    if (!(w > 0 && h > 0) || h <= w || r.path === exclude) continue
+    const s = Math.abs(w / h - 0.75)
+    if (s < bs) { bs = s; best = r.path }
+  }
+  return best
+}
+function commitSwap(p) {
+  swapped = true
+  cur.value = p
+  cart.setThumb(props.item.tag, p)   // 写回: 下次进来直接就是这张, 不用再搜
+}
+
+/** 图片加载成功: 已经是竖图/方图就不折腾; 横图才尝试换竖图 */
+async function onLoaded() {
+  if (swapped || swapping) return
+  const img = rootEl.value?.querySelector('img')
+  const w = img?.naturalWidth || 0
+  const h = img?.naturalHeight || 0
+  if (!w || !h || h >= w) return
+  swapping = true
+  try {
+    await fetchCands()
+    const p = bestPortrait(cur.value)
+    if (p) commitSwap(p)
+  } finally { swapping = false }
+}
+
+/** 图片加载失败(重试 2 次后): 换下一张候选; 一张都没有就空占位, 别挂着 ⚠ */
+async function onFailed() {
+  if (swapping) return
+  swapping = true
+  try {
+    const list = await fetchCands()
+    while (ci < list.length) {
+      const p = list[ci++].path
+      if (p === cur.value) continue
+      commitSwap(p)
+      return                          // 换上了, 成败交给下一轮 loaded/failed
+    }
+    cur.value = ''
+  } finally { swapping = false }
+}
 </script>
 
 <template>
   <div :class="['ci', { compact }]" :title="item.tag" @click="emit('open', item)">
-    <div class="thumb">
-      <TvImage v-if="thumb" :path="thumb" :width="200" ratio="9 / 16" :alt="item.name" />
+    <div ref="rootEl" class="thumb">
+      <TvImage
+        v-if="thumb"
+        :path="thumb"
+        :width="200"
+        ratio="9 / 16"
+        :alt="item.name"
+        @loaded="onLoaded"
+        @failed="onFailed"
+      />
       <div v-else class="ph" />
     </div>
     <div class="info">

@@ -127,6 +127,9 @@ export const api = {
   blacklistToggle: (tag) => call('blacklist:toggle', { tag }),
   replaceGet: () => call('replace:get'),
   replaceSave: (text) => call('replace:save', { text }),
+  /** 替换规则组(2026-10-04): { active, sets:[{id,name,text}] } */
+  replaceSets: () => call('replace:sets'),
+  replaceSetsSave: (body) => call('replace:sets:save', body),
   bgGet: () => call('bg:get'),
   rulesReload: () => call('rules:reload'),
 
@@ -151,6 +154,9 @@ export const api = {
   exportSave: (q) => call('export:save', q),
   exportText: (q) => call('export:text', q),
   exportCart: (tags, opts) => call('export:cart', { tags, ...opts }),
+  /** 导出默认/上次目录(2026-10-04): 预填预设目标目录 */
+  exportDirs: () => call('export:dirs'),
+  exportDirSaveDefault: (dir) => call('export:dirs:saveDefault', { dir }),
 
   // 导出预设: 存好筛选条件+目标目录, 黑名单一变就自动覆盖导出一次
   exportPresets: () => call('export:preset:list'),

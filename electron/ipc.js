@@ -22,7 +22,8 @@ import {
 } from './core/query.js'
 import {
   blacklistText, blacklistRules, saveBlacklistText, toggleBlacklistTag,
-  replaceText, saveReplaceText, loadReplaceRules, loadBgConfig, invalidateRuleCaches,
+  replaceText, saveReplaceText, loadReplaceRules, loadReplaceRulesGroup,
+  replaceSets, saveReplaceSets, loadBgConfig, invalidateRuleCaches,
 } from './core/rules.js'
 import {
   historySummary, historyDetail, saveHistory, deleteHistory, renameHistory,
@@ -54,7 +55,7 @@ import {
 } from './core/safety.js'
 // ds/tagPoolSize 供旧逻辑用; recomputeSafety 只为读数据集里那两个敏感标记计数
 // (安全模式界面要显示"开了会隐藏多少张"), 别拆成两行 import —— ESM 会因重复声明直接报错。
-import { ds, tagPoolSize, recomputeSafety } from './core/dataset.js'
+import { ds, tagPoolSize, recomputeSafety, relocateRecord } from './core/dataset.js'
 import { searchStats, clearSearchCache } from './core/search.js'
 import { moveFile } from './core/fileTransfer.js'
 import { charLibDiag } from './core/charlib.js'
@@ -110,7 +111,11 @@ const DATA_CHANNELS = new Set([
   'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'translate:get',
   'export:preview', 'export:save', 'export:text', 'export:cart',
   'scan:folder',
-  'folders:open', 'folders:add', 'folders:rescan',
+  'folders:open', 'folders:rescan',
+  // folders:add 刻意不设门禁(2026-10-02): 它是空库的死锁解扣 —— 首次启动时库是空的,
+  // bootstrap 必然失败, 门禁若把"登记第一个文件夹"也拦住, 空态就永远出不去
+  // (绿色包用户实测踩中: 选完文件夹报"没有可用的标签数据")。登记与自动同步直接走
+  // tags.db, 不读内存数据集, 无需等就绪。
 ])
 
 /** 先等数据就绪, 再交给真正的 handler */
@@ -173,7 +178,7 @@ function pushTaggerProgress(p) {
 }
 
 /**
- * 「刚被登记为看板来源」的目录, 自动补一次增量同步 —— 同步跑完反推就跟着起来。
+ * 「刚被登记为看板来源」的目录, 自动补一次增量同步(2026-10-03 起反推不由它触发: 本会话攒队列, 重启由启动链路统一推)。
  *
  * 为什么必须补这一步: 把目录登记为来源只是**改名**(folders.as_source=1), 它不会让
  * 图片自动进库。真正的入库在 ingest, 而 ingest 只遍历 `as_source = 1` 的目录
@@ -189,7 +194,7 @@ function pushTaggerProgress(p) {
  *
  * **绝不 await**: 首次同步是分钟级(要枚举目录下全部文件), 挂在这里等会把
  * 「改开关」这个动作卡住不返回。返回的是一个**同步判定**供调用方回执/断言,
- * 真跑在后台, 结果由 onIngestDone 接走(= startLoad + scheduleTagging)。
+ * 真跑在后台, 结果由 onIngestDone 接走(= startLoad 静默重载)。
  */
 function kickAutoSync(folder, onIngestDone) {
   if (folder.auto_tag === false) {
@@ -206,11 +211,13 @@ function kickAutoSync(folder, onIngestDone) {
       if (!st || st.error) return
       if (st.skipped) {
         flog('auto-sync', `跳过(${st.reason || 'busy'}): ${folder.path}`)
-        return
+        // 2026-10-03: skipped 也要接 onIngestDone —— 队列里可能压着上一轮
+        // 入队的裸图(指纹相同 -> 全 skipped), 这时断了反推就没人消费队列。
+        // scheduleTagging 自己会判队列空 -> 不拉模型, 代价为零。
       }
       // 即使这一轮没新增也照样走: 用户改来源的意图就是"纳进来并出标签", 队列里
-      // 可能还压着上一轮没跑完的裸图; onIngestDone 顺带把反推排上(scheduleTagging
-      // 自己会判队列空 -> 不拉模型), 代价只是几秒数据集重载。
+      // 可能还压着上一轮没跑完的裸图 —— 2026-10-03 起 onIngestDone 只做 startLoad
+      // 静默重载, 反推留给重启后的启动链路统一推。
       onIngestDone?.()
     })
     .catch((e) => flog('auto-sync-err', `${e?.stack || e}`))
@@ -444,6 +451,13 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     }),
     'replace:get': safe(() => ({ rules: loadReplaceRules(), text: replaceText() })),
     'replace:save': safe(({ text }) => saveReplaceText(text)),
+    /* 替换规则组(2026-10-04): 多套规则手动命名、导出时选哪一套。
+       读接口顺带带上**编译好的默认组规则**, 好让前端显示"当前生效 N 条"。 */
+    'replace:sets': safe(() => {
+      const { active, sets } = replaceSets()
+      return { active, sets, rules: loadReplaceRulesGroup(active) }
+    }),
+    'replace:sets:save': safe((body) => saveReplaceSets(body || {})),
     'bg:get': safe(() => loadBgConfig()),
     'rules:reload': safe(() => { invalidateRuleCaches(); return { ok: true } }),
 
@@ -538,8 +552,10 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       saveSettings({ lastPickDir: r.filePaths[0] })
       return { ok: true, path: r.filePaths[0] }
     }),
-    'export:cart': safe(async ({ tags, spaces = true, save = true } = {}) => {
-      const r = buildCartExport(tags || [], { spaces })
+    'export:cart': safe(async ({ tags, spaces = true, save = true, replace = true, replace_set = '' } = {}) => {
+      // 角色表也能套替换规则组(2026-10-04): 一个角色被规则命中成多个标签时
+      // buildCartExport 会摊成多行, count 随之变大
+      const r = buildCartExport(tags || [], { spaces, replace, replaceSet: replace_set })
       if (!save) return r
       const dlg = await dialog.showSaveDialog(mainWindow(), {
         title: '导出购物车角色(wildcard)',
@@ -548,7 +564,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       })
       if (dlg.canceled || !dlg.filePath) return { canceled: true, count: r.count }
       await fs.promises.writeFile(dlg.filePath, r.text, 'utf8')
-      return { ok: true, path: dlg.filePath, count: r.count }
+      return { ok: true, path: dlg.filePath, count: r.count, replaced: r.replaced }
     }),
 
     // ---------------- 扫描文件夹 ----------------
@@ -569,6 +585,23 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     }),
     'scan:folder': safe((raw) => scanFolder(raw, pushScanProgress)),
 
+    /* ---------------- 导出默认目录(2026-10-04) ----------------
+     * 用户反馈"预设的导出地址要选两次太麻烦"。这里提供:
+     *   · defaultDir —— 用户显式设定的全局默认目录(存在 settings.json)
+     *   · lastDir    —— 上次在任一目录对话框里选过的路径(主进程一直在记 lastPickDir,
+     *                   选一次目录就会刷新, 这里只是把它读出来给前端做默认值)
+     * 前端拿它给"新建预设"预填, 大多数时候不用再开系统对话框。 */
+    'export:dirs': safe(() => ({
+      defaultDir: String(getSettings().exportDefaultDir || ''),
+      lastDir: String(getSettings().lastPickDir || ''),
+      dataDir: getWorkspace().dataDir || '',
+    })),
+    'export:dirs:saveDefault': safe(({ dir } = {}) => {
+      const v = String(dir || '').trim()
+      saveSettings({ exportDefaultDir: v })
+      return { ok: true, defaultDir: v }
+    }),
+
     // ---------------- 增量入库(磁盘 <-> tags.db 对齐) ----------------
     // 见 core/ingest.js 与方案 §2.2 的六条判定规则。**DB 是准入闸门** ——
     // 库里已有标签的图一次图都不读, 更不会重跑反推。
@@ -579,7 +612,9 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       if (ingestState.running) return { ok: false, error: '已有同步在跑' }
       runIngest({ onProgress: pushIngestProgress })
         .then((r) => {
-          if (r && !r.skipped && !r.error) onIngestDone?.(r)
+          // 2026-10-03: 别再用 !r.skipped 拦 —— "全 skipped 但队列压着待反推"
+          // 的轮次断了这里, 队列就没人消费了(另一台机器 633 张卡死的洞之一)。
+          if (r && !r.error) onIngestDone?.(r)
         })
         .catch((e) => flog('ingest-err', `${e?.stack || e}`))
       return { ok: true, started: true }
@@ -636,9 +671,11 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       })
       // 同步可能真的改了库(新增/消失), 内存里的数据集已经过期 —— 与
       // 「立即同步」按钮同一条规矩: 跑完必须重载, 否则看板数字停在同步前。
-      const changed = st && !st.skipped && !st.error
-        && (st.inserted || st.metaUpdated || st.goneSet || st.goneCleared)
-      if (changed) onIngestDone?.()
+      // onIngestDone 必须无条件调(= startLoad 静默重载): 2026-10-03
+      // 实锤, 只在 changed 时调的话, "全 skipped 但队列压着 N 张待反推"的轮次
+      // 就没人接反推, 队列永远不消费(另一台机器 633 张卡死就是这个洞)。
+      // startLoad 自己有 try/catch, 空库多跑一次只是多一行 warn, 无害。
+      onIngestDone?.()
       return st
     }),
 
@@ -690,7 +727,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     /* 循环复用 moveFile: 同盘 rename / 跨盘 copy+删 / **同名自动改名**(uniqueDestination,
        与单张右键移动同一条硬规则 —— 绝不静默覆盖)。逐张容错: 一张失败不拖累整批。
        收尾 purgeScanCachePaths 作废扫描缓存(否则 5 分钟内重开文件夹还会列出已搬走的图)。
-       目标目录命中某个登记来源时, 后台补一次增量同步+反推 —— kickAutoSync 自己看
+       库外图(库里没记录)落到登记来源时, 兜底补一次增量同步 —— kickAutoSync 自己看
        folder.auto_tag 与 TV_INGEST 总闸, 测试/dev 里不会偷跑(2026-09-23 拍板)。 */
     'image:moveMany': safe(async ({ paths, target } = {}) => {
       const list = (Array.isArray(paths) ? paths : [paths]).filter((p) => typeof p === 'string' && p)
@@ -709,7 +746,36 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       let sync = null
       if (moved.length) {
         const folder = findFolderByDir(target)
-        if (folder) sync = kickAutoSync(folder, onIngestDone)
+        if (folder) {
+          /* 「移动 = 改址」(2026-10-04): 库里已有记录的图, 记录原地改 path/folder_id
+           * + 移动后 stat 到的新指纹 —— 标签跟图走, ingest 规则 1 直接跳过, 不产生
+           * 新图、不重新入队反推, 也不触发整库数据集重建。
+           *
+           * 库里**没有**的图(扫描页的库外图 —— as_scan 目录本来就不入库)2026-10-04
+           * 用户拍板: **什么都不干**。「移动了就移动了, 等重新打开的时候扫描再说」。
+           * 旧兜底(对目标目录补 kickAutoSync)实测每移一张就: ingest 入新图+入队反推
+           * → onIngestDone → 整库数据集重建 5 秒(launch.log 17:22:57~17:25:17 五连,
+           * 85k 记录重建 4.9~5.5s/次) —— 这就是"移动一张图卡一会、tag 面板转圈"的
+           * 全部来源。重启后的全量增量同步自然会把它入库, 那是正常的新图流程。 */
+          const missed = []
+          for (const m of moved) {
+            let fp = null
+            try {
+              const st = fs.statSync(m.to)
+              fp = { mtimeMs: st.mtimeMs, size: st.size }   // 原始浮点, 口径同 ingest
+            } catch { /* stat 不到就保留原指纹, 让 ingest 规则 1 按旧值判 */ }
+            const r = relocateRecord(m.from, m.to, folder.id, fp)
+            if (!r.hit) missed.push(m)
+          }
+          // 库外图不再兜底入库 —— 零 ingest、零重建、零卡顿
+          sync = {
+            wanted: true,
+            started: false,
+            reason: missed.length ? 'relocated-partial-outside' : 'relocated',
+            relocated: moved.length - missed.length,
+            outside: missed.length,
+          }
+        }
       }
       return { ok: moved.length > 0, moved, failed, dest: target, destName: path.basename(target), sync }
     }),

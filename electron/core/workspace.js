@@ -7,7 +7,8 @@
  *     购物车历史 / 缩略图缓存 / 翻译库 / 标签库。
  *
  * 解析优先级(具体实现在 paths.js, 这里是唯一真源的唯一调用方):
- *   dataDir:  settings.json > TV_DATA_DIR 环境变量 > 调用方注入的默认值 > <appDir>/data
+ *   dataDir:  settings.json > TV_DATA_DIR 环境变量 > (main.js 开 allowPortable 时)
+ *             与应用同目录的可写 data/(绿色包数据随包走) > 调用方注入的默认值 > <appDir>/data
  *   config :  settings.json.configPath > <dataDir>/tag_viewer_config.json
  *
  * 改造说明(2026-09-19): 原来这里有个 `LEGACY_DIR = '<开发机绝对路径>'` 兜底,
@@ -60,6 +61,9 @@ export function initWorkspace(appDir, opts = {}) {
     envDataDir: process.env.TV_DATA_DIR,
     defaultDataDir: opts.defaultDataDir,
     appDir: state.appDir,
+    // 绿色包/仓库开发的 portable 模式: 与应用同目录的可写 data/ 优先(仅 main.js 开启,
+    // CLI 工具与测试不传 —— 否则自造数据目录的测试会被仓库内真实的 data/ 抢走)
+    allowPortable: opts.allowPortable === true,
   })
   state.dataDir = dataDir
   state.configPath = resolveConfigPath({

@@ -253,9 +253,14 @@ async function openCharImages(c) {
 }
 
 function imgQuery() {
+  // 同一角色的两种写法(短名 frieren / 全名 frieren_(sousou_no_frieren))在角色列表里
+  // 已合并成一张卡, 所以图集这边要**两种都搜**: exact 多 tag(逗号分隔, 默认 mode=any)
+  // 命中任一即算。**不能用 contains + 短名** —— 短名子串会顺带命中别的作品角色。
+  const c = curChar.value
+  const tags = [c?.tag, ...(c?.alt || [])].filter(Boolean)
   return {
-    q: curChar.value?.tag || '',
-    match: 'contains',
+    q: tags.join(','),
+    match: 'exact',
     sort: imgSort.value,
     source: src.param,
   }

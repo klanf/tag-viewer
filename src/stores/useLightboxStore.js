@@ -173,13 +173,41 @@ export const useLightboxStore = defineStore('lightbox', () => {
     }
   }
 
-  /** 相对当前位置跳 delta 张; 越界返回 false */
+  /* 翻页意图合并(2026-10-03): 主进程被同步读库阻塞时, load 里的 IPC 一直不回来,
+   * 旧实现每个 keydown 都立刻 index++ 再 await —— 卡顿里按 N 次方向键 = 连跳 N 张,
+   * 卡顿一结束"残存指令"直接跳到很后面的图。
+   * 现在翻页进行中再按键, 不挪 index, 只把**最后一次按的方向**记进 pending
+   * (覆盖不累计 —— 用户最后按的是左就该往左), 当前 load 回来后补翻这一张。
+   * 键盘/滚轮/按钮全部入口都收敛在 go, 一处覆盖。 */
+  let navBusy = false
+  let navPending = 0
+
+  /** 相对当前位置跳 delta 张; 越界返回 false(进行中受理意图返回 true) */
   async function go(delta) {
-    const i = index.value + delta
-    if (i < 0 || i >= list.value.length) return false
-    index.value = i
-    await load(list.value[i])
-    return true
+    if (navBusy) {
+      navPending = delta
+      return true
+    }
+    navBusy = true
+    try {
+      const i = index.value + delta
+      if (i < 0 || i >= list.value.length) return false
+      index.value = i
+      await load(list.value[i])
+      /* 卡顿/慢请求结束 —— 补执行积压的那一次 */
+      if (navPending) {
+        const j = index.value + navPending
+        navPending = 0
+        if (j >= 0 && j < list.value.length) {
+          index.value = j
+          await load(list.value[j])
+        }
+      }
+      return true
+    } finally {
+      navBusy = false
+      navPending = 0   // 未消费的意图随本次 go 一起丢弃, 不许跨页残留
+    }
   }
 
   const next = () => go(1)
@@ -198,6 +226,18 @@ export const useLightboxStore = defineStore('lightbox', () => {
   function setList(arr) {
     const l = Array.isArray(arr) ? arr.filter(Boolean) : []
     if (!l.length) return
+    /* 守卫(2026-10-03): 新列表里**没有当前正在看的图**就不动 list/index。
+     * 没有这道防线的两个真实事故:
+     *   · 跨视图污染 —— 光箱全站唯一, 但视图的 imgPaths watch 在 KeepAlive
+     *     休眠下依然活跃: 用户在扫描页光箱里看图, 后台看板因 epoch++ 重查,
+     *     把看板的列表塞进来(当前图不在其中 -> index=-1) -> 用户再移走一张,
+     *     removeCurrent 因 index=-1 清空列表 -> close() —— 表现为"反推/移动
+     *     一下, 光箱自己关了"。
+     *   · 换血踢人 —— 看板开着光箱时 epoch++ -> initHome 重置随机种子重查,
+     *     当前图不在新一批里 -> 翻页列表被换成无关的图。
+     * 保留旧列表的代价只是"翻页顺序还是上一批的", 用户至少能把手里这批看完;
+     * 视图自己的新列表在光箱下次 open 时自然生效。 */
+    if (path.value && !l.includes(path.value)) return
     list.value = l
     index.value = l.indexOf(path.value)
   }

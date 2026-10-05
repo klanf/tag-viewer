@@ -23,7 +23,7 @@
  */
 import fs from 'node:fs'
 import { streamTagFile } from './tagfile.js'
-import { syncSources, readRecords, dbReady, sourceNameList } from './store.js'
+import { syncSources, readRecords, dbReady, sourceNameList, openDb, normalizeImagePath } from './store.js'
 import { loadCharLib, libIsChar, libCharSeries, libIsCopyright, charLibDiag } from './charlib.js'
 import { unsafeLevelOf, safetyMatcher } from './safety.js'
 
@@ -174,6 +174,14 @@ function intern(s) {
   return v
 }
 
+/**
+ * 双缓冲的**写目标**(2026-10-03)。
+ * 平时 = ds 本身; loadDataset 重载期间指向 fresh 副本 —— 构建全程不碰线上 ds,
+ * 期间所有查询(搜索/导出/详情)继续读到旧数据, 界面完全可用; 成功后一次原子
+ * 换血, 失败则整份丢弃。pushRecord/buildStats/buildSeriesIndex 一律写 W。
+ */
+let W = ds
+
 export function tagPoolSize() { return tagPool.size }
 
 /**
@@ -216,9 +224,9 @@ function pushRecord(p, rawTags, srcName, dims = null) {
    * 放这里而不是过滤时现算: 前端切开关/切档位就只做一次数值比较, 不用为了
    * 过滤去重载整个数据集。ltags 已经是小写的, 直接喂进去。 */
   const unsafe = unsafeLevelOf(ltags)
-  if (unsafe === 1) ds.unsafeCore++
-  else if (unsafe === 2) ds.unsafeEdge++
-  ds.records.push({
+  if (unsafe === 1) W.unsafeCore++
+  else if (unsafe === 2) W.unsafeEdge++
+  W.records.push({
     path: p,
     tags,
     ltags,
@@ -248,15 +256,52 @@ async function parseFile(fp, srcName, onEach) {
  * @param {(p:{phase:string, done:number, total:number, source?:string})=>void} onProgress
  */
 export async function loadDataset(dataFiles, onProgress = () => {}) {
-  const t0 = Date.now()
-  ds.records = []
-  ds.byPath = new Map()
-  ds.sourceNames = [...dataFiles.keys()]
-  ds.dbSync = null
-  ds.unsafeCore = 0
-  ds.unsafeEdge = 0
-  tagPool.clear()
+  /* 串行化(2026-10-04): buildDatasetInto 的写目标是**模块级**的 W, 而下面
+   * readRecords / buildStats / buildSeriesIndex 都会 `await setImmediate` 让出
+   * 事件循环 —— 两个 loadDataset 一旦并发, 后进来的会在前一个正写着的 half 上
+   * 把 W 抢走, 结果先来的那次永远组装不完(启动遮罩就永远停在 100%)。
+   * 以前不并发是因为读库/统计都是同步段; 分片让路把它变成了显性竞态。
+   * 串行化: 后到的排队等前一个跑完再依次执行(不丢弃 —— 每次调用都是一次
+   * 明确的重载请求, e2e 的"连续 reload 四次"要的就是这个)。 */
+  const run = loadChain.then(
+    () => doLoadDataset(dataFiles, onProgress),
+    () => doLoadDataset(dataFiles, onProgress),
+  )
+  loadChain = run.then(() => {}, () => {})
+  return run
+}
 
+/** 上一次 loadDataset 的尾巴; 只用来排队, 不看它的结果 */
+let loadChain = Promise.resolve()
+
+async function doLoadDataset(dataFiles, onProgress = () => {}) {
+  const t0 = Date.now()
+  /* ---- 双缓冲(2026-10-03) ----
+   * 旧行为: 先清空 ds 再读库 —— 后台重载的十几秒里所有查询读到的都是空表,
+   * 界面"闪空"。现在在 fresh 副本上构建, 全程不碰线上 ds:
+   *   · 构建期间一切查询继续拿到旧数据(移动一张图触发的后台重载不再打断浏览);
+   *   · 成功后 Object.assign 一次原子换血;
+   *   · 失败则整份丢弃, 线上数据毫发无损(旧行为会把 ds 留在半空状态)。
+   * tagPool 不再 clear: 旧 records 还引用着池内字符串, 且重复构建 intern 的
+   * 是同样的值(池收敛), 清了只会让新旧记录的同名标签变成不同实例。 */
+  const fresh = {
+    records: [], byPath: new Map(), sourceNames: [...dataFiles.keys()],
+    dbSync: null, unsafeCore: 0, unsafeEdge: 0,
+    tagCounter: new Map(), seriesCounter: new Map(),
+    seriesImgs: new Map(), seriesChars: new Map(),
+    loaded: false, loadMs: 0, stats: null, loadSource: '',
+    _srcStats: new Map(), _srcRecords: new Map(), _firstPath: new Map(),
+  }
+  W = fresh
+  try {
+    return await buildDatasetInto(fresh, dataFiles, onProgress, t0)
+  } finally {
+    W = ds   // 无论成败都把写目标拨回线上(fresh 已在成功路径 commit / 失败路径丢弃)
+  }
+}
+
+/** 真正的构建过程: 写目标全程指向 fresh(调用方已把 W 指过去) */
+async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
   const files = [...dataFiles.entries()]
   const perFile = []
   let prefix = 0
@@ -273,15 +318,16 @@ export async function loadDataset(dataFiles, onProgress = () => {}) {
      读回后得到的记录顺序与解析 txt 完全一致(images.id 自增 = 插入顺序)。 */
   try {
     onProgress({ phase: 'db-sync', done: 0, total: totalBytes })
-    ds.dbSync = await syncSources(dataFiles, (p) => {
+    fresh.dbSync = await syncSources(dataFiles, (p) => {
       onProgress({ phase: 'db', done: Math.round(totalBytes * 0.3), total: totalBytes, source: p.source, note: p.note })
     })
 
     onProgress({ phase: 'db-read', done: Math.round(totalBytes * 0.4), total: totalBytes })
     let last = 0
-    readRecords((rec) => {
+    // readRecords 现在是 async(每块让出事件循环, 后台重载不再卡死光箱翻页) —— 必须 await
+    await readRecords((rec) => {
       pushRecord(rec.path, rec.tags, rec.source, { w: rec.px_w, h: rec.px_h })
-      const n = ds.records.length
+      const n = W.records.length
       if (n - last >= 5000) {
         last = n
         onProgress({
@@ -292,24 +338,21 @@ export async function loadDataset(dataFiles, onProgress = () => {}) {
         })
       }
     })
-    if (ds.records.length) {
-      ds.loadSource = 'db'
-    } else {
-      ds.loadSource = ''
+    if (W.records.length) {
+      fresh.loadSource = 'db'
     }
   } catch (e) {
     console.error('[dataset] SQLite 路径不可用, 回退解析 txt:', e?.message || e)
-    ds.records = []
-    ds.byPath = new Map()
-    ds.unsafeCore = 0
-    ds.unsafeEdge = 0
-    tagPool.clear()
-    ds.dbSync = null
+    W.records = []
+    W.byPath = new Map()
+    W.unsafeCore = 0
+    W.unsafeEdge = 0
+    fresh.dbSync = null
   }
 
   /* ---- 路线 B: 回退 —— 直接解析 txt ---- */
-  if (!ds.records.length) {
-    ds.loadSource = 'txt'
+  if (!W.records.length) {
+    fresh.loadSource = 'txt'
     onProgress({ phase: 'parse', done: 0, total: totalBytes })
     for (const f of perFile) {
       if (!fs.existsSync(f.fp)) {
@@ -325,15 +368,28 @@ export async function loadDataset(dataFiles, onProgress = () => {}) {
             done: Math.min(f.prefix + (bytes || 0), totalBytes),
             total: totalBytes,
             source: f.name,
-            records: ds.records.length,
+            records: W.records.length,
           })
         }
       })
     }
   }
 
-  if (!ds.records.length) {
-    throw new Error('没有可用的标签数据: 标签库为空, 且配置里的 tags_*.txt 也读不到')
+  if (!W.records.length) {
+    // 2026-10-03: 区分"真没登记"和"已登记但图还在打标队列里"(全新机器裸图
+    // 场景) —— 后者是**暂态**, 不是错误文案该吓唬人的样子(旧文案让用户以为
+    // 扫描失败"一张图都没入库")。反推消费完队列、tags 落库后, 下一轮 startLoad
+    // 自然就绪。
+    let foldersN = 0, queuedN = 0
+    try {
+      const db = openDb()
+      foldersN = Number(db.prepare('SELECT COUNT(*) AS n FROM folders').get()?.n || 0)
+      queuedN = Number(db.prepare("SELECT COUNT(*) AS n FROM tag_queue WHERE state IN ('pending','done')").get()?.n || 0)
+    } catch { /* 库还没建好, 按真没登记处理 */ }
+    if (foldersN > 0 && queuedN > 0) {
+      throw new Error(`已登记 ${foldersN} 个文件夹, ${queuedN} 张图正在打标队列里等待反推入库 —— 反推跑完后看板就会亮起来`)
+    }
+    throw new Error('没有可用的标签数据: 标签库还是空的, 也还没有登记任何图片文件夹')
   }
 
   /* ---- 来源清单: 以**登记表**为准, 不再看 tags_*.txt 的文件名 ----
@@ -347,66 +403,77 @@ export async function loadDataset(dataFiles, onProgress = () => {}) {
      这条兜底让"配置里有 txt 但 DB 不可用"的老路径仍然能用。 */
   try {
     const names = sourceNameList()
-    if (names.length) ds.sourceNames = names
+    if (names.length) fresh.sourceNames = names
   } catch { /* 保持 dataFiles 的名字 */ }
 
-  onProgress({ phase: 'stats', done: totalBytes, total: totalBytes, records: ds.records.length })
+  onProgress({ phase: 'stats', done: totalBytes, total: totalBytes, records: W.records.length })
 
   // 角色库: 必须在 buildStats/buildSeriesIndex 之前就位(它们要查角色->系列)
   loadCharLib()
 
   // path -> record 索引(重复路径保留先出现的)
-  ds.byPath = new Map()
-  for (let i = 0; i < ds.records.length; i++) {
-    const p = ds.records[i].path
-    if (!ds.byPath.has(p)) ds.byPath.set(p, i)
+  W.byPath = new Map()
+  for (let i = 0; i < W.records.length; i++) {
+    const p = W.records[i].path
+    if (!W.byPath.has(p)) W.byPath.set(p, i)
   }
+  // 让一次事件循环: byPath 8.5 万条 Map.set 也要一两百 ms, 别跟后面的统计挤在一起
+  await new Promise((r) => setImmediate(r))
 
-  buildStats()
+  /* buildStats/buildSeriesIndex 是重建里最重的两段(85k 记录 × 每张几十个标签的
+   * 全库同步循环, 实测 4.9~5.5s/次)。**分片让路**(每 5000 条让出一次事件循环,
+   * 与 readRecords 同款): 让路期间查询走的是旧 ds(双缓冲, fresh 没换血前线上
+   * 数据一致), 光箱/看板的 IPC 不再挂 5 秒 —— startLoad 由反推完成/重启/手动
+   * 同步触发时, 用户界面只顿一下而不是卡死。 */
+  await buildStats()
 
-  onProgress({ phase: 'series', done: totalBytes, total: totalBytes, records: ds.records.length })
-  buildSeriesIndex()
+  onProgress({ phase: 'series', done: totalBytes, total: totalBytes, records: W.records.length })
+  await buildSeriesIndex()
 
-  ds._srcStats.clear()
-  ds._srcRecords.clear()
-  ds._firstPath.clear()
-  ds.loaded = true
-  ds.loadMs = Date.now() - t0
-  ds.stats = {
+  W.loaded = true
+  W.loadMs = Date.now() - t0
+  W.stats = {
     // 「来源数」= 登记表里 as_source=1 的目录数。原来这里是 tags_*.txt 的文件个数 ——
     // txt 归档后它会变成 0, 而来源其实一个不少, 于是这个数字只是日志噪声。
-    files: ds.sourceNames.length,
-    records: ds.records.length,
-    tags: ds.tagCounter.size,
-    series: ds.seriesCounter.size,
+    files: W.sourceNames.length,
+    records: W.records.length,
+    tags: W.tagCounter.size,
+    series: W.seriesCounter.size,
     tagsInPool: tagPool.size,
-    source: ds.loadSource,          // 'db' | 'txt'
+    source: W.loadSource,           // 'db' | 'txt'
     db: dbReady(),
-    ms: ds.loadMs,
+    ms: W.loadMs,
     charLib: charLibDiag(),
   }
+
+  /* ---- 原子换血: 一次性覆盖线上 ds ----
+   * fresh 的三个来源缓存 map 是全新的空表(旧缓存随旧记录一起作废)。 */
+  Object.assign(ds, fresh)
   return ds.stats
 }
 
-function buildStats() {
+async function buildStats() {
   const tc = new Map()
   const sc = new Map()
-  for (const r of ds.records) {
+  let n = 0
+  for (const r of W.records) {
     for (const t of r.tags) {
       tc.set(t, (tc.get(t) || 0) + 1)
       const s = seriesName(t)
       if (s) sc.set(s, (sc.get(s) || 0) + 1)
     }
+    // 分片让路(见 loadDataset 调用点注释): 重建期间保住 IPC 响应
+    if (++n % 5000 === 0) await new Promise((r2) => setImmediate(r2))
   }
-  ds.tagCounter = tc
-  ds.seriesCounter = sc
+  W.tagCounter = tc
+  W.seriesCounter = sc
 }
 
-function buildSeriesIndex() {
+async function buildSeriesIndex() {
   const si = new Map()
   const sc = new Map()
-  for (let idx = 0; idx < ds.records.length; idx++) {
-    for (const t of ds.records[idx].tags) {
+  for (let idx = 0; idx < W.records.length; idx++) {
+    for (const t of W.records[idx].tags) {
       const s = seriesName(t)
       if (!s) continue
       let imgs = si.get(s)
@@ -421,9 +488,11 @@ function buildSeriesIndex() {
       if (!ids) { ids = new Set(); chars.set(t, ids) }
       ids.add(idx)
     }
+    // 分片让路(见 loadDataset 调用点注释): 重建期间保住 IPC 响应
+    if ((idx + 1) % 5000 === 0) await new Promise((r) => setImmediate(r))
   }
-  ds.seriesImgs = si
-  ds.seriesChars = sc
+  W.seriesImgs = si
+  W.seriesChars = sc
 }
 
 // ---------------------------------------------------------------- 来源过滤
@@ -492,6 +561,64 @@ export function firstPathMap(srcSet) {
 export function recordByPath(p) {
   const i = ds.byPath.get(p)
   return i === undefined ? null : ds.records[i]
+}
+
+/**
+ * 「移动 = 改址」(2026-10-04): 图在磁盘上被搬走后, 库记录**原地**改 path/folder_id
+ * 到新位置 —— 标签、反推状态、尺寸全跟着走; ingest 下次扫到新路径时发现记录已存在
+ * 且指纹吻合(规则 1), 自然 skipped: 不产生"新图"、不重新入队反推。
+ *
+ * 为什么必须有这一步: 旧链路「移动 = 新图入库 + kick 全目录 ingest + onIngestDone
+ * 无条件 startLoad」—— startLoad 是**整库数据集重建**, buildStats/buildSeriesIndex
+ * 是两轮全库×全标签的同步 CPU 循环, 代价跟库大小成正比、与移动张数无关。主进程
+ * 忙重建期间所有 IPC 排队, 光箱翻页查询(tag 面板)挂起转圈 —— 这就是"只移动一张图
+ * 就卡几秒"的根源(2026-10-03 的 readRecords 让路只救了读库段, 救不了重建段)。
+ * 改址后移动 = 一行 UPDATE + 内存两个键, 连 ingest 都不用跑。
+ *
+ * · fp(移动后对新路径 stat 的 {mtimeMs, size})带上一起写: 跨盘 copy 即便 mtime
+ *   有变, 记录也与**当前磁盘状态**严格吻合, 规则 1 照样命中; 不传则保留原指纹。
+ *   注意必须存 stat 的原始浮点值 —— ingest 磁盘侧比对的就是 st.mtimeMs 原值,
+ *   取整反而会让规则 1 判不中。
+ * · src_id 刻意不动: 它挂的是 txt 源身份, sourceNameList/来源筛选都按它算,
+ *   改了会动摇看板的来源名单。图换了目录但"出身"不变, 显示名走旧来源, 可接受。
+ * · tag_queue 的 pending 条目顺带改名 —— 不然反推消费时按旧 path 找文件必然 failed。
+ *   (目标 path 恰好已在队列里会撞主键: 吞掉即可, 那条目本来就在。)
+ * · 内存镜像只在**库提交成功后**同步, 只动 records[i].path 和 byPath 两个键 ——
+ *   标签没变, stats/系列索引/字符串池全不用碰, byPath 的 O(1) 查询继续成立。
+ *
+ * @returns {{hit: boolean}} hit=false = 库里没有这条记录(库外图, 调用方走旧链路兜底)
+ */
+export function relocateRecord(from, to, folderId, fp = null) {
+  const f = normalizeImagePath(from)
+  const t = normalizeImagePath(to)
+  if (!f || !t || f === t) return { hit: false }
+  try {
+    const db = openDb()
+    const row = db.prepare('SELECT id FROM images WHERE path = ?').get(f)
+    if (!row) return { hit: false }
+    const fid = Number(folderId) || 0
+    if (fp) {
+      db.prepare('UPDATE images SET path = ?, folder_id = ?, mtime_ms = ?, size = ? WHERE id = ?')
+        .run(t, fid, fp.mtimeMs, fp.size, Number(row.id))
+    } else {
+      db.prepare('UPDATE images SET path = ?, folder_id = ? WHERE id = ?').run(t, fid, Number(row.id))
+    }
+    try {
+      db.prepare("UPDATE tag_queue SET path = ?, folder_id = ? WHERE path = ? AND state = 'pending'")
+        .run(t, fid, f)
+    } catch { /* 队列表未建 / 目标 path 已在队列撞主键: 都无妨 */ }
+  } catch {
+    // 目标 path 已有别的记录(唯一性冲突)等极端情况: 放弃改址, 调用方走旧链路兜底
+    return { hit: false }
+  }
+  /* ---- 内存镜像(能走到这里 = 库已提交) ---- */
+  const idx = ds.byPath.get(f)
+  if (idx !== undefined && ds.records[idx] && ds.records[idx].path === f) {
+    ds.byPath.delete(f)
+    ds.records[idx].path = t
+    ds.byPath.set(t, idx)
+  }
+  return { hit: true }
 }
 
 /** 取索引集合的最小值(替代 Python 的 min(set)) */
