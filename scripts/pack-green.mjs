@@ -232,8 +232,15 @@ const pythonSection = pythonBundled
     '· 反推用的 Python 和 onnxruntime 也已内置(包内 python\\ 文件夹), 不用再装任何东西。',
   ]
   : [
-    '· 想自动打标还差两样: Python 3 和 onnxruntime(命令行 pip install onnxruntime);',
-    '  打开「扫描」页会有「看看怎么装」的逐步引导。不装也不影响其他功能。',
+    // 精简包(或没找到嵌入式 Python 时): 把应用内「看看怎么装」引导的三步原样写进来,
+    // 别让说明变成"去应用里看引导"的套娃 —— 使用说明必须自包含。
+    '· 这个包不带反推环境。想用「扫描页自动打标」需要自己装两样(与应用内「看看怎么装」引导一致):',
+    '  1. 装 Python 3 —— 从 python.org 下载安装(勾选「加入 PATH」), 或者装 miniconda /',
+    '     anaconda 也行, 应用会自动在这几处找到它;',
+    '  2. 装推理库 —— 命令行执行 pip install onnxruntime (CPU 版就能跑, 只是慢些;',
+    '     有 N 卡可以换 onnxruntime-gpu)。',
+    '  模型文件怎么放见上一节; 两样都齐了重启应用即生效。',
+    '  不装也完全不影响其他功能, 只是扫描页不能给没有标签的图自动打标。',
   ]
 
 const note = [
