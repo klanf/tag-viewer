@@ -1,10 +1,13 @@
 /**
  * 绿色分发包打包 —— 免安装, 解压即用
  * ===================================
- * 产物: release/<包名>-v<version>/ 目录 + 同名 .zip, 两种变体(--variant):
+ * 产物: release/<包名>-v<version>/ 目录 + 同名 .zip, 三种变体(--variant):
  *   full  -> TagViewer-点击即用包-v<version>   模型 + Python 环境 + Electron 全带
  *   basic -> TagViewer-基础包-v<version>       不带 1.27GB 模型, 用户按使用说明自己下
- *            (Python/onnxruntime 环境两个包都带 —— 基础包用户只差「下模型」这一步)
+ *   lite  -> TagViewer-精简包-v<version>       模型和 Python 环境都不带(给会自己配环境的人,
+ *            体积最小, 适合传 Gitee 等网盘/仓库分发); Electron 运行时仍带 —— 它是程序本体,
+ *            没它连不起来; 真连运行时都不要的 = 直接 git clone 源码仓库
+ *            (Python/onnxruntime 环境 full/basic 都带 —— 基础包用户只差「下模型」这一步)
  *
  * 带什么(白名单, 按"用户拿到就能跑"取舍):
  *   启动看板.bat / .vbs            双击启动(字节级复制 —— 编码有专门检查, 别动)
@@ -30,7 +33,7 @@
  *
  * 数据目录: main.js 开了 allowPortable —— 解压后首次运行用包内 data/, 数据随包走。
  *
- * 用法: node scripts/pack-green.mjs [--variant basic|full] [--out <目录>] [--allow-stale] [--no-model]
+ * 用法: node scripts/pack-green.mjs [--variant full|basic|lite] [--out <目录>] [--allow-stale] [--no-model]
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -53,18 +56,19 @@ const allowStale = argv.includes('--allow-stale')
 const noModel = argv.includes('--no-model')
 const outIdx = argv.indexOf('--out')
 const outRoot = outIdx >= 0 ? path.resolve(argv[outIdx + 1]) : path.join(ROOT, 'release')
-// --variant basic|full: basic 不带模型(用户按使用说明自己下), 默认 full 全带。
+// --variant full|basic|lite: basic 不带模型, lite 模型和 Python 环境都不带, 默认 full 全带。
 // 两种写法都认: "--variant basic" 和 "--variant=basic"(等号写法踩过: indexOf 只认空格分隔)。
 const varIdx = argv.indexOf('--variant')
 const variant = varIdx >= 0
   ? argv[varIdx + 1]
   : (argv.find((a) => a.startsWith('--variant=')) || '').split('=')[1] || 'full'
-if (!['basic', 'full'].includes(variant)) {
-  console.error(`✗ 未知变体 "${variant}" —— 只认 basic / full`)
+if (!['basic', 'full', 'lite'].includes(variant)) {
+  console.error(`✗ 未知变体 "${variant}" —— 只认 basic / full / lite`)
   process.exit(1)
 }
-const basic = variant === 'basic'
-const NAME = `${basic ? 'TagViewer-基础包' : 'TagViewer-点击即用包'}-v${VERSION}`
+const basic = variant !== 'full' // 模型逻辑同 basic: 非 full 都不带模型
+const VNAME = { full: 'TagViewer-点击即用包', basic: 'TagViewer-基础包', lite: 'TagViewer-精简包' }[variant]
+const NAME = `${VNAME}-v${VERSION}`
 const DEST = path.join(outRoot, NAME)
 
 /* ------------------------------------------------ 拷贝工具(不用 cpSync) */
@@ -151,13 +155,13 @@ copyFile(path.join(ROOT, 'data', 'tag_viewer_config.example.json'), path.join(DE
 
 // 找模型的顺序: 仓库 models/ > local.config 的 oldRoot/model(开发机的模型住处)。
 // 包里放成首选改名版(models/wd-pixai-tagger-v0.9.*), tagger.js 的候选清单正好认它。
-let modelNote = basic ? '未带上(基础包, 见使用说明的模型下载)' : '未带上(--no-model)'
+let modelNote = basic ? `未带上(${VNAME}, 见使用说明的模型下载)` : '未带上(--no-model)'
 let modelBundled = false
 const modelSrcDirs = [path.join(ROOT, 'models')]
 const oldRoot = localOldRoot()
 if (oldRoot) modelSrcDirs.push(path.join(oldRoot, 'model'))
 if (noModel || basic) {
-  console.log(`[pack] ${basic ? '基础包' : '--no-model'}: 跳过模型(反推要用户自己下 1.27GB, 见使用说明)`)
+  console.log(`[pack] ${noModel ? '--no-model' : VNAME}: 跳过模型(反推要用户自己下 1.27GB, 见使用说明)`)
 } else {
   const dstModels = path.join(DEST, 'models')
   fs.mkdirSync(dstModels, { recursive: true })
@@ -184,23 +188,28 @@ if (noModel || basic) {
   console.log(`[pack] 模型: ${modelNote}`)
 }
 
-/* ------------------------------------------------ 1.6 包内 Python(两个变体都带) */
+/* ------------------------------------------------ 1.6 包内 Python(full/basic 带, lite 不带) */
 
 // tagger.js 认 <包>/python/python.exe(embeddable + numpy + onnxruntime-directml)。
 // 源的寻找顺序: 仓库 python/ > 上一版绿色包里现成的那份(v2.1.0 起~)。
 // 找不到就跳过, 使用说明回退成"自己装 Python + pip install onnxruntime"的旧文案。
-const pySrcCandidates = [
-  path.join(ROOT, 'python'),
-  path.join(outRoot, 'TagViewer-绿色包-v2.1.0', 'python'),
-]
-const pySrc = pySrcCandidates.find((p) => fs.existsSync(path.join(p, 'python.exe')))
+// lite(精简包)连这套环境也不带 —— 目标用户会自己配, 换体积。
 let pythonBundled = false
-if (pySrc) {
-  console.log(`[pack] Python 环境 <- ${pySrc}`)
-  copyTree(pySrc, path.join(DEST, 'python'))
-  pythonBundled = true
+if (variant === 'lite') {
+  console.log('[pack] 精简包: 不带 Python 环境(用户自己装 Python + onnxruntime, 见使用说明)')
 } else {
-  console.error('[pack] ⚠️ 没找到嵌入式 Python, 包不带反推环境(用户要自己装 Python + onnxruntime)')
+  const pySrcCandidates = [
+    path.join(ROOT, 'python'),
+    path.join(outRoot, 'TagViewer-绿色包-v2.1.0', 'python'),
+  ]
+  const pySrc = pySrcCandidates.find((p) => fs.existsSync(path.join(p, 'python.exe')))
+  if (pySrc) {
+    console.log(`[pack] Python 环境 <- ${pySrc}`)
+    copyTree(pySrc, path.join(DEST, 'python'))
+    pythonBundled = true
+  } else {
+    console.error('[pack] ⚠️ 没找到嵌入式 Python, 包不带反推环境(用户要自己装 Python + onnxruntime)')
+  }
 }
 
 /* ------------------------------------------------ 2. 生成使用说明(带 BOM, 老记事本也认) */
@@ -228,7 +237,7 @@ const pythonSection = pythonBundled
   ]
 
 const note = [
-  `TagViewer ${basic ? '基础包' : '点击即用包'} —— 使用说明`,
+  `${VNAME} —— 使用说明`,
   '============================',
   '',
   '1. 解压到任意「可写」的本地目录。',
