@@ -2106,6 +2106,35 @@ async function main() {
         out.restored = (lst2.folders || []).filter((f) => f.cover).length
         return out
       `)
+      /* 存量自愈(2026-10-06 用户报"扫描的图过不了安全模式"): cover_tags 快照是
+         8cb3eda 才开始落库的, 真实库 28/28 个扫描夹全缺 —— 老记录的封面整段绕过
+         安全判定。这里模拟一条老记录(清掉快照): 🛡 开着时列表要能**现查
+         images.tags** 把它的封面藏掉, 并把快照幂等写回(下次零开销)。 */
+      let oldSim = null
+      try {
+        const sdb = new DatabaseSync(path.join(DATA_DIR, 'tags.db'))
+        const target = sdb.prepare(
+          "SELECT id, cover, cover_tags FROM folders WHERE cover != '' AND cover_tags != '' LIMIT 1").get()
+        if (target) {
+          sdb.prepare("UPDATE folders SET cover_tags = '' WHERE id = ?").run(target.id)
+          const probe2 = await cdp.eval(`
+            const inv = (ch, p) => window.tv.invoke(ch, p)
+            await inv('safety:set', { on: true })
+            const f = ((await inv('folders:list', { usage: 'scan' })).folders || [])
+              .find((x) => x.id === ${target.id})
+            await inv('safety:set', { on: false })
+            return { cover: f ? f.cover : null }
+          `)
+          const back = sdb.prepare('SELECT cover_tags FROM folders WHERE id = ?').get(target.id)
+          oldSim = { hidden: probe2?.cover === '', backfilled: !!(back && back.cover_tags) }
+          sdb.prepare('UPDATE folders SET cover_tags = ? WHERE id = ?').run(target.cover_tags, target.id)
+        }
+        sdb.close()
+      } catch { /* 沙箱库打不开就让断言自己报失败 */ }
+      check('封面: 老记录(快照缺失)现查 images.tags 藏掉封面并写回快照',
+        !!oldSim && oldSim.hidden && oldSim.backfilled,
+        oldSim ? `🛡 下 cover 清空=${oldSim.hidden} · 快照已写回=${oldSim.backfilled}`
+               : '沙箱库不可用或没有带封面+快照的夹具')
       fs.writeFileSync(sTagsPath, sTxt0, 'utf8')
       check('封面: 扫描文件夹封面接安全(1girl 入 core 段后 cover 清空, 关掉恢复)',
         scanProbe && scanProbe.tagged > 0 && scanProbe.hidden === 0 && scanProbe.restored === scanProbe.tagged,

@@ -29,6 +29,8 @@ import path from 'node:path'
 import { dataFile } from './workspace.js'
 import { scanFolder, invalidateScanCache } from './scan.js'
 import { loadSafetyState, safetyMatcher, unsafeLevelOf, hiddenAt } from './safety.js'
+import { extractImagePrompt } from './png.js'
+import { promptToTags, dedupeTags } from './prompt.js'
 import { openDb, normalizeImagePath, upsertFolder, folderRows, folderBaseName, folderNameMap } from './store.js'
 
 /** 兼容期的文件名 —— 现在由 paths.js 的 DATA_ROUTE 路由到 user/folders.json */
@@ -121,20 +123,25 @@ const coverTagsJson = (cov) => JSON.stringify(cov?.tags || [])
  * 字段名保持与旧版 scan_folders.json 的记录**逐字相同**(last_scan / stats / cover),
  * 因为扫描页的模板与断言都在按这些名字取; 新字段(用途开关 / 入库图数)往后加。
  */
-function decorate(row) {
+function decorate(row, coverTagsOverride = null) {
   // 安全模式: 封面图若按**当前**档位会被藏, 就不给图(前端显示默认占位封面)。
-  // 判定用落库时的标签快照现算 —— 规则/档位改了都跟得上。老记录没有快照(空串)
-  // 不误伤, 重新扫描一次就有了。
+  // 判定用落库时的标签快照现算 —— 规则/档位改了都跟得上。快照缺失的老记录
+  // 用 coverTagsBackfill 现查的 images.tags 兜底(见下), 两头都没有(纯扫描夹,
+  // 图没入库)才放行 —— 等重扫时 pickCover 会把快照落上。
   let cover = row.cover || ''
-  if (cover && row.cover_tags) {
-    try {
-      const tags = JSON.parse(row.cover_tags)
-      if (Array.isArray(tags) && tags.length) {
-        const st = loadSafetyState()
-        if (st.on && hiddenAt(unsafeLevelOf(tags, safetyMatcher()), st.level)) cover = ''
-      }
-    } catch { /* 坏 JSON 不误伤 */ }
-  }
+  try {
+    let tags = null
+    if (cover && row.cover_tags) {
+      const p = JSON.parse(row.cover_tags)
+      if (Array.isArray(p)) tags = p
+    } else if (cover && coverTagsOverride) {
+      tags = coverTagsOverride.get(Number(row.id)) || null
+    }
+    if (cover && tags && tags.length) {
+      const st = loadSafetyState()
+      if (st.on && hiddenAt(unsafeLevelOf(tags, safetyMatcher()), st.level)) cover = ''
+    }
+  } catch { /* 坏 JSON 不误伤 */ }
   return {
     id: Number(row.id),
     path: row.path,
@@ -150,13 +157,62 @@ function decorate(row) {
     added_at: Number(row.added_at) || 0,
     last_scan: Number(row.last_scan_ms) || 0,
     cover,
-    cover_tags: row.cover_tags || '',
+    cover_tags: row.cover_tags
+      || (coverTagsOverride?.has(Number(row.id)) ? JSON.stringify(coverTagsOverride.get(Number(row.id))) : ''),
     note: row.note || '',
     stats: row.stats_json ? safeParse(row.stats_json) : null,
     images: Number(row.images || 0),          // 库内已有的图片记录数
     tagged: Number(row.tagged || 0),          // 其中含 WD14 标签的(tags_src='wd14' 或 'meta+wd14')
     exists: isDir(row.path),
   }
+}
+
+/**
+ * 封面安全判定的**存量自愈**(2026-10-06 用户报"扫描的图过不了安全模式"):
+ * cover_tags 快照是「封面接安全模式」那轮(8cb3eda)才开始落库的, 在此之前扫的夹
+ * cover 有值但快照是空串 —— decorate 的判定整段被跳过, 🛡 开着时封面照样显示
+ * 被藏图(真实库实测 28/28 全缺, 那轮功能对存量数据等于零生效)。
+ * 现查两级兜底:
+ *   ① cover 那张图入库过 -> images.tags 就是标签真源(LIKE 粗筛 + 规范化路径
+ *      精确比对);
+ *   ② 纯扫描夹(图没入库) -> cover 还在磁盘上, 单图现解析 PNG 提示词(一张
+ *      毫秒级, 只在第一次列表时发生)。
+ * 查到顺手写回 folders.cover_tags(幂等, 只填空) —— 下次列表零开销。
+ */
+function coverTagsBackfill(db, rows) {
+  const need = rows.filter((r) => r.cover && !r.cover_tags)
+  if (!need.length) return new Map()
+  const norm = (p) => String(p).replace(/\\/g, '/').toLowerCase()
+  const esc = (s) => s.replace(/[\\%_]/g, (ch) => '\\' + ch)   // LIKE 通配符转义
+  const conds = need.map(() => "(folder_id = ? AND path LIKE ? ESCAPE '\\')")
+  const params = []
+  for (const r of need) params.push(Number(r.id), '%' + esc(norm(r.cover).split('/').pop()))
+  let found = []
+  try {
+    found = db.prepare(
+      `SELECT folder_id, path, tags FROM images WHERE gone = 0 AND ${conds.join(' OR ')}`
+    ).all(...params)
+  } catch { /* 表缺列/锁住等异常时走纯磁盘解析 */ }
+  const pool = new Map()                       // norm(path) -> tags[]
+  for (const it of found) {
+    pool.set(norm(it.path), String(it.tags || '').split(',').map((t) => t.trim()).filter(Boolean))
+  }
+  const out = new Map()                        // folder_id -> tags[]
+  const upd = db.prepare("UPDATE folders SET cover_tags = ? WHERE id = ? AND cover_tags = ''")
+  for (const r of need) {
+    let tags = pool.get(norm(r.cover))
+    if (!tags) {
+      try {
+        const meta = extractImagePrompt(r.cover)
+        tags = meta?.text ? dedupeTags(promptToTags(meta.text)) : []
+      } catch { tags = [] }                    // 文件没了/读不动 -> 无标签可判, 放行
+    }
+    if (tags && tags.length) {
+      out.set(Number(r.id), tags)
+      try { upd.run(JSON.stringify(tags), Number(r.id)) } catch { /* 写不进不影响本次判定 */ }
+    }
+  }
+  return out
 }
 
 /** 一个目录的库内图片数(单行查询用, 不做全表 GROUP BY) */
@@ -184,9 +240,12 @@ export function listFolders({ usage = 'scan' } = {}) {
   // 名字整表算一次再发下去: 重名消歧要看到**全部**目录才判得准(只看当前 usage
   // 的子集, 同一个文件夹名在两个列表里会得到两个名字)。
   const nameOf = folderNameMap(db)
+  const rows = folderRows(db, { usage })
+  // 缺快照的老记录在这里现查补上(顺带写回), 封面安全判定才对存量数据生效
+  const backfill = coverTagsBackfill(db, rows)
   return {
     file: dataFile(NAME),
-    folders: folderRows(db, { usage }).map((r) => decorate({ ...r, name: nameOf.get(Number(r.id)) })),
+    folders: rows.map((r) => decorate({ ...r, name: nameOf.get(Number(r.id)) }, backfill)),
   }
 }
 
