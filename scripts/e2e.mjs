@@ -895,8 +895,11 @@ async function main() {
         withZh: __t.count('.tag-list .pill .zh'),
         withCnt: __t.count('.tag-list .pill .cnt'),
         banned: __t.count('.tag-list .pill.banned'),
-        tip: __t.text('.bar .hint'),
-        totalText: __t.text('.bar .hint', 0),
+        togOn: !!document.querySelector('.tags-view .bar .tv-chip.active'),
+        togTxt: (__t.text('.tags-view .bar .tv-chip') || '').replace(/\\s+/g, ''),
+        lsVal: localStorage.getItem('tv_tags_hide_banned'),
+        hiddenHint: __t.text('.tags-view .bar .banned-hint'),
+        totalText: __t.text('.bar .hint'),
       }
     `)
     check('标签: 列表已渲染', tags.n > 0, `${tags.n} 个标签 · ${tags.totalText}`)
@@ -908,8 +911,32 @@ async function main() {
     check('标签: 中文覆盖率正常(不是只靠零星本地补译)', zhRate >= 0.5,
       `${tags.withZh}/${tags.n} = ${(zhRate * 100).toFixed(1)}% 有中文`)
     check('标签: 带使用计数', tags.withCnt > 0, `${tags.withCnt} 个有计数`)
-    check('标签: 已 ban 状态可见', tags.banned > 0, `${tags.banned} 个已 ban`)
+    /* 2026-10-06: 「隐藏已ban」胶囊开关 —— 默认开(用户拍板), localStorage 持久化,
+     * 服务端过滤(getAllTags hide_banned), 提示条报被滤掉的个数 */
+    check('标签: 「隐藏已ban」开关默认开且已写入持久化键',
+      tags.togOn === true && tags.lsVal === '1' && tags.togTxt.includes('已隐藏'),
+      `开关=${tags.togOn} ls=${tags.lsVal} 文案="${tags.togTxt}"`)
+    check('标签: 默认视图已 ban 词条全被藏(灰条=0) + 提示条报被滤数',
+      tags.banned === 0 && /已隐藏/.test(tags.hiddenHint),
+      `可见已ban=${tags.banned} · 提示="${tags.hiddenHint}"`)
     await cdp.shot('09-tags')
+
+    // 关掉开关 -> 已 ban 词条回来(服务端过滤, 重拉列表)
+    await cdp.eval(`__t.click('.tags-view .bar .tv-chip'); return true`)
+    await waitFor(cdp, `localStorage.getItem('tv_tags_hide_banned') === '0'`, { label: '开关切到显示', timeout: 15000 })
+    await waitFor(cdp, `__t.count('.tag-list .pill') > 0`, { label: '重拉列表', timeout: 30000 })
+    check('标签: 关掉开关后持久化键变为 0', await cdp.eval(`return localStorage.getItem('tv_tags_hide_banned')`) === '0')
+
+    // 滚动加载(2026-10-06 分页改瀑布流): 滚到底自动补下一批
+    const n0 = await cdp.eval(`return __t.count('.tag-list .pill')`)
+    await cdp.eval(`
+      const el = document.querySelector('.tags-view .scroll')
+      el.scrollTop = el.scrollHeight
+      return true
+    `)
+    await waitFor(cdp, `__t.count('.tag-list .pill') > ${n0 + 100}`, { label: '滚动加载下一批', timeout: 30000 })
+    const n1 = await cdp.eval(`return __t.count('.tag-list .pill')`)
+    check('标签: 滚到底自动加载(页码器已撤)', n1 > n0 + 100, `${n0} -> ${n1} 个`)
 
     /* 点标签 -> 图片。2026-09-20 起这是**下一级子页面** /tags/xxx(独立路由),
        不是挂在标签列表上的 ?tag= —— 顺带把层级(H1 面包屑 / 后退一步 / 顶栏选中)钉住。 */
@@ -998,6 +1025,11 @@ async function main() {
     check('标签: 🚫 可切换 ban 且能还原',
       banToggle && banToggle.nowBanned !== banToggle.wasBanned && banToggle.restored === banToggle.wasBanned,
       JSON.stringify(banToggle))
+
+    // 开关切回「隐藏」(覆盖持久化回写; 之后的节都按默认态走)
+    await cdp.eval(`__t.click('.tags-view .bar .tv-chip'); return true`)
+    await waitFor(cdp, `localStorage.getItem('tv_tags_hide_banned') === '1'`, { label: '开关切回隐藏', timeout: 15000 })
+    await sleep(600)
 
     /* ---------------- 7.5 导出预设: ban 完自动导出 (2026-09-22) ---------------- */
     /*
@@ -3479,6 +3511,55 @@ async function main() {
       await new Promise((r) => setTimeout(r, 400))
       return true
     `)
+
+    /* ③c 安全模式对词条生效(2026-10-06 用户需求: NSFW 词也要从标签列表藏掉)。
+     * 样本词动态挑: 读沙箱 safety_tags.txt 的 core 段(排除黑名单已有词), 在页面里
+     * 逐个试搜直到搜得到 —— 硬编码会撞上"真实黑名单拷进沙箱"的不确定性。 */
+    {
+      const sTxt = fs.readFileSync(path.join(DATA_DIR, 'safety_tags.txt'), 'utf8')
+      /* ⚠️ 先滤注释行再找段标记 —— 文件头的注释里就写着「# [core] 明确的裸露…」,
+       * 直接 split([core]) 会把注释尾巴当词表(实测抓过) */
+      const lines = sTxt.split('\n').map((s) => s.trim()).filter((s) => s && !s.startsWith('#'))
+      const iCore = lines.findIndex((s) => /^\[core\]$/i.test(s))
+      const iEdge = lines.findIndex((s) => /^\[edge\]$/i.test(s))
+      const blTxt = fs.existsSync(path.join(DATA_DIR, 'export_blacklist.txt'))
+        ? fs.readFileSync(path.join(DATA_DIR, 'export_blacklist.txt'), 'utf8').toLowerCase() : ''
+      const coreWords = (iCore >= 0 ? lines.slice(iCore + 1, iEdge > iCore ? iEdge : undefined) : [])
+        .map((s) => s.toLowerCase())
+        .filter((s) => s && !s.includes('*') && !blTxt.includes(s))
+      const probe = await cdp.eval(`
+        const words = ${JSON.stringify(coreWords.slice(0, 6))}
+        let hit = null, n = 0
+        for (const w of words) {
+          __t.setInput('.tags-view .kw input', w)
+          __t.pressEnter('.tags-view .kw input')
+          await new Promise(r => setTimeout(r, 900))
+          n = __t.count('.tag-list .pill')
+          if (n > 0) { hit = w; break }
+        }
+        return { hit, n }
+      `)
+      check('安全模式: 从 core 段挑出可用的敏感词样本', !!probe.hit && probe.n > 0,
+        `样本=${probe.hit || '(无)'} · ${probe.n} 个胶囊 · 候选=[${coreWords.slice(0, 6).join(',')}]`)
+      // 开 🛡 -> 样本词消失(客户端过滤, 即时生效); 关 -> 回来
+      await cdp.eval(`document.querySelector('.tags-view .bar .safe-tog .st-btn').click(); return true`)
+      await waitFor(cdp, `!__t.text('.tag-list').includes(${JSON.stringify(probe.hit)})`,
+        { label: '安全模式藏词(样本词消失)', timeout: 15000 })
+      const sHint = await cdp.eval(`return __t.text('.tags-view .bar .safety-hint')`)
+      const sCnt = await cdp.eval(`return __t.count('.tag-list .pill')`)
+      check('安全模式: 敏感词从标签列表隐藏(提示条报数)',
+        sCnt < probe.n && /已隐藏/.test(sHint), `${probe.n} -> ${sCnt} 个 · 提示="${sHint}"`)
+      await cdp.eval(`document.querySelector('.tags-view .bar .safe-tog .st-btn').click(); return true`)
+      await waitFor(cdp, `__t.text('.tag-list').includes(${JSON.stringify(probe.hit)})`,
+        { label: '关安全模式词回来', timeout: 15000 })
+      // 清搜索, 别把筛选词带进后面的节
+      await cdp.eval(`
+        __t.setInput('.tags-view .kw input', '')
+        __t.pressEnter('.tags-view .kw input')
+        return true
+      `)
+      await sleep(700)
+    }
 
     /* ④ "打开就一键过滤掉" —— 这是这个功能的本体: 点一下开关, 网格里的图**真的少了**;
      *    再点一下, 全部回来。前面那几条都只是"入口在不在"。 */

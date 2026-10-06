@@ -399,6 +399,8 @@ export function getAllTags(raw = {}) {
   const offset = clampInt(raw.offset, 0, 0, 10_000_000)
   const limit = clampInt(raw.limit, 120, 0, 1_000_000)
   const kw = String(raw.q || '').trim().toLowerCase()
+  // 标签页「隐藏已ban」开关(默认开, 前端持久化) —— 服务端过滤, total 才是真实的可见数
+  const hideBanned = raw.hide_banned === '1' || raw.hide_banned === 1 || raw.hide_banned === true
 
   const p = parseQuery(raw)
   const [statsMap] = statsFor(p.srcSet)
@@ -411,10 +413,11 @@ export function getAllTags(raw = {}) {
     items.push({ tag: t, count: c })
   }
   items.sort((a, b) => b.count - a.count)
-  const total = items.length
-  const page = limit > 0 ? items.slice(offset, offset + limit) : items
 
-  for (const it of page) {
+  // ban 标记打在**全量**上再切页: hide_banned 的 total / bannedHidden 才算得对
+  // (原来只标记返回页 —— 一万条 exact-Set 查找是微秒级, 不差这点)
+  let bannedCount = 0
+  for (const it of items) {
     const tl = it.tag.toLowerCase()
     if (bl.exact.has(tl)) {
       it.banned = true
@@ -423,11 +426,15 @@ export function getAllTags(raw = {}) {
       it.banned = true
       it.ban_rule = bl.rules.find((r) => isBlocked(it.tag, [r])) || ''
     }
+    if (it.banned) { bannedCount++; continue }
     const zh = tr.get(tl)
     if (zh) it.zh = zh
   }
+  const visible = hideBanned ? items.filter((it) => !it.banned) : items
+  const total = visible.length
+  const page = limit > 0 ? visible.slice(offset, offset + limit) : visible
 
-  return { total, offset, returned: page.length, tags: page }
+  return { total, offset, returned: page.length, tags: page, bannedHidden: bannedCount }
 }
 
 // ---------------------------------------------------------------- 单图标签
