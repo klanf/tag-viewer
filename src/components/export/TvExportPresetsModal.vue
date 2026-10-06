@@ -22,6 +22,7 @@ import TvCheckbox from '../base/TvCheckbox.vue'
 import TvChip from '../base/TvChip.vue'
 import TvSourceChips from '../filter/TvSourceChips.vue'
 import TvCartPresetSection from '../cart/TvCartPresetSection.vue'
+import TvTagSuggestInput from '../tag/TvTagSuggestInput.vue'
 import { api } from '@/utils/api.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { nfmt, bytes, dur, ts as fmtTs } from '@/utils/format.js'
@@ -399,7 +400,6 @@ function shortDir(d) {
     <template v-else>
       <div class="frow">
         <span class="lb">名称</span>
-                <span class="lb">名称</span>
         <TvInput
           :model-value="editing.name"
           size="sm"
@@ -419,7 +419,14 @@ function shortDir(d) {
 
       <div class="frow">
         <span class="lb">搜索标签</span>
-        <TvInput v-model="editing.params.q" size="sm" placeholder="逗号分隔, 如: blue_archive, 1girl (留空 = 全部图片)" />
+        <!-- 2026-10-06: 换成看板同款的胶囊多词联想(敲逗号定格成胶囊, 选词追加/全选);
+             联想范围跟着上面勾的**来源**走, 不是首页当前来源 -->
+        <TvTagSuggestInput
+          v-model="editing.params.q"
+          multi
+          :source="editing.params.source.join(',')"
+          placeholder="如: 1girl, blue_archive / 中文: 蔚蓝档案 (留空 = 全部图片)"
+        />
       </div>
 
       <div class="frow two">

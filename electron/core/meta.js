@@ -1,5 +1,5 @@
 /**
- * 用户元数据 user_meta.json —— 系列分类 / 自定义分类 / 隐藏分类 / 自定义角色
+ * 用户元数据 user_meta.json —— 系列分类 / 自定义分类 / 隐藏分类 / 自定义角色 / 自定义封面
  * 与 Python 版共用同一份文件(默认在 dataDir 下)。
  */
 import fs from 'node:fs'
@@ -14,7 +14,24 @@ function defaults() {
     custom_categories: [],
     hidden_categories: [],
     custom_chars: {},
+    // 自定义封面(2026-10-06): series[系列名] / chars[角色tag] -> 图片绝对路径。
+    // 用户在系列页点卡片的 ⚙️ 从该系列/角色的图里挑的; 空段不占事。
+    custom_covers: { series: {}, chars: {} },
   }
+}
+
+function normCovers(raw) {
+  const d = { series: {}, chars: {} }
+  if (!raw || typeof raw !== 'object') return d
+  for (const kind of ['series', 'chars']) {
+    const sec = raw[kind]
+    if (sec && typeof sec === 'object') {
+      for (const [k, v] of Object.entries(sec)) {
+        if (typeof v === 'string' && v.trim()) d[kind][k] = v.trim()
+      }
+    }
+  }
+  return d
 }
 
 export function loadUserMeta() {
@@ -30,6 +47,7 @@ export function loadUserMeta() {
       custom_categories: Array.isArray(raw.custom_categories) ? raw.custom_categories : [],
       hidden_categories: Array.isArray(raw.hidden_categories) ? raw.hidden_categories : [],
       custom_chars: raw.custom_chars && typeof raw.custom_chars === 'object' ? raw.custom_chars : {},
+      custom_covers: normCovers(raw.custom_covers),
     }
   } catch {
     return d
@@ -63,6 +81,18 @@ export function patchUserMeta(body) {
       if (!Array.isArray(v)) continue
       const cur = meta.custom_chars[k] || []
       meta.custom_chars[k] = [...new Set([...cur, ...v])]
+    }
+  }
+  // 自定义封面: path 为空串 = 清除该条(恢复自动挑选)
+  if (body.custom_covers && typeof body.custom_covers === 'object') {
+    for (const kind of ['series', 'chars']) {
+      const sec = body.custom_covers[kind]
+      if (!sec || typeof sec !== 'object') continue
+      for (const [k, v] of Object.entries(sec)) {
+        const clean = String(v || '').trim()
+        if (!clean) delete meta.custom_covers[kind][k]
+        else meta.custom_covers[kind][k] = clean
+      }
     }
   }
   const ok = saveUserMeta(meta)

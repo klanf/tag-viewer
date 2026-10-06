@@ -10,6 +10,7 @@ import {
   seriesName, isCharacterTag, isCopyrightTag, charShortName, CATEGORY_LABELS, guessCategory,
 } from './dataset.js'
 import { loadUserMeta, patchUserMeta } from './meta.js'
+import { loadSafetyState, hiddenAt } from './safety.js'
 import { blacklistMatcher, isBlocked, isBlockedFast, buildBanMap, loadBgConfig, hasBgTagFast } from './rules.js'
 import { translateMap, translateMany, zhIndex } from './translate.js'
 import { parseQuery, scopeRecords, searchCached, applySort, frozenKey } from './search.js'
@@ -141,9 +142,23 @@ function clampInt(v, dflt, lo, hi) {
  * 兜底; 万一整组都没有尺寸, 结果与改动前完全一致(退回 min id)。
  */
 function coverIdx(ids) {
+  // 安全模式开着时, 先把会被藏的记录剔出封面候选池(2026-10-06): 系列卡/角色卡的
+  // 封面不能是一张用户在安全模式下根本看不见的图。**整池都被藏才回落全池** ——
+  // 封面空着比露出一张敏感图更糟(反正图集点进去也看不见它)。
+  let pool = ids
+  const st = loadSafetyState()
+  if (st.on) {
+    const lvl = st.level === 'edge' ? 'edge' : 'core'
+    const safe = []
+    for (const i of ids) {
+      const r = ds.records[i]
+      if (r && !hiddenAt(r.unsafe, lvl)) safe.push(i)
+    }
+    if (safe.length) pool = safe
+  }
   let best = -1
   let bestScore = Infinity
-  for (const i of ids) {
+  for (const i of pool) {
     const r = ds.records[i]
     if (!r) continue
     const w = Number(r.px_w) || 0
@@ -210,7 +225,8 @@ export function getSeries(raw = {}) {
       name,
       images: ids.size + extraImgs,
       characters: groupsShown.size + extra.length,
-      thumb: ds.records[ids.size ? coverIdx(ids) : 0].path,
+      // 自定义封面(用户在卡片 ⚙️ 里挑的)优先; 没设才走自动挑选(安全感知)
+      thumb: meta.custom_covers?.series?.[name] || ds.records[ids.size ? coverIdx(ids) : 0].path,
       category: cats[name] || guessCategory(name),
     })
     seen.add(name)
@@ -229,7 +245,8 @@ export function getSeries(raw = {}) {
     }
     items.push({
       name, images: real, characters: tags.length,
-      thumb, category: cats[name] || guessCategory(name), custom: true,
+      thumb: meta.custom_covers?.series?.[name] || thumb,
+      category: cats[name] || guessCategory(name), custom: true,
     })
   }
 
@@ -293,6 +310,8 @@ export function getCharacters(raw = {}) {
   const series = typeof raw.series === 'string' ? raw.series : ''
   const p = parseQuery(raw)
   const srcSet = p.srcSet
+  const meta = loadUserMeta()
+  const ccov = meta.custom_covers?.chars || {}
   const chars = ds.seriesChars.get(series) || new Map()
   const items = []
   const okCache = new Map()
@@ -316,12 +335,12 @@ export function getCharacters(raw = {}) {
       alt,
       name: charShortName(rep),
       images: ids.size,
-      thumb: ds.records[coverIdx(ids)].path,
+      // 自定义封面优先(用户在卡片 ⚙️ 里挑的); 没设才走自动挑选(安全感知)
+      thumb: ccov[rep] || ds.records[coverIdx(ids)].path,
     })
   }
 
   // 用户手动补的角色(库里可能没有这个标签 -> 0 张图)
-  const meta = loadUserMeta()
   const [tagCounter, , ] = statsFor(srcSet)
   const recs = recordsFor(srcSet)
   const groups = mergeCharVariants(chars)
@@ -336,7 +355,7 @@ export function getCharacters(raw = {}) {
         if (rec.tags.includes(tag)) { thumb = rec.path; break }
       }
     }
-    items.push({ tag, alt: [], name: charShortName(tag), images: c, thumb })
+    items.push({ tag, alt: [], name: charShortName(tag), images: c, thumb: ccov[tag] || thumb })
   }
 
   items.sort((a, b) => b.images - a.images || a.name.localeCompare(b.name, 'en'))
@@ -435,6 +454,74 @@ export function getAllTags(raw = {}) {
   const page = limit > 0 ? visible.slice(offset, offset + limit) : visible
 
   return { total, offset, returned: page.length, tags: page, bannedHidden: bannedCount }
+}
+
+// ---------------------------------------------------------------- 自定义封面
+
+/**
+ * 封面候选图(系列页卡片 ⚙️ 挑封面用, 2026-10-06)。
+ * kind='series': 该系列(名)下的全部图; kind='chars': 该角色(代表 tag)的图 ——
+ * 与角色卡同口径(合并 alt 写法; 手动补的角色按标签 exact 全库找)。
+ * 来源过滤照常; 安全模式开着时只返回该档位下可见的图(用户拍板: 挑选窗只出安全图)。
+ * 按库内记录顺序返回, 上限 200 条(超出部分只计数, 前端有 total 提示)。
+ */
+export function getCoverCandidates(raw = {}) {
+  const kind = raw.kind === 'chars' ? 'chars' : 'series'
+  const key = String(raw.key || '').trim()
+  if (!key) return { candidates: [], total: 0 }
+  const series = typeof raw.series === 'string' ? raw.series : ''
+  const p = parseQuery(raw)
+  const srcSet = p.srcSet
+  const st = loadSafetyState()
+  const lvl = st.level === 'edge' ? 'edge' : 'core'
+
+  let ids = []
+  if (kind === 'series') {
+    ids = [...(ds.seriesImgs.get(key) || [])]
+  } else {
+    for (const [, g] of mergeCharVariants(ds.seriesChars.get(series) || new Map())) {
+      const { rep, alt } = charRep(g)
+      if (rep === key || (alt || []).includes(key)) { ids = [...g.ids]; break }
+    }
+    if (!ids.length) {
+      // 手动补的角色(库里可能没有该标签): 全库按标签 exact 找
+      for (let i = 0; i < ds.records.length; i++) {
+        if (ds.records[i].tags.includes(key)) ids.push(i)
+      }
+    }
+  }
+
+  const okCache = new Map()
+  const srcOk = (idx) => {
+    if (!srcSet) return true
+    let v = okCache.get(idx)
+    if (v === undefined) { v = srcSet.has(ds.records[idx].source); okCache.set(idx, v) }
+    return v
+  }
+
+  const CAP = 200
+  const out = []
+  let total = 0
+  for (const i of ids) {
+    const r = ds.records[i]
+    if (!r) continue
+    if (!srcOk(i)) continue
+    if (st.on && hiddenAt(r.unsafe, lvl)) continue
+    total++
+    if (out.length < CAP) out.push({ path: r.path, px_w: r.px_w || 0, px_h: r.px_h || 0 })
+  }
+  return { candidates: out, total, capped: total > out.length }
+}
+
+/** 设/清自定义封面。path 空串 = 清除该条(恢复自动挑选)。 */
+export function setCover(raw = {}) {
+  const kind = raw.kind === 'chars' ? 'chars' : 'series'
+  const key = String(raw.key || '').trim()
+  if (!key) return { error: '缺少 key' }
+  const pth = String(raw.path || '').trim()
+  if (pth && !recordByPath(pth)) return { error: '该图片不在当前库里: ' + pth }
+  const r = patchUserMeta({ custom_covers: { [kind]: { [key]: pth } } })
+  return { ok: r.ok !== false, covers: r.meta?.custom_covers }
 }
 
 // ---------------------------------------------------------------- 单图标签

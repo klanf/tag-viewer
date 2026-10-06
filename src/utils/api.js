@@ -111,6 +111,9 @@ export const api = {
   seriesMeta: () => call('series:meta:get'),
   saveSeriesMeta: (body) => call('series:meta:post', body),
   characters: (q) => call('characters:get', q),
+  // 自定义封面(2026-10-06): 挑选候选 / 设定与清除(path 空 = 恢复自动)
+  coverCandidates: (q) => call('covers:candidates', q),
+  coverSet: (body) => call('covers:set', body),
 
   // 标签
   suggest: (q) => call('suggest:get', q),

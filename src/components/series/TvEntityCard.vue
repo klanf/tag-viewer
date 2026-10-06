@@ -32,8 +32,10 @@ const props = defineProps({
   dim: { type: Boolean, default: false },
   /** 缩略图宽度档位 */
   thumbWidth: { type: Number, default: 300 },
+  /** 显示「设封面」按钮(系列页两张卡都开; 与购物车按钮同款悬停显形) */
+  coverable: { type: Boolean, default: false },
 })
-const emit = defineEmits(['open', 'toggle-cart', 'toggle-select'])
+const emit = defineEmits(['open', 'toggle-cart', 'toggle-select', 'cover'])
 
 const hasThumb = computed(() => !!props.thumb)
 </script>
@@ -58,6 +60,14 @@ const hasThumb = computed(() => !!props.thumb)
       :title="inCart ? '已在购物车 — 再点一次移除' : '加入购物车'"
       @click.stop="emit('toggle-cart')"
     >{{ inCart ? '✓' : '🛒' }}</button>
+
+    <!-- 设封面: 悬停显形, 与 🛒 纵向排开(右侧一列) -->
+    <button
+      v-if="coverable && !selectable"
+      class="cover-btn"
+      title="自定义封面: 从这组图里挑一张当卡片封面"
+      @click.stop="emit('cover')"
+    >🖼</button>
 
     <span v-if="selectable" class="ckbox" @click.stop="emit('toggle-select')">
       <input type="checkbox" :checked="selected" @click.stop="emit('toggle-select')">
@@ -119,6 +129,17 @@ const hasThumb = computed(() => !!props.thumb)
 .ecard:hover .cart-btn { opacity: 1; }
 .cart-btn.on { opacity: 1; color: var(--accent2); }
 .cart-btn:hover { background: var(--accent2-soft); color: var(--accent2); }
+
+/* 设封面按钮: 购物车按钮正下方, 同款悬停显形 */
+.cover-btn {
+  position: absolute; top: 40px; right: 6px; z-index: 5;
+  width: 28px; height: 28px; border-radius: 7px;
+  background: rgba(10, 13, 18, .75);
+  color: var(--muted); font-size: 13px; line-height: 1;
+  opacity: 0; transition: opacity var(--t-fast), color var(--t-fast), background var(--t-fast);
+}
+.ecard:hover .cover-btn { opacity: 1; }
+.cover-btn:hover { background: var(--accent-soft); color: var(--accent); }
 
 .ckbox {
   position: absolute; top: 8px; left: 8px; z-index: 5;

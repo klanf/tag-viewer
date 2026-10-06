@@ -728,6 +728,27 @@ async function main() {
         `胶囊 ${c1}->${stBs.chips} 输入框="${stBs.val}"`)
     }
 
+    /* ---------------- 4c. 预设弹窗的搜索标签输入框(2026-10-06 换看板同款胶囊联想) ---------------- */
+    {
+      await cdp.eval(`__t.clickText('.lnk .tv-btn', '预设导出'); return true`)
+      await waitFor(cdp, `!!document.querySelector('.mask .box')`, { label: '预设弹窗打开', timeout: 15000 })
+      await cdp.eval(`__t.clickText('.mask .tv-btn', '新建预设'); return true`)
+      await waitFor(cdp, `!!document.querySelector('.mask .tagbox input')`, { label: '预设表单胶囊输入框', timeout: 15000 })
+      await cdp.eval(`
+        __t.setInput('.mask .tagbox input', 'blue_archive,')
+        await new Promise(r => setTimeout(r, 150))
+        __t.setInput('.mask .tagbox input', 'hosh')
+        return true
+      `)
+      await waitFor(cdp, `__t.count('.mask .tagbox .tv-chip') === 1`, { label: '预设表单敲逗号成胶囊', timeout: 15000 })
+      check('预设弹窗: 搜索标签输入框已是胶囊多词联想(与看板同款)', true, '敲逗号成胶囊 ✓')
+      // 不保存, 原路退出, 别给后面的节留下表单状态
+      await cdp.eval(`__t.clickText('.mask .foot .tv-btn', '返回'); return true`)
+      await sleep(300)
+      await cdp.eval(`__t.clickText('.mask .foot .tv-btn', '关闭'); return true`)
+      await sleep(400)
+    }
+
     const p1 = await cdp.eval(`return __t.text('.grid .card .foot')`)
     await cdp.eval(`__t.clickText('.shuffle', '🎲'); return true`)
     await sleep(1200)
@@ -778,6 +799,53 @@ async function main() {
     check('系列: 列表已渲染', seriesList.cards > 0, `${seriesList.cards} 个系列, 首个=${seriesList.first}`)
     check('系列: 分类 tab 已渲染', seriesList.cats > 1, `${seriesList.cats} 个分类`)
     await cdp.shot('04-series-list')
+
+    /* 封面: 安全感知挑选 + 自定义(2026-10-06) */
+    {
+      // (a) covers:candidates 安全过滤 —— 同一系列, 安全模式开/关两份候选, 开着应收缩。
+      //     直接走应用的 IPC 桥, 用完把开关还原(渲染层 store 没动过, 无漂移)。
+      const probe = await cdp.eval(`
+        const inv = (ch, p) => window.tv.invoke(ch, p)
+        const sr = await inv('series:get', {})
+        const s0 = (sr.series || [])[0]
+        if (!s0) return null
+        const off = await inv('covers:candidates', { kind: 'series', key: s0.name })
+        await inv('safety:set', { on: true })
+        const on = await inv('covers:candidates', { kind: 'series', key: s0.name })
+        await inv('safety:set', { on: false })
+        return { name: s0.name, offN: off.total, onN: on.total }
+      `)
+      check('封面: 候选接口存在且安全模式开着会收缩候选',
+        !!probe && probe.offN > 0 && probe.onN < probe.offN,
+        probe ? `「${probe.name}」候选 ${probe.offN} -> ${probe.onN}` : '没有系列')
+
+      // (b) 自定义封面 UI 流: ⚙️ → 挑选窗 → 点一张 → 卡片换图 → 恢复自动
+      const before = await cdp.eval(`return document.querySelector('.ecard .tv-img img')?.getAttribute('src') || ''`)
+      await cdp.eval(`document.querySelector('.ecard .cover-btn').click(); return true`)
+      await waitFor(cdp, `__t.count('.cgrid .cand') > 0`, { label: '封面候选加载', timeout: 30000 })
+      const pk = await cdp.eval(`return __t.count('.cgrid .cand')`)
+      check('封面: 卡片 ⚙️ 打开挑选窗且候选加载', pk > 0, `${pk} 张候选`)
+      // 点一张「非当前」的候选(data-path 上有路径, 不依赖懒加载的 <img>)
+      const clicked = await cdp.eval(`
+        const el = document.querySelector('.cgrid .cand:not([data-cur="1"])')
+        if (!el) return null
+        const p = el.getAttribute('data-path')
+        el.click()
+        return p
+      `)
+      check('封面: 点选非当前候选', !!clicked, `点中=${(clicked || '').slice(-40)}`)
+      await waitFor(cdp, `!document.querySelector('.cgrid')`, { label: '挑完关窗', timeout: 20000 })
+      await sleep(1200)     // 等列表重拉 + 缩略图 src 刷新
+      const after = await cdp.eval(`return document.querySelector('.ecard .tv-img img')?.getAttribute('src') || ''`)
+      check('封面: 自定义封面生效(卡片缩略图换成所选图)', !!after && after !== before, '封面已更新')
+      // 恢复自动挑选, user_meta 还原
+      await cdp.eval(`document.querySelector('.ecard .cover-btn').click(); return true`)
+      await waitFor(cdp, `__t.count('.cgrid .cand') > 0`, { label: '挑选窗再开', timeout: 30000 })
+      await cdp.eval(`__t.clickText('.mask .foot .tv-btn', '恢复自动挑选'); return true`)
+      await waitFor(cdp, `!document.querySelector('.cgrid')`, { label: '恢复后关窗', timeout: 20000 })
+      await sleep(1000)
+      check('封面: 恢复自动挑选成功(无报错)', true, 'covers:set 清除路径 ✓')
+    }
 
     /* 系列搜索(中文) */
     const zhHit = await cdp.eval(`

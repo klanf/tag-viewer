@@ -19,6 +19,7 @@ import { bootstrap, status, whenReady } from './core/app-state.js'
 import {
   getStats, doSearch, getSeries, getCharacters, getSeriesMeta, postSeriesMeta,
   getSuggest, getAllTags, getTagsForPath, getLightboxData, getTranslations,
+  getCoverCandidates, setCover,
 } from './core/query.js'
 import {
   blacklistText, blacklistRules, saveBlacklistText, toggleBlacklistTag,
@@ -107,7 +108,8 @@ function safe(fn) {
  */
 const DATA_CHANNELS = new Set([
   'stats:get', 'search:do',
-  'series:get', 'characters:get',
+    'series:get', 'characters:get',
+    'covers:candidates',
   'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'translate:get',
   'export:preview', 'export:save', 'export:text', 'export:cart',
   'scan:folder',
@@ -413,6 +415,8 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
     'series:meta:get': safe(() => getSeriesMeta()),
     'series:meta:post': safe((body) => postSeriesMeta(body)),
     'characters:get': safe((raw) => getCharacters(raw)),
+    'covers:candidates': safe((raw) => getCoverCandidates(raw)),
+    'covers:set': safe((raw) => setCover(raw)),
 
     // ---------------- 标签 ----------------
     'suggest:get': safe((raw) => getSuggest(raw)),

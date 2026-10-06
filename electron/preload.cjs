@@ -21,6 +21,8 @@ const CHANNELS = new Set([
   'stats:get', 'search:do',
   // 系列 / 角色
   'series:get', 'series:meta:get', 'series:meta:post', 'characters:get',
+  // 自定义封面(2026-10-06): 系列卡/角色卡 ⚙️ 挑封面
+  'covers:candidates', 'covers:set',
   // 标签
   'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'translate:get',
   'tags:edit:preview', 'tags:edit:apply',

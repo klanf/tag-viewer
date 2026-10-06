@@ -21,6 +21,7 @@ import TvInput from '@/components/base/TvInput.vue'
 import TvTabs from '@/components/base/TvTabs.vue'
 import TvState from '@/components/base/TvState.vue'
 import TvCategoryManager from '@/components/rules/TvCategoryManager.vue'
+import TvCoverPickerModal from '@/components/series/TvCoverPickerModal.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
 import { useFloatBack } from '@/composables/useFloatBack.js'
 import { useSourceStore } from '@/stores/useSourceStore.js'
@@ -282,6 +283,28 @@ async function onSourceChange() {
   if (view.value === 'images' && curChar.value) return reloadImages()
 }
 
+/* ---------------- 自定义封面(2026-10-06) ---------------- */
+const showCoverPick = ref(false)
+const coverPick = ref(null)   // { kind, key, title, current }
+
+function openCoverPick(kind, key, title, current) {
+  coverPick.value = { kind, key, title, current }
+  showCoverPick.value = true
+}
+
+/** 挑完/恢复默认后重拉当前层, 卡片封面立刻换新 */
+function onCoverSaved() {
+  if (view.value === 'series') return loadSeries()
+  if (view.value === 'chars' && curSeries.value) return loadChars(curSeries.value)
+}
+
+/* 封面是主进程按**当前安全档位**挑的 —— 🛡 开关/档位一变, 列表层要重拉才拿得到新封面。
+   (图片层的网格走 safety.filterItems 即时过滤, 不用重查。) */
+watch(() => `${safety.on}|${safety.level}`, () => {
+  if (view.value === 'series') loadSeries()
+  else if (view.value === 'chars' && curSeries.value) loadChars(curSeries.value)
+})
+
 onMounted(() => {
   src.load()
   showSeriesList()
@@ -370,7 +393,9 @@ watch(() => route.query.series, async (name) => {
               :dim="(seriesData.hidden_categories || []).includes(s.category)"
               :thumb-width="300"
               :in-cart="null"
+              coverable
               @open="openSeries(s)"
+              @cover="openCoverPick('series', s.name, seriesZh[s.name] || s.name, s.thumb)"
             />
           </div>
         </div>
@@ -433,9 +458,11 @@ watch(() => route.query.series, async (name) => {
               :badge="c.images === 0 ? '仅手动补充' : ''"
               :badge-tone="'warn'"
               :thumb-width="300"
+              coverable
               @open="selectMode ? toggleSelect(c) : openCharImages(c)"
               @toggle-select="toggleSelect(c)"
               @toggle-cart="toggleCartOne(c)"
+              @cover="openCoverPick('chars', c.tag, stripZhSeries(charZh[c.tag]) || c.name, c.thumb)"
             />
           </div>
         </div>
@@ -487,6 +514,17 @@ watch(() => route.query.series, async (name) => {
     </div>
 
     <TvCategoryManager v-model="showCatMgr" :series-list="seriesData?.series || []" @saved="showSeriesList" />
+
+    <TvCoverPickerModal
+      v-model="showCoverPick"
+      :kind="coverPick?.kind || 'series'"
+      :entity-key="coverPick?.key || ''"
+      :series="curSeries"
+      :title="coverPick?.title || ''"
+      :source="src.param"
+      :current="coverPick?.current || ''"
+      @saved="onCoverSaved"
+    />
   </div>
 </template>
 
