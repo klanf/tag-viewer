@@ -185,6 +185,8 @@ export function getSeries(raw = {}) {
   const p = parseQuery(raw)
   const srcSet = p.srcSet
   const meta = loadUserMeta()
+  /** 「显示无本地图的角色」开关: 关(默认)时 0 图补全角色不计角色数、纯 0 图系列不出现 */
+  const withZero = !!raw.withZero
   const cats = meta.categories
   const [tagCounter, , filtered] = statsFor(srcSet)
 
@@ -223,7 +225,10 @@ export function getSeries(raw = {}) {
     }
     // 合并 custom_chars 里该系列下的补充角色 —— 不算上的话, 列表页的角色数/图片数
     // 会和该系列详情页对不上
-    const extra = (meta.custom_chars[name] || []).filter((t) => !groups.has(charShortName(t)))
+    const extraAll = (meta.custom_chars[name] || []).filter((t) => !groups.has(charShortName(t)))
+    // 开关关(默认): 0 图的补全角色不计入角色数 —— 与 getCharacters 的过滤同一口径,
+    // 不然列表页写 20 个角色、点进详情页只有 6 张卡(老坑, 见 mergeCharVariants 注释)
+    const extra = withZero ? extraAll : extraAll.filter((t) => (tagCounter.get(t) || 0) > 0)
     let extraImgs = 0
     for (const t of extra) extraImgs += tagCounter.get(t) || 0
 
@@ -243,6 +248,9 @@ export function getSeries(raw = {}) {
   const fpm = extraNames.length ? firstPathMap(srcSet) : null
   for (const name of extraNames) {
     const tags = meta.custom_chars[name]
+    const shownTags = withZero ? tags : tags.filter((t) => (tagCounter.get(t) || 0) > 0)
+    // 开关关且该系列一个有图的角色都没有 -> 整个系列跳过(纯补全系列默认不出现)
+    if (!shownTags.length) continue
     let real = 0
     let thumb = ''
     for (const t of tags) {
@@ -250,7 +258,7 @@ export function getSeries(raw = {}) {
       if (!thumb) thumb = fpm.get(t) || ''
     }
     items.push({
-      name, images: real, characters: tags.length,
+      name, images: real, characters: shownTags.length,
       thumb: meta.custom_covers?.series?.[name] || thumb,
       category: cats[name] || guessCategory(name), custom: true,
     })
@@ -317,6 +325,8 @@ export function getCharacters(raw = {}) {
   const p = parseQuery(raw)
   const srcSet = p.srcSet
   const meta = loadUserMeta()
+  /** 「显示无本地图的角色」开关: 默认隐藏 images===0 的补全角色(与 getSeries 同参数同口径) */
+  const withZero = !!raw.withZero
   const ccov = meta.custom_covers?.chars || {}
   const chars = ds.seriesChars.get(series) || new Map()
   const items = []
@@ -364,8 +374,9 @@ export function getCharacters(raw = {}) {
     items.push({ tag, alt: [], name: charShortName(tag), images: c, thumb: ccov[tag] || thumb })
   }
 
-  items.sort((a, b) => b.images - a.images || a.name.localeCompare(b.name, 'en'))
-  return { series, total: items.length, characters: items }
+  const shown = withZero ? items : items.filter((it) => it.images > 0)
+  shown.sort((a, b) => b.images - a.images || a.name.localeCompare(b.name, 'en'))
+  return { series, total: shown.length, characters: shown }
 }
 
 export function getSeriesMeta() { return loadUserMeta() }

@@ -910,6 +910,71 @@ async function main() {
       `选中 ${cartAdd.sel} 个 -> 角标 ${cartAdd.badge} · ${cartAdd.toast}`)
     await cdp.shot('06-series-select')
 
+    /* ---------------- 6b. 无图角色开关(2026-10-06 danbooru 补全) ----------------
+     * custom_chars 补全的 0 图角色默认隐藏, 开关打开才显示(可入购物车)。
+     * 断言自适应夹具: danbooru 补全落库后热门系列必有 0 图角色 -> 严格断言;
+     * 若探针系列恰好一个 0 图的都没有(理论上不会), 退化成"开关不影响数量"的等价断言。 */
+    {
+      const zeroProbe = await cdp.eval(`
+        const inv = (ch, p) => window.tv.invoke(ch, p)
+        const sr = await inv('series:get', {})
+        const name = (sr.series || []).map(s => s.name).find(n => n.includes('blue')) || ''
+        if (!name) return null
+        const off = await inv('characters:get', { series: name })
+        const on = await inv('characters:get', { series: name, withZero: true })
+        return { name, offN: off.total, onN: on.total }
+      `)
+      check('无图角色: IPC withZero=true 角色数 >= 默认(补全角色在后端口径成立)',
+        !!zeroProbe && zeroProbe.onN >= zeroProbe.offN,
+        zeroProbe ? `「${zeroProbe.name}」默认=${zeroProbe.offN} 全量=${zeroProbe.onN}` : '没找到探针系列')
+      const zeroExists = !!zeroProbe && zeroProbe.onN > zeroProbe.offN
+
+      const tog0 = await cdp.eval(`
+        const el = document.querySelector('.cat-bar .zero-tog input')
+        return !!el && !el.checked
+      `)
+      check('无图角色: 开关存在且默认隐藏', tog0)
+
+      // 打开开关 -> loadChars 按新口径重拉; 有 0 图角色时卡片数应精确等于 IPC 全量
+      await cdp.eval(`document.querySelector('.cat-bar .zero-tog input').click(); return true`)
+      let shownOk = false
+      if (zeroExists) {
+        try {
+          await waitFor(cdp, `__t.count('.ecard') === ${zeroProbe.onN}`,
+            { label: '无图角色: 打开开关后卡片数=IPC 全量', timeout: 20000 })
+          shownOk = true
+        } catch { shownOk = false }
+      } else {
+        await sleep(1500)
+        shownOk = (await cdp.eval(`return __t.count('.ecard')`)) === (zeroProbe ? zeroProbe.offN : 0)
+      }
+      const lsOn = await cdp.eval(`return localStorage.getItem('tv_series_show_zero')`)
+      check('无图角色: 打开后按新口径渲染 + 状态已记住', shownOk && lsOn === '1',
+        `卡片渲染=${shownOk} · ls=${lsOn}`)
+
+      // 0 图角色卡带「仅手动补充」角标(仅当真的有 0 图角色)
+      if (zeroExists) {
+        const hasBadge = await cdp.eval(`
+          return [...document.querySelectorAll('.ecard .badge')].some(b => b.textContent.includes('仅手动补充'))
+        `)
+        check('无图角色: 0 图角色卡带「仅手动补充」角标', !!hasBadge)
+      }
+
+      // 关掉还原
+      await cdp.eval(`document.querySelector('.cat-bar .zero-tog input').click(); return true`)
+      let backN = 0
+      if (zeroExists) {
+        try { await waitFor(cdp, `__t.count('.ecard') === ${zeroProbe.offN}`, { label: '无图角色: 关掉后还原', timeout: 20000 }); backN = zeroProbe.offN }
+        catch { backN = await cdp.eval(`return __t.count('.ecard')`) }
+      } else {
+        await sleep(1500)
+        backN = await cdp.eval(`return __t.count('.ecard')`)
+      }
+      const lsOff = await cdp.eval(`return localStorage.getItem('tv_series_show_zero')`)
+      check('无图角色: 关掉后还原 + 记忆清除',
+        (!zeroExists || backN === zeroProbe.offN) && lsOff === '0', `卡片 ${backN} · ls=${lsOff}`)
+    }
+
     /* 进入图片视图 */
     await cdp.eval(`
       const c = document.querySelector('.ecard')
@@ -2108,33 +2173,46 @@ async function main() {
       `)
       /* 存量自愈(2026-10-06 用户报"扫描的图过不了安全模式"): cover_tags 快照是
          8cb3eda 才开始落库的, 真实库 28/28 个扫描夹全缺 —— 老记录的封面整段绕过
-         安全判定。这里模拟一条老记录(清掉快照): 🛡 开着时列表要能**现查
-         images.tags** 把它的封面藏掉, 并把快照幂等写回(下次零开销)。 */
+         安全判定。模拟一条老记录(快照空): 🛡 开着时列表要能**现查 images.tags**
+         把它的封面藏掉, 并把快照幂等写回(下次零开销)。
+         夹具**完全自造**(不依赖库残留): 之前的"从库里挑现成夹"版本连翻车三次 ——
+         无序 LIMIT 1 拿到路径漂移的 cover / 干净图 / as_scan=0 的夹, 哨兵空挂。
+         自造一条 as_scan=1 的夹 + cover 指向真实存在的图 + images 行带 nude
+         (判定只吃 images.tags, 图内容无关), 测完即删。 */
       let oldSim = null
       try {
         const sdb = new DatabaseSync(path.join(DATA_DIR, 'tags.db'))
-        const target = sdb.prepare(
-          "SELECT id, cover, cover_tags FROM folders WHERE cover != '' AND cover_tags != '' LIMIT 1").get()
-        if (target) {
-          sdb.prepare("UPDATE folders SET cover_tags = '' WHERE id = ?").run(target.id)
+        const png = fs.readdirSync(SCAN_DIR).find((f) => f.toLowerCase().endsWith('.png'))
+        if (png) {
+          const cov = path.join(SCAN_DIR, png).replace(/\\/g, '/').toLowerCase()
+          const info = sdb.prepare(`
+            INSERT INTO folders (path, as_scan, recursive, added_at, last_scan_ms, cover, cover_tags)
+            VALUES (?, 1, 1, ?, ?, ?, '')`).run(
+            path.join(SCAN_DIR, 'e2e-sim-old').replace(/\\/g, '/').toLowerCase(),
+            Date.now(), Date.now(), cov)
+          const fid = Number(info.lastInsertRowid)
+          sdb.prepare(`
+            INSERT INTO images (path, src_id, tags, folder_id, gone, tags_src)
+            VALUES (?, 0, '1girl,nude', ?, 0, 'wd14')`).run(cov, fid)
           const probe2 = await cdp.eval(`
             const inv = (ch, p) => window.tv.invoke(ch, p)
             await inv('safety:set', { on: true })
             const f = ((await inv('folders:list', { usage: 'scan' })).folders || [])
-              .find((x) => x.id === ${target.id})
+              .find((x) => x.id === ${fid})
             await inv('safety:set', { on: false })
             return { cover: f ? f.cover : null }
           `)
-          const back = sdb.prepare('SELECT cover_tags FROM folders WHERE id = ?').get(target.id)
+          const back = sdb.prepare('SELECT cover_tags FROM folders WHERE id = ?').get(fid)
           oldSim = { hidden: probe2?.cover === '', backfilled: !!(back && back.cover_tags) }
-          sdb.prepare('UPDATE folders SET cover_tags = ? WHERE id = ?').run(target.cover_tags, target.id)
+          sdb.prepare('DELETE FROM images WHERE folder_id = ?').run(fid)
+          sdb.prepare('DELETE FROM folders WHERE id = ?').run(fid)
         }
         sdb.close()
       } catch { /* 沙箱库打不开就让断言自己报失败 */ }
       check('封面: 老记录(快照缺失)现查 images.tags 藏掉封面并写回快照',
         !!oldSim && oldSim.hidden && oldSim.backfilled,
         oldSim ? `🛡 下 cover 清空=${oldSim.hidden} · 快照已写回=${oldSim.backfilled}`
-               : '沙箱库不可用或没有带封面+快照的夹具')
+               : '沙箱库不可用或夹具构造失败')
       fs.writeFileSync(sTagsPath, sTxt0, 'utf8')
       check('封面: 扫描文件夹封面接安全(1girl 入 core 段后 cover 清空, 关掉恢复)',
         scanProbe && scanProbe.tagged > 0 && scanProbe.hidden === 0 && scanProbe.restored === scanProbe.tagged,

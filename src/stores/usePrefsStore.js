@@ -13,9 +13,16 @@ export const usePrefsStore = defineStore('prefs', () => {
   const bgAuto = ref(readLS(LS.bgAuto.key, LS.bgAuto.old) !== '0')          // 默认开
   const gridPageSize = ref(60)
   const trashAsk = ref(readLS(LS.trashAsk.key, LS.trashAsk.old) !== '0')    // 默认每次删除前询问
+  /**
+   * 系列页「显示无本地图的角色」(2026-10-06) —— 默认关。
+   * 开着时角色列表(和系列列表的角色数统计)会带上 danbooru 补全的 0 图角色,
+   * 这些角色可以入购物车但没有图可看; 默认关是为了列表干净、口径与旧版一致。
+   */
+  const seriesShowZero = ref(readLS(LS.seriesShowZero.key) === '1')
 
   watch(bgAuto, (v) => writeLS(LS.bgAuto.key, v ? '1' : '0'))
   watch(trashAsk, (v) => writeLS(LS.trashAsk.key, v ? '1' : '0'))
+  watch(seriesShowZero, (v) => writeLS(LS.seriesShowZero.key, v ? '1' : '0'))
 
   /**
    * 排序记忆 —— 每个页面各记各的(见 utils/lskey.js 的 sort* 说明)。
@@ -53,7 +60,7 @@ export const usePrefsStore = defineStore('prefs', () => {
   }
 
   return {
-    bgAuto, gridPageSize, trashAsk, maybeAddBg,
+    bgAuto, gridPageSize, trashAsk, maybeAddBg, seriesShowZero,
     sortHome, sortScan, sortSeries, sortTagImgs,
   }
 })

@@ -114,7 +114,8 @@ async function loadSeries() {
   loading.value = true
   listError.value = ''
   try {
-    seriesData.value = await api.series({ source: src.param })
+    // withZero: 「显示无本地图的角色」开关 —— 决定系列列表的角色数统计口径
+    seriesData.value = await api.series({ source: src.param, withZero: prefs.seriesShowZero })
     // 中文名: 一次批量查, 拿到之后卡片与搜索都能用上
     const names = seriesData.value.series.map((s) => s.name)
     if (names.length) {
@@ -162,7 +163,8 @@ const sortedChars = computed(() => {
 async function loadChars(series) {
   charsLoading.value = true
   try {
-    const d = await api.characters({ series, source: src.param })
+    // withZero: 开着时带上 0 图的补全角色(可入购物车, 卡片显示占位封面)
+    const d = await api.characters({ series, source: src.param, withZero: prefs.seriesShowZero })
     charData.value = d.characters || []
     // 角色翻译: key 是完整标签(rio_(blue_archive)), 显示时去掉系列尾巴
     const need = charData.value.map((c) => c.tag)
@@ -313,6 +315,12 @@ watch(() => `${safety.on}|${safety.level}`, () => {
   else if (view.value === 'chars' && curSeries.value) loadChars(curSeries.value)
 })
 
+/* 「显示无本地图的角色」开关切换 -> 重载当前层(角色数统计与卡片都要跟着口径走) */
+watch(() => prefs.seriesShowZero, () => {
+  if (view.value === 'series') loadSeries()
+  else if (view.value === 'chars' && curSeries.value) loadChars(curSeries.value)
+})
+
 onMounted(() => {
   src.load()
   showSeriesList()
@@ -375,6 +383,10 @@ watch(() => route.query.series, async (name) => {
             placeholder="🔍 搜索系列(中/英文)"
             class="kw"
           />
+          <label class="zero-tog" title="显示 danbooru 补全的、本地没有图片的角色(可入购物车)">
+            <input v-model="prefs.seriesShowZero" type="checkbox" />
+            无图角色
+          </label>
           <TvButton size="sm" variant="secondary" @click="showCatMgr = true">⚙️ 分类管理</TvButton>
         </div>
 
@@ -434,6 +446,10 @@ watch(() => route.query.series, async (name) => {
               🛒 购物车({{ cart.count }})
             </TvButton>
           </template>
+          <label class="zero-tog" title="显示 danbooru 补全的、本地没有图片的角色(可入购物车)">
+            <input v-model="prefs.seriesShowZero" type="checkbox" />
+            无图角色
+          </label>
           <TvSelect
             v-model="charSort"
             size="sm"
@@ -561,6 +577,14 @@ watch(() => route.query.series, async (name) => {
 .sel-hint b { color: var(--accent2); }
 .cnt { color: var(--accent); font-size: 16px; }
 .kw { max-width: 260px; }
+/* 「无图角色」开关(两层工具栏各一个, 共用 v-model) */
+.zero-tog {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--muted); cursor: pointer;
+  user-select: none; white-space: nowrap;
+}
+.zero-tog input { accent-color: var(--accent); cursor: pointer; }
+.zero-tog:hover { color: var(--accent); }
 .kw :deep(.tv-input) { padding: 4px 8px; font-size: 12px; }
 
 .scroll { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 4px; }

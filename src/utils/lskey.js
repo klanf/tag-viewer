@@ -57,6 +57,8 @@ export const LS = Object.freeze({
   cartReplaceSet: { key: 'tv_cart_replace_set' },
   /** 标签页「隐藏已ban」开关(2026-10-06) —— 默认开('1'), 读到 '0' 才显示已 ban 词条 */
   tagsHideBanned: { key: 'tv_tags_hide_banned' },
+  /** 系列页「显示无本地图的角色」开关(2026-10-06) —— 默认隐藏('0'), 开('1')才显示 0 图角色 */
+  seriesShowZero: { key: 'tv_series_show_zero' },
   /**
    * 排序记忆(2026-09-23 用户要求: "每次进去都要点一下排序")。
    * **四个页面各存各的** —— 首页常年在"随机"、扫描页常年按修改时间, 混用一个键

@@ -174,7 +174,7 @@ function decorate(row, coverTagsOverride = null) {
  * 被藏图(真实库实测 28/28 全缺, 那轮功能对存量数据等于零生效)。
  * 现查两级兜底:
  *   ① cover 那张图入库过 -> images.tags 就是标签真源(LIKE 粗筛 + 规范化路径
- *      精确比对);
+ *      精确比对; 盘符/前缀漂移的旧路径再按"夹内文件名唯一相等"兜一层);
  *   ② 纯扫描夹(图没入库) -> cover 还在磁盘上, 单图现解析 PNG 提示词(一张
  *      毫秒级, 只在第一次列表时发生)。
  * 查到顺手写回 folders.cover_tags(幂等, 只填空) —— 下次列表零开销。
@@ -194,13 +194,26 @@ function coverTagsBackfill(db, rows) {
     ).all(...params)
   } catch { /* 表缺列/锁住等异常时走纯磁盘解析 */ }
   const pool = new Map()                       // norm(path) -> tags[]
+  const byBase = new Map()                     // folder_id + '|' + basename -> [tags, ...] 同名候选
   for (const it of found) {
-    pool.set(norm(it.path), String(it.tags || '').split(',').map((t) => t.trim()).filter(Boolean))
+    const tags = String(it.tags || '').split(',').map((t) => t.trim()).filter(Boolean)
+    pool.set(norm(it.path), tags)
+    const base = norm(it.path).split('/').pop()
+    const k = Number(it.folder_id) + '|' + base
+    if (!byBase.has(k)) byBase.set(k, [])
+    byBase.get(k).push(tags)
   }
   const out = new Map()                        // folder_id -> tags[]
   const upd = db.prepare("UPDATE folders SET cover_tags = ? WHERE id = ? AND cover_tags = ''")
   for (const r of need) {
     let tags = pool.get(norm(r.cover))
+    if (!tags) {
+      // 路径漂移兜底(2026-10-06 实测): 存量 cover 可能还是**迁移前**的旧路径
+      // (盘符/前缀变了, 旧前缀 vs 新 Syncthing 前缀), 精确比对必 miss。
+      // 同一夹内**文件名完全相等**的候选唯一时, 认定就是同一张图。
+      const cands = byBase.get(Number(r.id) + '|' + norm(r.cover).split('/').pop())
+      if (cands && cands.length === 1) tags = cands[0]
+    }
     if (!tags) {
       try {
         const meta = extractImagePrompt(r.cover)
