@@ -105,7 +105,13 @@ export function doSearch(raw = {}) {
   const seedKey = [p.searchTags.join(','), p.mode, p.match, p.sort, nameQ].join('|')
   applySort(results, p.sort, seedKey, p.seed)
 
-  const page = results.slice(offset, offset + limit)
+  let page = results.slice(offset, offset + limit)
+  // exists=1(2026-10-06): 只返回磁盘上还存在的图 —— 购物车挑封面/自愈换图用它,
+  // 不然会挑到一条库里有记录但文件已被移走/删掉的图, 换上去就是一张 404。
+  // 只过滤当前页(≤limit 条), statSync 开销有上界; total 口径不变(仍是库内命中数)。
+  if (raw.exists === 1 || raw.exists === '1' || raw.exists === true) {
+    page = page.filter((r) => { try { return fs.statSync(r.path).isFile() } catch { return false } })
+  }
   return {
     total: results.length,
     offset,
@@ -507,6 +513,8 @@ export function getCoverCandidates(raw = {}) {
     if (!r) continue
     if (!srcOk(i)) continue
     if (st.on && hiddenAt(r.unsafe, lvl)) continue
+    // 磁盘上已不存在的图不当候选(2026-10-06): 挑上去就是 404, 挑选窗里也不该出现
+    try { if (!fs.statSync(r.path).isFile()) continue } catch { continue }
     total++
     if (out.length < CAP) out.push({ path: r.path, px_w: r.px_w || 0, px_h: r.px_h || 0 })
   }

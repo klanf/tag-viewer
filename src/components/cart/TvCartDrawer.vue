@@ -17,8 +17,8 @@ import { useCartStore } from '@/stores/useCartStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
-import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { api } from '@/utils/api.js'
+import { useRouter } from 'vue-router'
 import { useCartPresetBadge } from '@/composables/useCartPresetBadge.js'
 import TvReplaceSetPicker from '@/components/export/TvReplaceSetPicker.vue'
 
@@ -26,7 +26,7 @@ const cart = useCartStore()
 const ui = useUiStore()
 /** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
 const safety = useSafetyStore()
-const lb = useLightboxStore()
+const router = useRouter()
 
 const showCheckout = ref(false)
 const showHistory = ref(false)
@@ -97,11 +97,11 @@ const showExtra = ref(false)
 const extraItem = ref(null)
 function editExtra(it) { extraItem.value = it; showExtra.value = true }
 
-/** 点击缩略图 -> 看大图 */
-/** 购物车封面的顺序 —— 光箱里可以顺着翻 */
-const thumbList = computed(() => cart.list.map((i) => i.thumb).filter(Boolean))
-
-function openItem(it) { if (it.thumb) lb.open(it.thumb, { list: thumbList.value }) }
+/** 点击条目 -> 去看这个角色的图集(2026-10-06, 与系列页同语义; 光箱从图集里进) */
+function openItem(it) {
+  cart.drawerOpen = false
+  router.push({ name: 'tag-images', params: { tag: it.tag } })
+}
 
 async function revealItem(it) {
   if (!it.thumb) return

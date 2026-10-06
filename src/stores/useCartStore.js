@@ -172,10 +172,16 @@ export const useCartStore = defineStore('cart', () => {
     if (!it || !thumb || it.thumb === thumb) return
     it.thumb = thumb
   }
+  /** 清空某条目的缩略图(2026-10-06: 恢复自动挑选后让 TvCartItem 重新按竖图补挑) */
+  function clearThumb(tag) {
+    const it = items.value[tag]
+    if (!it || !it.thumb) return
+    it.thumb = ''
+  }
 
   return {
     items, list, ordered, count, keys, drawerOpen,
-    has, add, remove, setExtra, setThumb, wildcardLine, toggle, replaceAll, clear, addMany,
+    has, add, remove, setExtra, setThumb, clearThumb, wildcardLine, toggle, replaceAll, clear, addMany,
     exportFile, checkout, replaceSet,
   }
 })

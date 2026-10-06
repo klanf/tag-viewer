@@ -19,7 +19,6 @@ import { useCartStore } from '@/stores/useCartStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
-import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { api } from '@/utils/api.js'
 import { stripZhSeries } from '@/utils/format.js'
 import { useCartPresetBadge } from '@/composables/useCartPresetBadge.js'
@@ -29,7 +28,6 @@ const cart = useCartStore()
 const ui = useUiStore()
 /** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
 const safety = useSafetyStore()
-const lb = useLightboxStore()
 const router = useRouter()
 
 const showCheckout = ref(false)
@@ -128,10 +126,11 @@ const showExtra = ref(false)
 const extraItem = ref(null)
 function editExtra(it) { extraItem.value = it; showExtra.value = true }
 
-/** 购物车封面的顺序 —— 光箱里可以顺着翻 */
-const thumbList = computed(() => cart.list.map((i) => i.thumb).filter(Boolean))
-
-function openItem(it) { if (it.thumb) lb.open(it.thumb, { list: thumbList.value }) }
+/** 点购物车条目 = 去看这个角色的图集(2026-10-06, 与系列页"点角色看图"同语义) ——
+ *  以前是直接开光箱(只看得见封面那一张), 用户指出不合理; 光箱从图集里点任意一张进。 */
+function openItem(it) {
+  router.push({ name: 'tag-images', params: { tag: it.tag } })
+}
 
 async function reveal(it) {
   if (!it.thumb) return

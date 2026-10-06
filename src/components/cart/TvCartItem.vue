@@ -24,9 +24,16 @@
  *      补挑一次(同判据: 最接近 3:4 的真竖图), 挑到就写回。
  * 中文名兜底(2026-10-06): 系列页入车时 name 存的是英文短名(charShortName),
  * 翻译在视图层没跟过来 -> 显示时按 tag 现查一次翻译库(存量条目也吃到)。
+ * 横图残留的三个根因(2026-10-06 第二次反馈): ①候选池只有 60 张(按路径排),
+ * 池里可能一张竖图都没有 -> 扩到 200; ②安全模式的显示换图取"第一张可见的",
+ * 不管横竖 -> 改成可见池里也挑竖图; ③(历史)自愈不看安全, 已在上一轮修。
+ * 换封面 🖼(2026-10-06): 复用系列页的 TvCoverPickerModal(kind='chars'),
+ * 点一张 = 设为该角色的自定义封面(系列页角色卡同步换), 购物车 thumb 同步写回;
+ * 恢复自动挑选 = 清自定义封面 + 清 thumb 重新按竖图补挑。
  */
 import { ref, computed, watch, onMounted } from 'vue'
 import TvImage from '../base/TvImage.vue'
+import TvCoverPickerModal from '../series/TvCoverPickerModal.vue'
 import { api } from '@/utils/api.js'
 import { stripZhSeries } from '@/utils/format.js'
 import { useCartStore } from '@/stores/useCartStore.js'
@@ -66,9 +73,11 @@ async function applySafetyThumb() {
   const list = await fetchCands()
   const hit = list.find((r) => r.path === cur.value)
   if (hit && !safety.isHidden(hit)) return
-  const safe = list.find((r) => !safety.isHidden(r))
+  const safe = list.filter((r) => !safety.isHidden(r))
   safetySwapped = true
-  cur.value = safe?.path || ''           // 一张可见的都没有 -> 空串 = 默认占位封面
+  // 换上的显示图也要**竖图优先**(2026-10-06 用户实测: 换成了第一张可见的, 结果是横图)
+  cur.value = bestPortraitOf(safe, cur.value) || safe[0]?.path || ''
+  //                                        ^ 一张可见的都没有 -> 空串 = 默认占位封面
 }
 watch(() => `${safety.on}|${safety.level}`, applySafetyThumb)
 
@@ -91,7 +100,10 @@ const extras = computed(() => (Array.isArray(props.item.extra) ? props.item.extr
 async function fetchCands() {
   if (cands) return cands
   try {
-    const d = await api.search({ q: props.item.tag, match: 'contains', limit: 60 })
+    // 200 与后端 covers:candidates 的 CAP 同档: 60 张按路径排前 60 的池子
+    // 经常一张竖图都没有, 换竖图就"永远换不动"(2026-10-06 用户实测横图残留的根因之一)。
+    // exists=1: 磁盘上已不存在的图不当候选 —— 换上去就是一张 404。
+    const d = await api.search({ q: props.item.tag, match: 'contains', limit: 200, exists: 1 })
     cands = (d?.results || []).filter((r) => r?.path)
   } catch { cands = [] }
   return cands
@@ -101,11 +113,11 @@ function visibleCands() {
   if (!safety.on || !cands) return cands || []
   return cands.filter((r) => !safety.isHidden(r))
 }
-/** 在候选里挑"最接近 3:4 的真竖图"(h 必须 > w, 否则宁可不换) */
-function bestPortrait(exclude) {
+/** 在指定池里挑"最接近 3:4 的真竖图"(h 必须 > w, 否则宁可不换) */
+function bestPortraitOf(pool, exclude) {
   let best = ''
   let bs = Infinity
-  for (const r of visibleCands()) {
+  for (const r of pool) {
     const w = Number(r.px_w) || 0
     const h = Number(r.px_h) || 0
     if (!(w > 0 && h > 0) || h <= w || r.path === exclude) continue
@@ -114,10 +126,30 @@ function bestPortrait(exclude) {
   }
   return best
 }
+function bestPortrait(exclude) {
+  return bestPortraitOf(visibleCands(), exclude)
+}
 function commitSwap(p) {
   swapped = true
   cur.value = p
   cart.setThumb(props.item.tag, p)   // 写回: 下次进来直接就是这张, 不用再搜
+}
+
+/* ---- 手动换封面(2026-10-06, 与系列页 🖼 同款) ----
+ * 挑选窗复用 TvCoverPickerModal(kind='chars'): 候选与系列页同口径(来源过滤 +
+ * 安全档位过滤), 点一张 = 设为该角色的自定义封面(custom_covers.chars) ——
+ * **系列页的角色卡与购物车一起换**(用户认可的统一口径), 购物车这边同步写回 thumb。
+ * 「恢复自动挑选」清掉自定义封面后, 购物车清 thumb 重新按竖图补挑。 */
+const showCover = ref(false)
+function onCoverSaved(p) {
+  if (p) { commitSwap(p); return }
+  cart.clearThumb(props.item.tag)
+  swapped = false
+  safetySwapped = false
+  ci = 0
+  cands = null
+  cur.value = ''
+  healEmpty()
 }
 
 /** 图片加载成功: 已经是竖图/方图就不折腾; 横图才尝试换竖图。
@@ -191,7 +223,17 @@ async function onFailed() {
       </div>
     </div>
     <button class="edit" title="编辑附加标签(导出时拼在这一行后面)" @click.stop="emit('edit', item)">✏️</button>
+    <button class="cover" title="换这张封面图" @click.stop="showCover = true">🖼️</button>
     <button class="del" title="从购物车移除" @click.stop="emit('remove', item.tag)">✕</button>
+    <TvCoverPickerModal
+      v-model="showCover"
+      kind="chars"
+      :entity-key="item.tag"
+      :series="item.series || ''"
+      :title="nameZh || item.name || item.tag"
+      :current="cur"
+      @saved="onCoverSaved"
+    />
   </div>
 </template>
 
@@ -266,6 +308,19 @@ async function onFailed() {
 .edit:hover { background: var(--accent); }
 .ci.compact .edit { position: static; flex: 0 0 auto; opacity: .55; background: transparent; }
 .ci.compact .edit:hover { opacity: 1; }
+
+/* 换封面按钮: 与 ✏️/✕ 同排再往左一格(与系列卡 🖼 的布局呼应) */
+.cover {
+  position: absolute; top: 6px; right: 62px;
+  width: 24px; height: 24px; border-radius: 5px;
+  background: rgba(10, 13, 18, .85);
+  font-size: 12px; line-height: 1;
+  opacity: 0; transition: opacity var(--t-fast);
+}
+.ci:hover .cover { opacity: 1; }
+.cover:hover { background: var(--accent); }
+.ci.compact .cover { position: static; flex: 0 0 auto; opacity: .55; background: transparent; }
+.ci.compact .cover:hover { opacity: 1; }
 
 .extras {
   display: inline-block; max-width: 100%;

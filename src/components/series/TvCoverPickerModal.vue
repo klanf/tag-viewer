@@ -75,7 +75,8 @@ async function pick(path) {
     const r = await api.coverSet({ kind: props.kind, key: props.entityKey, path })
     if (r?.error) { ui.err(r.error); return }
     ui.ok(`✅ 已设为自定义封面`, 1800)
-    emit('saved')
+    /* saved 带上所选路径: 购物车那边要同步写回自己的 thumb(系列页忽略该参数) */
+    emit('saved', path)
     emit('update:modelValue', false)
   } catch (e) {
     ui.err('设置失败: ' + e.message)
@@ -91,7 +92,7 @@ async function reset() {
     const r = await api.coverSet({ kind: props.kind, key: props.entityKey, path: '' })
     if (r?.error) { ui.err(r.error); return }
     ui.ok('已恢复自动挑选封面', 1800)
-    emit('saved')
+    emit('saved', '')                   // 空串 = 恢复自动挑选(购物车据此重新补挑)
     emit('update:modelValue', false)
   } catch (e) {
     ui.err('恢复失败: ' + e.message)

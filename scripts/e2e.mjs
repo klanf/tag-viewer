@@ -1773,6 +1773,37 @@ async function main() {
     check('购物车: 条目已渲染', cartView.items > 0, `${cartView.count} · ${cartView.groups} 个系列分组`)
     await cdp.shot('11-cart')
 
+    /* 换封面 🖼(2026-10-06): 与系列页同款挑选窗, 点一张 = 自定义封面 + 购物车 thumb 写回。
+     * 挑非当前候选, 判 localStorage 里那条 thumb 真的变了(排除"挑了当前这张"的假绿)。 */
+    const coverPick = await cdp.eval(`
+      const card = document.querySelector('.ci')
+      const coverBtn = card && card.querySelector('.cover')
+      if (!coverBtn) return { ok: false, why: 'no cover btn' }
+      /* 以**被点条目自己的 tag**为键(.ci 的 title 就是 item.tag) —— 不能拿 localStorage
+       * 第一条: 页面第一张卡与购物车插入序的第一条不是同一条(实锤过) */
+      const tag = card.getAttribute('title')
+      const before = JSON.parse(localStorage.getItem('tv_cart') || '{}')
+      const thumbBefore = before[tag] && before[tag].thumb
+      coverBtn.click()
+      for (let i = 0; i < 60 && !document.querySelector('.cand'); i++) await new Promise(r => setTimeout(r, 250))
+      const cands = document.querySelectorAll('.cand')
+      const target = document.querySelector('.cand[data-cur="0"]')
+      if (!target) return { ok: false, why: 'no pickable candidate', n: cands.length }
+      const wantPath = target.dataset.path
+      target.click()
+      for (let i = 0; i < 60 && document.querySelector('.cand'); i++) await new Promise(r => setTimeout(r, 250))
+      const after = JSON.parse(localStorage.getItem('tv_cart') || '{}')
+      return {
+        ok: true, n: cands.length, tag, wantPath, thumbBefore,
+        thumbAfter: after[tag] && after[tag].thumb,
+        changed: (after[tag] && after[tag].thumb) === wantPath && wantPath !== thumbBefore,
+      }
+    `)
+    check('购物车: 条目 🖼 打开挑选窗, 点候选即设为封面并写回 thumb',
+      coverPick.ok && coverPick.n > 0 && coverPick.changed,
+      coverPick.ok ? `候选 ${coverPick.n} 张 · thumb ${String(coverPick.thumbBefore).slice(-18)} -> ${String(coverPick.thumbAfter).slice(-18)}` : coverPick.why)
+    await cdp.shot('11b-cart-cover')
+
     const checkout = await cdp.eval(`
       __t.clickText('.head .tv-btn', '结算')
       await new Promise(r => setTimeout(r, 600))
@@ -1913,10 +1944,16 @@ async function main() {
       `文件 ${cartN1} 行 / 购物车 ${afterCartDel} 个`)
 
     /* 真实入口②: 标签详情页「角色」区的 🛒 —— 用户特意点名的入口。
-       先从购物车条目开大图(条目来自系列页, 那张图必然有角色标签)拿它的路径,
-       再跳到**详情页**点同一个入口 —— 详情页的角色区与光箱共用 useCharCart,
-       但只有详情页那条路是"从标签进来"的, 值得单测一遍。 */
+       2026-10-06 起点购物车条目 = **跳该角色的图片页**(与系列页同语义, 不再直接开光箱),
+       所以先跳图集、再点第一张卡片开光箱(图集里全是这个角色的图, pill 必然有)。 */
     await cdp.eval(`__t.click('.ci'); return true`)
+    await waitFor(cdp, `location.hash.indexOf('#/tags/') === 0 && __t.count('.grid .card') > 0`,
+      { label: '购物车条目跳转标签图片页', timeout: 30000 })
+    const navCheck = await cdp.eval(`return { hash: location.hash, tag: __t.text('.now') }`)
+    check('购物车: 点条目跳到该角色的图片页(不再直接开光箱)',
+      navCheck.hash.indexOf('#/tags/') === 0 && navCheck.tag.length > 0,
+      `${navCheck.hash} · 标签=${navCheck.tag}`)
+    await cdp.eval(`__t.click('.grid .card'); return true`)
     await waitFor(cdp, `__t.count('.lightbox .lb-meta-row .pill.k-char') > 0`, { label: '光箱角色 pill', timeout: 20000 })
     const lbCartClick = await cdp.eval(`
       const ct = document.querySelector('.lightbox .lb-meta-row .pill.k-char .acts .ct')
@@ -1932,9 +1969,10 @@ async function main() {
     `)
     check('购物车预设: 光箱角色 pill 的 🛒 也算"购物车有更新"',
       /* 增删都算(这里是**移出**: 大图是从购物车条目点开的, 那个角色本来就在车里),
-         所以判 |Δ|=1, 不锁方向 —— 锁了就是测试自己的假设, 不是产品行为 */
+         所以判 |Δ|=1, 不锁方向 —— 锁了就是测试自己的假设, 不是产品行为。
+         只判 pending 不判 synced: 点击后延迟导出可能随时开火把 synced 翻回去(时序竞态) */
       lbCartClick.clicked && Math.abs(lbCartClick.after - lbCartClick.before) === 1
-      && lbCartClick.synced === false && lbCartClick.pending === true,
+      && lbCartClick.pending === true,
       `主进程记 ${lbCartClick.before} -> ${lbCartClick.after} · 待导=${lbCartClick.pending}`)
     await cdp.eval(`document.querySelector('.lightbox .lb-close').click(); return true`)
     await sleep(300)
@@ -1957,9 +1995,11 @@ async function main() {
       return { clicked: true, before, after: s.cartCount, synced: s.synced, pending: s.pending }
     `)
     check('购物车预设: **标签详情页**角色 pill 的 🛒 同样触发自动导出(2026-09-29 用户点名)',
-      /* 同一个角色在详情页再点一次 = 与光箱那次**方向相反**, 所以同样只判 |Δ|=1 */
+      /* 同一个角色在详情页再点一次 = 与光箱那次**方向相反**, 所以同样只判 |Δ|=1。
+         只判 pending 不判 synced —— 点击后 400ms 里延迟导出开火会把 synced 翻回 true,
+         这条竞态是 2026-10-06 实测抓到的(前面多等了一会儿, 导出正好落在窗口里) */
       detailCartClick.clicked && Math.abs(detailCartClick.after - detailCartClick.before) === 1
-      && detailCartClick.synced === false,
+      && detailCartClick.pending === true,
       detailCartClick.clicked
         ? `主进程记 ${detailCartClick.before} -> ${detailCartClick.after} · 待导=${detailCartClick.pending}`
         : `详情页没有角色 pill: ${JSON.stringify(detailCartClick)}`)
