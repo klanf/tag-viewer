@@ -583,6 +583,151 @@ async function main() {
     await cdp.eval(`__t.pressEnter('.sug input'); return true`)
     await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '清空后重新搜索', timeout: 30000 })
 
+    /* ---------------- 4b. 搜索框胶囊化 + 多词联想 + 全选(2026-10-06) ----------------
+     * multi 模式契约(只有看板搜索框开 multi; 扫描页空格 AND / 标签页单词搜索不受影响):
+     *   · 敲中/英文逗号 = 当前段升级成胶囊, 输入框只留正在打的段
+     *   · 联想只针对当前段; 选中 = 追加成胶囊, **不自动搜**(结果数原地不变)
+     *   · 「全选」= 当前词匹配到的标签(≤200, 按图片数排序)全部加入; all→any 自动切
+     *     (多标签在 all 下没有交集, 不切必空集)
+     *   · ↑↓ 高亮超出下拉可视区自动跟随滚动; 空输入框 Backspace 删最后一颗胶囊
+     *   · IME 组词中(isComposing)回车不 pick 不 submit
+     * 沙箱库种子 = 真实库副本(harness VACUUM INTO), 「发」在中文翻译索引里命中一堆
+     * 发色/发型, hoshino_(blue_archive) 也真实在库 —— 两组词都有确定答案。
+     */
+    {
+      // (1) IME: 组词中的 Enter(isComposing) 既不选词也不搜索
+      const beforeIme = await cdp.eval(`return __t.text('.result-head b')`)
+      await cdp.eval(`__t.setInput('.sug input', '发'); return true`)
+      await waitFor(cdp, `__t.count('.sug .drop .item') > 0`, { label: '「发」出联想', timeout: 15000 })
+      const chips0 = await cdp.eval(`return __t.count('.sug .tagbox .tv-chip')`)
+      await cdp.eval(`
+        document.querySelector('.sug input')
+          .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }))
+        return true
+      `)
+      await sleep(600)
+      const afterIme = await cdp.eval(`return { chips: __t.count('.sug .tagbox .tv-chip'), total: __t.text('.result-head b') }`)
+      check('multi: IME 组词中的回车既不选词也不搜索',
+        afterIme.chips === chips0 && afterIme.total === beforeIme,
+        `胶囊 ${chips0}->${afterIme.chips}, 总数 ${beforeIme}->${afterIme.total}`)
+      await cdp.eval(`
+        document.querySelector('.sug .clear')
+          .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        return true
+      `)
+      await sleep(200)
+
+      // (2) 多词联想: 逗号升级胶囊 → 第二段联想 → 选中追加不搜 → 回车才搜组合
+      const base = await cdp.eval(`return __t.text('.result-head b')`)
+      await cdp.eval(`
+        __t.setInput('.sug input', 'blue_archive,')
+        await new Promise(r => setTimeout(r, 150))
+        __t.setInput('.sug input', 'hosh')
+        return true
+      `)
+      await waitFor(cdp, `__t.count('.sug .drop .item') > 0`, { label: '第二段联想', timeout: 15000 })
+      const chip1 = await cdp.eval(`return __t.count('.sug .tagbox .tv-chip')`)
+      check('multi: 敲英文逗号后第一段升级为胶囊', chip1 === 1, `胶囊数 ${chip1}`)
+      const picked = await cdp.eval(`
+        const el = [...document.querySelectorAll('.sug .drop .item')]
+          .find((e) => e.textContent.includes('hoshino_(blue_archive)'))
+        if (!el) return null
+        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        return true
+      `)
+      await sleep(400)
+      const st = await cdp.eval(`return {
+        chips: __t.count('.sug .tagbox .tv-chip'),
+        total: __t.text('.result-head b'),
+        val: document.querySelector('.sug input').value }`)
+      check('multi: 选中第二段词追加成胶囊且不自动搜',
+        !!picked && st.chips === 2 && st.total === base && st.val === '',
+        `选中=${!!picked} 胶囊=${st.chips} 总数 ${base}->${st.total} 输入框="${st.val}"`)
+      await cdp.eval(`__t.pressEnter('.sug input'); return true`)
+      await waitFor(cdp, `__t.text('.result-head b') !== ${JSON.stringify(base)}`, { label: '组合搜索结果变化', timeout: 30000 })
+      const combo = await cdp.eval(`return __t.text('.result-head b')`)
+      check('multi: 回车后按组合搜索(结果变化)', combo !== base, `${base} -> ${combo}`)
+      await cdp.eval(`
+        document.querySelector('.sug .clear')
+          .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        return true
+      `)
+      await sleep(200)
+      await cdp.eval(`__t.pressEnter('.sug input'); return true`)
+      await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '清空后回全量', timeout: 30000 })
+
+      // (3) 全选: 「发」→ 匹配标签全部加入(≥3 颗胶囊) + 组合模式自动 all→any
+      await cdp.eval(`__t.setInput('.sug input', '发'); return true`)
+      await waitFor(cdp, `__t.count('.sug .drop .item') > 0`, { label: '「发」出联想(全选)', timeout: 15000 })
+      await cdp.eval(`
+        document.querySelector('.sug .pick-all')
+          .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        return true
+      `)
+      await waitFor(cdp, `__t.count('.sug .tagbox .tv-chip') >= 3`, { label: '全选加入胶囊', timeout: 20000 })
+      const stAll = await cdp.eval(`return {
+        chips: __t.count('.sug .tagbox .tv-chip'),
+        mode: document.querySelector('.home select') ? document.querySelector('.home select').value : '' }`)
+      check('multi: 全选把匹配标签全部加入(≥3) 并自动切到 any',
+        stAll.chips >= 3 && stAll.mode === 'any', `胶囊=${stAll.chips} 模式=${stAll.mode}`)
+      await cdp.eval(`__t.pressEnter('.sug input'); return true`)
+      await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: 'any 组合出结果', timeout: 30000 })
+      // 还原: 组合模式回 all, 清空筛选回全量
+      await cdp.eval(`
+        const sel = document.querySelector('.home select')
+        sel.value = 'all'
+        sel.dispatchEvent(new Event('change', { bubbles: true }))
+        document.querySelector('.sug .clear')
+          .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        return true
+      `)
+      await sleep(300)
+      await cdp.eval(`__t.pressEnter('.sug input'); return true`)
+      await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '还原后回全量', timeout: 30000 })
+
+      // (4) 下拉滚动跟随: ↑↓ 移动高亮超出可视区, .drop 自己滚, 外层不跟
+      await cdp.eval(`__t.setInput('.sug input', 'hair'); return true`)
+      await waitFor(cdp, `__t.count('.sug .drop .item') > 0`, { label: 'hair 联想', timeout: 15000 })
+      const sc0 = await cdp.eval(`return document.querySelector('.sug .drop').scrollTop`)
+      await cdp.eval(`
+        const inp = document.querySelector('.sug input')
+        for (let i = 0; i < 11; i++) {
+          inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+        }
+        return true
+      `)
+      await sleep(300)
+      const sc1 = await cdp.eval(`return document.querySelector('.sug .drop').scrollTop`)
+      check('multi: ↑↓ 高亮超出下拉可视区自动跟随滚动', sc1 > sc0, `scrollTop ${sc0} -> ${sc1}`)
+      // 收尾: Esc 收下拉 + 清空, 不触发搜索(后面的换一批测试以当前网格为基准)
+      await cdp.eval(`
+        document.querySelector('.sug input')
+          .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        document.querySelector('.sug .clear')
+          .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        return true
+      `)
+      await sleep(200)
+
+      // (5) 空输入框 Backspace = 删最后一颗胶囊
+      await cdp.eval(`
+        __t.setInput('.sug input', 'blue_archive,')
+        await new Promise(r => setTimeout(r, 150))
+        return true
+      `)
+      const c1 = await cdp.eval(`return __t.count('.sug .tagbox .tv-chip')`)
+      await cdp.eval(`
+        document.querySelector('.sug input')
+          .dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }))
+        return true
+      `)
+      await sleep(200)
+      const stBs = await cdp.eval(`return { chips: __t.count('.sug .tagbox .tv-chip'), val: document.querySelector('.sug input').value }`)
+      check('multi: 空输入框按 Backspace 删掉最后一颗胶囊',
+        c1 === 1 && stBs.chips === 0 && stBs.val === '',
+        `胶囊 ${c1}->${stBs.chips} 输入框="${stBs.val}"`)
+    }
+
     const p1 = await cdp.eval(`return __t.text('.grid .card .foot')`)
     await cdp.eval(`__t.clickText('.shuffle', '🎲'); return true`)
     await sleep(1200)
@@ -1444,7 +1589,7 @@ async function main() {
       out.tipLinks = document.querySelectorAll('.tip a').length
 
       const left = document.querySelector('.left')
-      left.scrollTop = left.scrollHeight        // 动作区在表单底部, 不滚到底测不到几何
+      left.scrollTop = 0   // 2026-10-06 面板换位: 动作区在侧栏中部, 不滚动也全在可视区
       await sleep(300)
       const caret = document.querySelector('.btns .caret')
       out.caret = !!caret
@@ -1489,7 +1634,7 @@ async function main() {
     check('首页动作区: 下拉与整排同宽且不被侧栏裁切',
       homeBtns.sameWidthAsRow === true && homeBtns.insidePanel === true && homeBtns.inViewport === true,
       `同宽=${homeBtns.sameWidthAsRow} 在侧栏内=${homeBtns.insidePanel} 在视口内=${homeBtns.inViewport}`)
-    check('首页动作区: 箭头随展开态翻转(菜单是向上开的)',
+    check('首页动作区: 箭头随展开态翻转(菜单是向下开的)',
       homeBtns.caretRotated === true, `chev.up = ${homeBtns.caretRotated}`)
     check('首页动作区: 五个导出开关挪进下拉后仍能切换',
       (homeBtns.cbAfter || []).length === 5

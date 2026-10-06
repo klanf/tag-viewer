@@ -306,7 +306,7 @@ let zipped = false
 try {
   // Windows 10 1803+ 自带 bsdtar: -a 按扩展名出 zip, 文件名按 UTF-8 记
   // (Compress-Archive 在 PS5.1 下中文条目名按本机代码页记, 换机器解压会乱码)。
-  // ⚠️ 必须 cwd=outRoot + 相对文件名: bsdtar 把参数里的 "D:\" 冒号当远程主机名
+  // ⚠️ 必须 cwd=outRoot + 相对文件名: bsdtar 把参数里的 "D:\" 冒号当远程主机名 (path-check-ignore: 注释里在描述坑, 非真实路径)
   // ("tar: Cannot connect to D: resolve failed"), 上一版就是这么哑火的。
   const r = spawnSync('tar', ['-a', '-cf', `${NAME}.zip`, '-C', '.', NAME], { cwd: outRoot, stdio: 'inherit' })
   zipped = r.status === 0 && fs.existsSync(zipPath)

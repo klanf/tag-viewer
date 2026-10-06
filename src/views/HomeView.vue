@@ -2,7 +2,7 @@
 /**
  * 看板(首页) —— 原 index.html
  * ==========================
- * 左栏: 来源筛选 + 高频标签/系列分布 + 筛选表单
+ * 左栏: 来源筛选 + 筛选表单 + 高频标签/系列分布(2026-10-06 交换: 筛选提到高频标签上面)
  * 右栏: 结果网格 + 分页
  *
  * 与原版的行为对应关系(逐条对齐, 别改语义):
@@ -82,7 +82,7 @@ const replaceSet = ref('')
 /** 预设弹窗里「新建预设」的初值 = 首页当前筛选条件(建完之后就是快照, 不再联动) */
 const presetSnapshot = computed(() => ({
   source: [...src.selected],
-  q: q.value,
+  q: cleanQ(),
   mode: mode.value,
   match: match.value,
   exclude: '',
@@ -154,7 +154,7 @@ watch(imgPaths, (arr) => { if (homeActive.value && lb.visible) lb.setList(arr) }
 /** 组装查询参数 —— 与后端 parseQuery 的字段名一一对应 */
 function buildQuery(offset = 0) {
   const o = {
-    q: q.value,
+    q: cleanQ(),
     mode: mode.value,
     match: match.value,
     exclude_char: excludeChar.value ? '1' : '0',
@@ -169,8 +169,16 @@ function buildQuery(offset = 0) {
 }
 
 /* ---------------- 搜索 ---------------- */
+/**
+ * q 的规整形态: 按中英文逗号切段、去空、再拼回 —— 输入框里可能留着
+ * 「胶囊, 」的尾逗号(multi 模式组词节奏), 传给后端/写进历史前统一清掉。
+ */
+function cleanQ() {
+  return q.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean).join(', ')
+}
+
 async function doSearch() {
-  const qv = q.value.trim()
+  const qv = cleanQ()
   if (qv) hist.push(qv)
   await feed.search(buildQuery(0))
 }
@@ -202,23 +210,44 @@ async function loadStats() {
 }
 
 /* ---------------- 交互 ---------------- */
-/** 点高频标签: 追加进搜索框(不立刻搜, 让用户还能接着加) */
+/** 点高频标签: 追加进搜索框(不立刻搜, 让用户还能接着加)。
+ * ⚠️ 结尾带**裸逗号**(不要 ", "): multi 输入框的 activeSeg 是最后一段,
+ * 尾随空格会让它变成 " " → Backspace 删胶囊失灵 */
 function addToQ(tag) {
-  const list = q.value ? q.value.split(',').map((s) => s.trim()).filter(Boolean) : []
-  if (!list.includes(tag)) list.push(tag)
-  q.value = list.join(', ')
-  ui.toast(`已加入筛选: ${tag}`, 'info', 1200)
+  const list = q.value ? q.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean) : []
+  const dup = list.includes(tag)
+  if (!dup) list.push(tag)
+  q.value = list.join(',')
+  ui.toast(dup ? `已在筛选中: ${tag}` : `已加入筛选: ${tag}`, 'info', 1200)
+}
+
+/**
+ * 下拉「全选」: 把匹配到的标签全部加入(去重)。
+ * 多个标签在 all(全部命中)下几乎必然空集 —— 没有图能同时带 20 个发色,
+ * 所以自动切到 any 并说明; 用户真的要交集就该只选一个词。
+ * kw 是被展开的那个词(正在打的最后一段): 用匹配结果**替换**它, 不留成胶囊。
+ */
+function onPickMany({ tags, kw }) {
+  const list = q.value ? q.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean) : []
+  if (kw && list.length && list[list.length - 1].toLowerCase() === String(kw).toLowerCase()) list.pop()
+  let added = 0
+  for (const t of tags) {
+    if (!list.includes(t)) { list.push(t); added++ }
+  }
+  q.value = list.length ? list.join(',') + ',' : ''
+  if (!added) { ui.toast('匹配到的标签都已在筛选里', 'info', 1800); return }
+  if (mode.value === 'all' && list.length > 1) {
+    mode.value = 'any'
+    ui.ok(`已加入 ${added} 个标签, 组合模式切到 any(任一命中) —— 多标签全选在 all 下没有交集`, 3600)
+  } else {
+    ui.ok(`已加入 ${added} 个标签`, 1600)
+  }
 }
 
 /** 点系列: 直接搜索(contains 命中角色标签) */
 async function searchSeriesClick(series) {
   q.value = series
   await doSearch()
-}
-
-function pickFromHistory(v) {
-  q.value = v
-  doSearch()
 }
 
 async function onSourceChange() {
@@ -316,39 +345,18 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
         @change="withSource"
       />
 
-      <div class="panel bars-panel">
-        <TvTabs
-          v-model="tab"
-          :tabs="[{ value: 'tags', label: '高频标签' }, { value: 'series', label: '系列分布' }]"
-        />
-        <div class="bars-box">
-          <TvTagBars
-            v-if="tab === 'tags'"
-            :data="stats?.top_tags || []"
-            max-height="380px"
-            @pick="addToQ"
-          />
-          <TvTagBars
-            v-else
-            :data="stats?.top_series || []"
-            max-height="380px"
-            @pick="searchSeriesClick"
-          />
-        </div>
-        <div class="tip">💡 点击标签加入筛选; 点击系列直接查看该系列图片(按数量排序)</div>
-      </div>
-
       <div class="panel">
         <h2>筛选</h2>
 
-        <label class="lab">要搜索的标签(逗号分隔, 如: blue_archive, 1girl)</label>
+        <label class="lab">要搜索的标签(选词/全选加入胶囊; 敲中英文逗号继续下一个词)</label>
         <TvTagSuggestInput
           v-model="q"
+          multi
           history
           :source="src.selected.join(',')"
-          placeholder="blue_archive, 1girl / 输入中文搜索(如: 蔚蓝档案)"
+          placeholder="如: 1girl, blue_archive / 中文: 蔚蓝档案 / 发"
           @submit="doSearch"
-          @pick="pickFromHistory"
+          @pick-many="onPickMany"
         />
 
         <div class="row">
@@ -496,6 +504,28 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 
         <div class="tip">💡 筛选框留空 = 浏览全部图片</div>
       </div>
+
+      <div class="panel bars-panel">
+        <TvTabs
+          v-model="tab"
+          :tabs="[{ value: 'tags', label: '高频标签' }, { value: 'series', label: '系列分布' }]"
+        />
+        <div class="bars-box">
+          <TvTagBars
+            v-if="tab === 'tags'"
+            :data="stats?.top_tags || []"
+            max-height="380px"
+            @pick="addToQ"
+          />
+          <TvTagBars
+            v-else
+            :data="stats?.top_series || []"
+            max-height="380px"
+            @pick="searchSeriesClick"
+          />
+        </div>
+        <div class="tip">💡 点击标签加入筛选; 点击系列直接查看该系列图片(按数量排序)</div>
+      </div>
     </aside>
 
     <!-- ---------------- 右栏 ---------------- -->
@@ -599,17 +629,18 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
   transition: color var(--t-fast), border-color var(--t-fast);
 }
 .caret:hover, .caret.on { color: var(--text); border-color: var(--accent); }
-/* 菜单是向上展开的, 箭头跟着翻, 免得方向感对不上 */
+/* 菜单向下展开, 箭头跟着翻, 免得方向感对不上 */
 .chev { display: inline-block; transition: transform var(--t-fast); }
 .chev.up { transform: rotate(180deg); }
 
 /*
- * 菜单**向上**展开: 动作区在侧栏底部, 往下会撞上 .left 的滚动裁切。
+ * 菜单**向下**展开: 2026-10-06 面板换位后动作区在侧栏中部, 下方是高频标签面板,
+ * 向下有整块空间; 向上开反而会顶出侧栏可视顶沿(几何断言实测抓到)。
  * .menu-off 是透明遮罩, 只负责点外部关闭(固定定位不受 .left 的 overflow 影响)。
  */
 .menu-off { position: fixed; inset: 0; z-index: 55; }
 .menu {
-  position: absolute; right: 0; bottom: calc(100% + 6px); left: 0; z-index: 56;
+  position: absolute; right: 0; top: calc(100% + 6px); left: 0; z-index: 56;
   max-height: 260px; overflow-y: auto;
   padding: 4px;
   background: var(--panel); border: 1px solid var(--border);

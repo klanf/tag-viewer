@@ -215,11 +215,13 @@ function hashString(s) {
  */
 export function parseQuery(raw = {}) {
   const q = (s) => (typeof s === 'string' ? s.trim() : '')
+  // 中英文逗号都算分隔符: 历史里/手工输入可能留有全角逗号, 只按 ',' 切会把
+  // 「a，b」当成一个整体标签 → contains 永远命不中, 表现成"搜不出来"
   const searchTags = q(raw.q)
-    ? q(raw.q).split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
+    ? q(raw.q).split(/[,，]/).map((t) => t.trim().toLowerCase()).filter(Boolean)
     : []
   const excludeTags = q(raw.exclude)
-    ? q(raw.exclude).split(',').map((t) => t.trim()).filter(Boolean)
+    ? q(raw.exclude).split(/[,，]/).map((t) => t.trim()).filter(Boolean)
     : []
   return {
     searchTags,

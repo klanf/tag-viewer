@@ -355,7 +355,8 @@ export function postSeriesMeta(body) {
 
 export function getSuggest(raw = {}) {
   const kw = String(raw.q || '').trim().toLowerCase()
-  const limit = Math.min(clampInt(raw.limit, 12, 1, 50), 50)
+  // 上限 50 → 200: 下拉「全选」一次要拿全当前词的匹配(如「发」能带出几十个发色/发型)
+  const limit = Math.min(clampInt(raw.limit, 12, 1, 200), 200)
   if (!kw) return { suggestions: [] }
 
   const p = parseQuery(raw)
