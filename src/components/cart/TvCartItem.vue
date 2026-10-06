@@ -84,6 +84,10 @@ watch(() => `${safety.on}|${safety.level}`, applySafetyThumb)
 /* ---- 中文名兜底: 入车时的 name 可能是英文短名, 显示时现查一次翻译 ---- */
 const nameZh = ref('')
 onMounted(async () => {
+  /* 挂载时 🛡 可能**已经开着** —— watch 不带 immediate 不会开火, 而购物车 thumb
+   * 是直连文件 URL, 不像网格走搜索过滤, 被藏的图会原样显示出来(2026-10-06
+   * 用户质询抓到的回归: 第七轮改 onMounted 时把这条检查弄丢过)。 */
+  await applySafetyThumb()
   healEmpty()
   const tag = props.item.tag
   if (!tag) return

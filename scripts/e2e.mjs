@@ -4128,6 +4128,122 @@ async function main() {
     const resetOk = (await cdp.eval(`return __safeOn()`)) === false
     check('安全模式数字: 段尾把开关复位, 不留给后面的段', resetOk, resetOk ? '已关' : '还是开着')
 
+    /* ---------------- 11f-2. 购物车封面×安全模式(2026-10-06 用户质询"能过安全模式吗") ----------------
+     * 购物车 thumb 是**直连文件 URL**, 不像网格走搜索过滤 —— store 里存的被藏图
+     * 必须由组件自己换掉。两条入口都要过:
+     *   ① 页面上当场开关(watch 链路);
+     *   ② 🛡 **已开着**时整页刷新 —— watch 不带 immediate, 挂载必须自己查
+     *      (第七轮改 onMounted 时把这条弄丢过, 本段就是那次的回归哨兵)。
+     * 夹具从**主索引**现挑: 扫描页夹具的图不在 search:do 索引里(购物车自愈链路
+     * 走的就是主索引, 第一版用 safety-fixture 的 s3.png 搜不到, 空转失败)。
+     * 挑 unsafe===1(hiddenAt: u===1 时任何档位都藏)且**竖图**的 —— 竖图在 🛡
+     * 关着时不会被 onLoaded 的横图自愈换掉, (a) 才立得住。顺带验「只换显示,
+     * 不写回 store」。
+     */
+    {
+      const cartSnap = await cdp.eval(`return localStorage.getItem('tv_cart')`)
+      const probe = await cdp.eval(`
+        const inv = (ch, p) => window.tv.invoke(ch, p)
+        const r = await inv('search:do', { q: '1girl', match: 'contains', limit: 300, exists: 1 })
+        const rs = r.results || []
+        const hit = rs.find((x) => Number(x.unsafe) === 1 && Number(x.px_h) > Number(x.px_w))
+          || rs.find((x) => Number(x.unsafe) === 1)
+        return hit ? { path: hit.path, w: hit.px_w, h: hit.px_h, u: hit.unsafe } : null
+      `)
+      check('购物车×安全: 从主索引挑到 unsafe=1 的夹具图', !!probe,
+        probe ? `${probe.path} (${probe.w}x${probe.h} · unsafe=${probe.u})` : '前 300 张里没有 unsafe=1')
+      const probeName = probe ? probe.path.split(/[\\/]/).pop() : ''
+      /** 页面侧判定: 该条目当前显示的是不是夹具图(按 img src 里的文件名判,
+          别碰编码后的完整路径)。挂在 window 上 —— (c) 的重载会把它抹掉,
+          所以每次重载后要跟 HELPERS 一起重新注入。 */
+      const HSHOWN = `
+        window.__hShown = () => {
+          const im = document.querySelector('.cart-view .ci[title="1girl"] img')
+          return im ? im.src.includes(${JSON.stringify(probeName)}) : false
+        }
+        return true
+      `
+      const gotoCart = async (label) => {
+        await cdp.eval(`location.hash = '#/cart'; await new Promise((r) => setTimeout(r, 900)); return true`)
+        await waitFor(cdp, `__t.count('.cart-view .ci') > 0`, { label, timeout: 45000 })
+      }
+      const cartSafeClick = async () => cdp.eval(`
+        const b = document.querySelector('.cart-view .safe-tog .st-btn')
+        if (!b) throw new Error('购物车页找不到安全模式开关')
+        b.click()
+        await new Promise((r) => setTimeout(r, 700))
+        return true
+      `)
+      /* 注入 "thumb=被藏图" 的条目(tag=1girl: 同池子里有干净图可换)。
+         注入完必须整页重载 —— 购物车 store 在应用启动时就从 localStorage 吃完了,
+         半路改 localStorage 它不知道。 */
+      await cdp.eval(`
+        const cart = JSON.parse(localStorage.getItem('tv_cart') || '{}')
+        cart['1girl'] = { tag: '1girl', name: '1girl', series: '', images: 1, thumb: ${JSON.stringify(probe ? probe.path : '')} }
+        localStorage.setItem('tv_cart', JSON.stringify(cart))
+        setTimeout(() => location.reload(), 20); return true
+      `)
+      await sleep(900)
+      try { await cdp.eval(HELPERS) } catch { /* 重载后上下文重建, 助手要重新注入 */ }
+      await gotoCart('购物车×安全: 注入条目后重载进购物车')
+      await cdp.eval(HSHOWN)
+
+      /* a) 🛡 关着: 被藏图**应该**照常显示 —— 先证明夹具真的进了购物车, 不误伤 */
+      let offOk = true
+      try {
+        await waitFor(cdp, `__hShown()`, { label: '购物车×安全: 关 🛡 显示夹具图', timeout: 20000 })
+      } catch { offOk = false }
+      check('购物车×安全: 🛡 关着时被藏封面照常显示(夹具就位, 不误伤)', offOk,
+        offOk ? '夹具图已显示' : '夹具图没显示出来')
+
+      /* b) 当场打开 🛡: watch 链路把它换掉 */
+      let watchOk = true
+      try {
+        await cartSafeClick()
+        await waitFor(cdp, `!__hShown()`, { label: '购物车×安全: 开 🛡 后夹具图消失', timeout: 20000 })
+      } catch { watchOk = false }
+      check('购物车×安全: 页面上当场打开 🛡, 被藏封面被换掉(换可见图或占位)', watchOk)
+      const thumbKept = await cdp.eval(
+        `return (JSON.parse(localStorage.getItem('tv_cart') || '{}')['1girl'] || {}).thumb`)
+      const thumbSame = thumbKept === (probe ? probe.path : '')
+      check('购物车×安全: 换的只是**显示**, store 里的 thumb 没被动(关掉就回来)',
+        thumbSame, thumbSame ? 'thumb 原样' : `thumb 变了: ${thumbKept}`)
+
+      /* c) 🛡 开着整页刷新 —— 回归哨兵: 挂载时必须自己查一次安全 */
+      let mountOk = true
+      try {
+        try { await cdp.eval(`setTimeout(() => location.reload(), 20); return true`) } catch { /* 上下文即将销毁 */ }
+        await sleep(900)
+        try { await cdp.eval(HELPERS) } catch { /* 同上: 重载后重新注入 */ }
+        try { await cdp.eval(HSHOWN) } catch { /* __hShown 同样要重挂 */ }
+        await gotoCart('购物车×安全: 🛡 开着刷新回购物车')
+        await waitFor(cdp, `!__hShown()`, { label: '购物车×安全: 刷新后夹具图不出现', timeout: 20000 })
+      } catch { mountOk = false }
+      check('购物车×安全: 🛡 **开着时整页刷新**, 挂载不显示被藏封面(第七轮丢失的检查)',
+        mountOk, mountOk ? '挂载即换掉/占位' : '被藏封面在刷新后直接显示了')
+
+      /* d) 当场关掉: 原图回来 —— 「只换显示」的还原路径 */
+      let restoreOk = true
+      try {
+        await cartSafeClick()
+        await waitFor(cdp, `__hShown()`, { label: '购物车×安全: 关 🛡 后夹具图回来', timeout: 20000 })
+      } catch { restoreOk = false }
+      check('购物车×安全: 关掉 🛡 后原封面立刻回来(展示层过滤, 不动数据)', restoreOk)
+
+      /* 段尾清理: 购物车还原成快照(注入的条目别留给后面), 🛡 复位为关 */
+      await cdp.eval(`
+        const snap = ${JSON.stringify(cartSnap)}
+        if (snap === null) localStorage.removeItem('tv_cart')
+        else localStorage.setItem('tv_cart', snap)
+        return true
+      `)
+      const sf = await cdp.eval(`return !!document.querySelector('.cart-view .safe-tog.on')`)
+      if (sf) await cartSafeClick()
+      check('购物车×安全: 段尾购物车快照已还原、🛡 已复位',
+        (await cdp.eval(`return !!document.querySelector('.cart-view .safe-tog.on')`)) === false,
+        '安全开关已关')
+    }
+
 
     /* ---------------- 11g. 扫描页网格按**每张图自己的**比例排版(2026-09-23 用户报的 bug) ----------------
      *
