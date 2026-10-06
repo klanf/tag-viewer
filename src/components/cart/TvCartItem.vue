@@ -12,13 +12,21 @@
  *     ("默认最好显示竖图")。候选挑选与后端 coverIdx 同判据(|w/h - 0.75| 最小)。
  * 搜索走标签详情页同一出口 api.search({ q: tag, match: 'contains' }), 每个条目
  * 只在"需要换图"时才发一次请求并缓存候选, 不是常驻轮询。
+ *
+ * 安全模式(2026-10-06): 🛡 开着时, 若当前 thumb 是会被藏的图, 就地换成候选里
+ * 第一张可见的 —— **只换显示, 不写回**(展示层过滤, 关掉安全模式原图就回来);
+ * 候选里一张可见的都没有就显示默认占位封面。搜索结果自带 unsafe 标记, 判定
+ * 与其它页面同一份口径(safety.isHidden)。
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import TvImage from '../base/TvImage.vue'
 import { api } from '@/utils/api.js'
 import { useCartStore } from '@/stores/useCartStore.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import coverDefault from '@/assets/cover-default.svg'
 
 const cart = useCartStore()
+const safety = useSafetyStore()
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -31,6 +39,7 @@ const emit = defineEmits(['remove', 'open', 'edit'])
 const cur = ref(props.item.thumb || '')
 const rootEl = ref(null)
 let swapped = false          // 本会话已主动换过(防"换完又评估"循环)
+let safetySwapped = false    // 安全模式换过显示图(期间 onLoaded/onFailed 别插手)
 let cands = null             // 候选缓存: 懒取一次
 let ci = 0                   // 失败轮换游标(候选里第几张)
 let swapping = false         // onLoaded/onFailed 共用锁
@@ -38,6 +47,23 @@ let swapping = false         // onLoaded/onFailed 共用锁
 watch(() => props.item.thumb, (v) => { if (!swapped) cur.value = v || '' })
 
 const thumb = computed(() => cur.value)
+
+/* ---- 安全模式: 封面是被藏的图就换成可见的(只换显示) ---- */
+async function applySafetyThumb() {
+  if (!safety.on) {
+    if (safetySwapped) { safetySwapped = false; if (!swapped) cur.value = props.item.thumb || '' }
+    return
+  }
+  if (!cur.value) return                 // 已经是占位
+  const list = await fetchCands()
+  const hit = list.find((r) => r.path === cur.value)
+  if (hit && !safety.isHidden(hit)) return
+  const safe = list.find((r) => !safety.isHidden(r))
+  safetySwapped = true
+  cur.value = safe?.path || ''           // 一张可见的都没有 -> 空串 = 默认占位封面
+}
+watch(() => `${safety.on}|${safety.level}`, applySafetyThumb)
+onMounted(applySafetyThumb)
 /** 附加标签(如给哥伦比亚追加 closed_eyes): 有就显示在系列行里, 让"这行导出会带啥"一眼可见 */
 const extras = computed(() => (Array.isArray(props.item.extra) ? props.item.extra : []))
 
@@ -69,9 +95,10 @@ function commitSwap(p) {
   cart.setThumb(props.item.tag, p)   // 写回: 下次进来直接就是这张, 不用再搜
 }
 
-/** 图片加载成功: 已经是竖图/方图就不折腾; 横图才尝试换竖图 */
+/** 图片加载成功: 已经是竖图/方图就不折腾; 横图才尝试换竖图。
+ *  ⚠️ 安全模式换上的显示图不参与自愈(那是展示层的事, 别把它的选择写回 store) */
 async function onLoaded() {
-  if (swapped || swapping) return
+  if (swapped || swapping || safetySwapped) return
   const img = rootEl.value?.querySelector('img')
   const w = img?.naturalWidth || 0
   const h = img?.naturalHeight || 0
@@ -86,7 +113,7 @@ async function onLoaded() {
 
 /** 图片加载失败(重试 2 次后): 换下一张候选; 一张都没有就空占位, 别挂着 ⚠ */
 async function onFailed() {
-  if (swapping) return
+  if (swapping || safetySwapped) return
   swapping = true
   try {
     const list = await fetchCands()
@@ -113,7 +140,10 @@ async function onFailed() {
         @loaded="onLoaded"
         @failed="onFailed"
       />
-      <div v-else class="ph" />
+      <div v-else class="ph">
+        <img :src="coverDefault" alt="" class="ph-img">
+        <span class="ph-txt">封面已隐藏</span>
+      </div>
     </div>
     <div class="info">
       <div class="name">{{ item.name || item.tag }}</div>
@@ -150,7 +180,15 @@ async function onFailed() {
 .ci.compact .thumb { width: 44px; flex: 0 0 44px; }
 .ci.compact .thumb :deep(.tv-img) { border-radius: 4px; }
 
-.ph { aspect-ratio: 9 / 16; background: var(--img-bg); }
+.ph { aspect-ratio: 9 / 16; background: var(--img-bg); position: relative; }
+.ph-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .5; }
+.ph-txt {
+  position: absolute; z-index: 1; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--faint); font-size: 11px; white-space: nowrap;
+  background: rgba(10, 13, 18, .55);
+  padding: 2px 8px; border-radius: 4px;
+}
 
 .info { padding: 7px 10px 9px; min-width: 0; }
 .ci.compact .info { padding: 0; flex: 1; }

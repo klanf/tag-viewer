@@ -28,6 +28,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { dataFile } from './workspace.js'
 import { scanFolder, invalidateScanCache } from './scan.js'
+import { loadSafetyState, safetyMatcher, unsafeLevelOf, hiddenAt } from './safety.js'
 import { openDb, normalizeImagePath, upsertFolder, folderRows, folderBaseName, folderNameMap } from './store.js'
 
 /** 兼容期的文件名 —— 现在由 paths.js 的 DATA_ROUTE 路由到 user/folders.json */
@@ -71,12 +72,16 @@ function statsOf(r) {
   }
 }
 
-/** 封面: 优先"有提示词的第一张", 否则第一张 */
+/**
+ * 封面: 优先"有提示词的第一张", 否则第一张。返回整个 item —— 调用方要把
+ * path 和它的标签快照(cover_tags)一起落库: 列表时用**当前**安全规则现算这张
+ * 封面会不会被藏(只存算好的档位会在规则改动后失真)。
+ */
 function pickCover(r) {
   const items = r.items || []
-  const hit = items.find((it) => it.tags && it.tags.length) || items[0]
-  return hit?.path || ''
+  return items.find((it) => it.tags && it.tags.length) || items[0] || null
 }
+const coverTagsJson = (cov) => JSON.stringify(cov?.tags || [])
 
 /**
  * DB 行 -> 前端用的对象。
@@ -84,6 +89,19 @@ function pickCover(r) {
  * 因为扫描页的模板与断言都在按这些名字取; 新字段(用途开关 / 入库图数)往后加。
  */
 function decorate(row) {
+  // 安全模式: 封面图若按**当前**档位会被藏, 就不给图(前端显示默认占位封面)。
+  // 判定用落库时的标签快照现算 —— 规则/档位改了都跟得上。老记录没有快照(空串)
+  // 不误伤, 重新扫描一次就有了。
+  let cover = row.cover || ''
+  if (cover && row.cover_tags) {
+    try {
+      const tags = JSON.parse(row.cover_tags)
+      if (Array.isArray(tags) && tags.length) {
+        const st = loadSafetyState()
+        if (st.on && hiddenAt(unsafeLevelOf(tags, safetyMatcher()), st.level)) cover = ''
+      }
+    } catch { /* 坏 JSON 不误伤 */ }
+  }
   return {
     id: Number(row.id),
     path: row.path,
@@ -98,7 +116,8 @@ function decorate(row) {
     recursive: !!row.recursive,
     added_at: Number(row.added_at) || 0,
     last_scan: Number(row.last_scan_ms) || 0,
-    cover: row.cover || '',
+    cover,
+    cover_tags: row.cover_tags || '',
     note: row.note || '',
     stats: row.stats_json ? safeParse(row.stats_json) : null,
     images: Number(row.images || 0),          // 库内已有的图片记录数
@@ -160,6 +179,7 @@ export async function addFolder(raw = {}, onProgress = null) {
 
   const r = await scanFolder({ path: p, recursive, force: true }, onProgress)
   if (r?.error) return { error: r.error }
+  const cov = pickCover(r)
 
   upsertFolder(db, {
     path: p,
@@ -172,7 +192,8 @@ export async function addFolder(raw = {}, onProgress = null) {
     auto_tag: raw.auto_tag !== undefined ? !!raw.auto_tag : (before ? !!before.auto_tag : true),
     last_scan_ms: Date.now(),
     stats: statsOf(r),
-    cover: pickCover(r),
+    cover: cov?.path || '',
+    cover_tags: coverTagsJson(cov),
   })
   const row = rowByPath(db, p)
   return { ok: true, added: !before, folder: decorate({ ...row, images: imagesOf(db, row.id) }), result: r }
@@ -269,9 +290,11 @@ export async function rescanFolder(raw = {}, onProgress = null) {
     : !!rec.recursive
   const r = await scanFolder({ path: p, recursive, force: true }, onProgress)
   if (r?.error) return { error: r.error }
+  const cov = pickCover(r)
 
   upsertFolder(db, {
-    path: p, recursive, last_scan_ms: Date.now(), stats: statsOf(r), cover: pickCover(r),
+    path: p, recursive, last_scan_ms: Date.now(), stats: statsOf(r),
+    cover: cov?.path || '', cover_tags: coverTagsJson(cov),
   })
   return { ok: true, folder: decorate({ ...rowByPath(db, p), images: imagesOf(db, rec.id) }), result: r }
 }
@@ -301,11 +324,12 @@ export async function openFolder(raw = {}, onProgress = null) {
 
   // 顺手更新统计与"上次打开时间"(封面只在还没有时补)
   if (rec) {
+    const cov = rec.cover ? null : pickCover(r)
     upsertFolder(db, {
       path: p,
       last_scan_ms: Date.now(),
       stats: statsOf(r),
-      ...(rec.cover ? {} : { cover: pickCover(r) }),
+      ...(cov ? { cover: cov.path || '', cover_tags: coverTagsJson(cov) } : {}),
     })
   }
 

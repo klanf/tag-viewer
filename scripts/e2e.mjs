@@ -749,6 +749,19 @@ async function main() {
       await sleep(400)
     }
 
+    /* ---------------- 4d. 搜索按钮旁的「✕ 清空」(2026-10-06) ---------------- */
+    {
+      const allTotal = await cdp.eval(`return __t.text('.result-head b')`)
+      await cdp.eval(`__t.setInput('.sug input', 'blue_archive'); __t.pressEnter('.sug input'); return true`)
+      await waitFor(cdp, `__t.text('.result-head b') !== ${JSON.stringify(allTotal)}`,
+        { label: '先搜一个词', timeout: 30000 })
+      await cdp.eval(`__t.clickText('.btns .tv-btn', '清空'); return true`)
+      await waitFor(cdp, `__t.text('.result-head b') === ${JSON.stringify(allTotal)}`,
+        { label: '清空后回全量', timeout: 30000 })
+      const q = await cdp.eval(`return document.querySelector('.sug input').value`)
+      check('看板: 「✕ 清空」按钮清空搜索词并回到全部图片', q === '', `q="${q}" · 总数=${allTotal}`)
+    }
+
     const p1 = await cdp.eval(`return __t.text('.grid .card .foot')`)
     await cdp.eval(`__t.clickText('.shuffle', '🎲'); return true`)
     await sleep(1200)
@@ -2030,6 +2043,36 @@ async function main() {
     await sleep(2000)
     const dup = await cdp.eval(`return __t.count('.scan-view .grid.folders .ecard')`)
     check('文件夹库: 重复添加不产生重复卡片', dup === 1, `${dup} 张`)
+
+    /* 扫描文件夹封面接安全模式(2026-10-06): 把夹具封面图的标签(1girl)临时加进 core 段,
+     * 🛡 开着时 folders:list 的 cover 应清空(前端显示默认占位封面), 关掉恢复。
+     * 直接改沙箱 safety_tags.txt 再走 IPC —— safetyMatcher 按 mtime 重读, 无需重启。 */
+    {
+      const sTagsPath = path.join(DATA_DIR, 'safety_tags.txt')
+      const sTxt0 = fs.readFileSync(sTagsPath, 'utf8')
+      // ⚠️ 文件头注释里也写着「# [core]」, 必须按整行锚定真实段标记(和解析器同款坑)
+      fs.writeFileSync(sTagsPath, sTxt0.replace(/^\[core\]$/im, '[core]\n1girl'), 'utf8')
+      const scanProbe = await cdp.eval(`
+        const inv = (ch, p) => window.tv.invoke(ch, p)
+        await inv('safety:set', { on: true })
+        const lst = await inv('folders:list', { usage: 'scan' })
+        const fs2 = lst.folders || []
+        const out = {
+          tagged: fs2.filter((f) => f.cover_tags).length,
+          hidden: fs2.filter((f) => f.cover).length,
+        }
+        await inv('safety:set', { on: false })
+        const lst2 = await inv('folders:list', { usage: 'scan' })
+        out.restored = (lst2.folders || []).filter((f) => f.cover).length
+        return out
+      `)
+      fs.writeFileSync(sTagsPath, sTxt0, 'utf8')
+      check('封面: 扫描文件夹封面接安全(1girl 入 core 段后 cover 清空, 关掉恢复)',
+        scanProbe && scanProbe.tagged > 0 && scanProbe.hidden === 0 && scanProbe.restored === scanProbe.tagged,
+        scanProbe ? `带标签快照=${scanProbe.tagged} · 🛡 下有封面=${scanProbe.hidden} · 关后恢复=${scanProbe.restored}` : '无文件夹')
+      // 开关还原后再让页面列表重拉一次(它 watch 的是 store, 上面绕过了渲染层)
+      await sleep(600)
+    }
 
     // 点开文件夹 -> 二级页面
     await cdp.eval(`__t.click('.scan-view .grid.folders .ecard'); return true`)

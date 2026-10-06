@@ -8,6 +8,9 @@
  */
 import { computed } from 'vue'
 import TvImage from '../base/TvImage.vue'
+import coverDefault from '@/assets/cover-default.svg'
+
+/** 没有封面时的默认占位图(2026-10-06): 安全模式藏掉封面 / 库外图没扫出来 都用它 */
 
 const props = defineProps({
   /** 主标题(中文名 / 角色短名) */
@@ -34,6 +37,8 @@ const props = defineProps({
   thumbWidth: { type: Number, default: 300 },
   /** 显示「设封面」按钮(系列页两张卡都开; 与购物车按钮同款悬停显形) */
   coverable: { type: Boolean, default: false },
+  /** 无封面时的占位文案 */
+  phText: { type: String, default: '暂无封面' },
 })
 const emit = defineEmits(['open', 'toggle-cart', 'toggle-select', 'cover'])
 
@@ -74,7 +79,10 @@ const hasThumb = computed(() => !!props.thumb)
     </span>
 
     <TvImage v-if="hasThumb" :path="thumb" :width="thumbWidth" ratio="3 / 4" :alt="title" />
-    <div v-else class="ph">无预览图</div>
+    <div v-else class="ph">
+      <img :src="coverDefault" alt="" class="ph-img">
+      <span class="ph-txt">{{ phText }}</span>
+    </div>
 
     <div class="txt">
       <div class="name" :title="title">{{ title || subtitle }}</div>
@@ -151,8 +159,18 @@ const hasThumb = computed(() => !!props.thumb)
 
 .ph {
   aspect-ratio: 3 / 4;
+  position: relative;
   display: flex; align-items: center; justify-content: center;
-  background: var(--img-bg); color: var(--faint); font-size: 11px;
+  background: var(--img-bg);
+  flex-direction: column;
+  gap: 6px;
+}
+.ph-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .5; }
+.ph-txt {
+  position: relative; z-index: 1;
+  color: var(--faint); font-size: 11px;
+  background: rgba(10, 13, 18, .55);
+  padding: 2px 8px; border-radius: 4px;
 }
 
 .txt { padding: 6px 8px 8px; }

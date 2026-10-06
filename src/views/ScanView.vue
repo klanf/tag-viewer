@@ -530,6 +530,10 @@ watch(filterKw, () => {
   page.value = 1
   document.querySelector('.scan-body .result-scroll')?.scrollTo({ top: 0 })
 })
+/* 🛡 开关/档位一变, 文件夹列表要重拉: 封面是主进程按当前档位给的
+   (封面图会被藏的文件夹直接不给 cover, 显示默认占位封面)。
+   图片层(items)走 safety.filterItems 即时过滤, 不用重查。 */
+watch(() => `${safety.on}|${safety.level}`, () => { loadFolders() })
 watch(sentinel, (el) => {
   gridOb?.disconnect()
   if (!el) return

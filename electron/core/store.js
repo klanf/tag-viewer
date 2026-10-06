@@ -116,6 +116,10 @@ const ADDITIVE_COLS = [
   // 真源是 DB 之后, 这份统计必须跟着登记表一起存 —— 否则卡片要么显示不出来,
   // 要么得为了几个数字把每个目录重新扫一遍。
   ['folders', 'stats_json', "TEXT NOT NULL DEFAULT ''"],
+  // folders 表: 封面图的标签快照(JSON 数组, 2026-10-06)。列表时用**当前**安全规则
+  // 现算这张封面会不会被藏 —— 只存"当时算好的档位"会在规则改了之后失真。
+  // 老记录没有它(空串)不误伤, 重新扫描一次就有了。
+  ['folders', 'cover_tags', "TEXT NOT NULL DEFAULT ''"],
   // images 表: 像素尺寸(2026-09-23)。卡片要按图片真实比例渲染, 系列封面要
   // 「优先挑竖图」, 两件事都得先知道每张图多宽多高。
   //
@@ -353,7 +357,7 @@ export function buildFoldersFromSources(db, onProgress = () => {}) {
  * @param {object} db
  * @param {{path:string, label?:string, as_source?:boolean, as_scan?:boolean,
  *          recursive?:boolean, auto_tag?:boolean, last_scan_ms?:number,
- *          stats?:object|null, cover?:string, note?:string, added_at?:number}} f
+ *          stats?:object|null, cover?:string, cover_tags?:string, note?:string, added_at?:number}} f
  * @returns {{id:number, path:string, created:boolean}}
  */
 export function upsertFolder(db, f) {
@@ -365,8 +369,8 @@ export function upsertFolder(db, f) {
   if (!cur) {
     const r = db.prepare(`
       INSERT INTO folders (path, label, as_source, as_scan, recursive, auto_tag,
-                           added_at, last_scan_ms, cover, note, stats_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           added_at, last_scan_ms, cover, cover_tags, note, stats_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       p,
       String(f.label || ''),
@@ -377,6 +381,7 @@ export function upsertFolder(db, f) {
       Number(f.added_at) || now,
       Number(f.last_scan_ms) || 0,
       String(f.cover || ''),
+      String(f.cover_tags || ''),
       String(f.note || ''),
       f.stats ? JSON.stringify(f.stats) : '',
     )
@@ -394,6 +399,7 @@ export function upsertFolder(db, f) {
   if (f.last_scan_ms !== undefined) put('last_scan_ms', Number(f.last_scan_ms) || 0)
   if (f.stats !== undefined) put('stats_json', f.stats ? JSON.stringify(f.stats) : '')
   if (f.cover !== undefined && String(f.cover) !== '') put('cover', String(f.cover))
+  if (f.cover_tags !== undefined) put('cover_tags', String(f.cover_tags || ''))
   if (f.note !== undefined) put('note', String(f.note).slice(0, 300))
   if (sets.length) {
     args.push(Number(cur.id))

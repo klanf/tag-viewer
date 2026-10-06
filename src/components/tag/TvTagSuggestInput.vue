@@ -421,6 +421,7 @@ defineExpose({ focus: () => input.value?.focus(), hide })
             v-for="h in histItems"
             :key="h"
             class="item h"
+            :title="h"
             @mousedown.prevent="() => { emit('update:modelValue', h); submit() }"
           >
             <span class="h-ico">🔍</span>
@@ -495,10 +496,11 @@ defineExpose({ focus: () => input.value?.focus(), hide })
 .tagbox .chip { max-width: 100%; }
 .clear {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
-  color: var(--muted); font-size: 11px; line-height: 1;
-  padding: 3px 4px; border-radius: 3px; cursor: pointer;
+  /* 常态就是红的 —— 灰色太不显眼, 用户在全选了一堆词之后找不到它(2026-10-06 反馈) */
+  color: var(--danger, #e5484d); font-size: 12px; line-height: 1;
+  padding: 3px 5px; border-radius: 3px; cursor: pointer;
 }
-.clear:hover { color: #f66; background: rgba(255, 60, 60, .14); }
+.clear:hover { background: rgba(255, 60, 60, .16); }
 
 .drop {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 120;
@@ -532,13 +534,17 @@ defineExpose({ focus: () => input.value?.focus(), hide })
 }
 .pick-all:hover { background: var(--panel2); }
 
-.item.h .h-ico { font-size: 11px; opacity: .7; }
-.item.h .h-txt { flex: 1; color: var(--text); }
+.item.h .h-ico { font-size: 11px; opacity: .7; flex: 0 0 auto; }
+.item.h .h-txt {
+  flex: 1; color: var(--text); min-width: 0;
+  /* 「全选」会把一大串标签存进历史, 不截断的话删除按钮会被顶出可视区(2026-10-06 反馈) */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .h-head {
   padding: 6px 12px 4px; font-size: 11px; color: var(--faint);
   border-bottom: 1px solid var(--border); margin-bottom: 2px;
 }
-.h-rm { color: var(--muted); font-size: 11px; padding: 0 4px; border-radius: 3px; }
+.h-rm { color: var(--muted); font-size: 11px; padding: 0 4px; border-radius: 3px; flex: 0 0 auto; }
 .h-rm:hover { color: #f66; background: rgba(255, 60, 60, .14); }
 .h-clear {
   padding: 7px 12px; text-align: center; font-size: 12px; color: var(--muted);

@@ -183,6 +183,12 @@ async function doSearch() {
   await feed.search(buildQuery(0))
 }
 
+/** 「✕ 清空」: 搜索词整个丢掉, 回到浏览全部(全选了一大串词之后的最快退路) */
+async function clearSearch() {
+  q.value = ''
+  await doSearch()
+}
+
 /** 文件名过滤: 不进标签搜索历史, 防抖后自动生效 */
 function applyNameFilter() { feed.search(buildQuery(0)) }
 let nameTimer = null
@@ -411,6 +417,11 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
         <div class="btns">
           <div class="brow">
             <TvButton variant="primary" @click="doSearch">🔍 搜索</TvButton>
+            <TvButton
+              variant="ghost"
+              title="清空搜索词并回到全部图片"
+              @click="clearSearch"
+            >✕ 清空</TvButton>
           </div>
 
           <div class="brow">
