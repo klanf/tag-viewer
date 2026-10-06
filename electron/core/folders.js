@@ -73,13 +73,46 @@ function statsOf(r) {
 }
 
 /**
- * 封面: 优先"有提示词的第一张", 否则第一张。返回整个 item —— 调用方要把
+ * 封面: 优先"有提示词的图里最接近 3:4 的那张"(竖图偏好, 2026-10-06), 没有尺寸
+ * 信息时回落"有提示词的第一张", 否则第一张。返回整个 item —— 调用方要把
  * path 和它的标签快照(cover_tags)一起落库: 列表时用**当前**安全规则现算这张
  * 封面会不会被藏(只存算好的档位会在规则改动后失真)。
+ *
+ * 尺寸哪来: 扫描结果(scan.js 的 items)不带像素尺寸, 但扫描夹里已入库的图在
+ * images 表有 px_w/px_h —— 调用方把 dimsMapFor(db, folderId) 的结果传进来,
+ * 按**规范路径**对上。没入库/老库没尺寸列的条目不参与竞争, 行为与从前一致。
+ * 判据与 query.js 的 coverIdx 同源(|w/h - 0.75| 最小, 同分取最早的), 卡片容器
+ * 是 3/4, 横图封面会被 object-fit: cover 裁掉大半。
  */
-function pickCover(r) {
+function pickCover(r, dims) {
   const items = r.items || []
-  return items.find((it) => it.tags && it.tags.length) || items[0] || null
+  const withTags = items.filter((it) => it.tags && it.tags.length)
+  const pool = withTags.length ? withTags : items
+  if (!pool.length) return null
+  if (dims && dims.size) {
+    let best = null
+    let bestScore = Infinity
+    for (const it of pool) {
+      const d = dims.get(normalizeImagePath(it.path))
+      if (!d || !(d.w > 0) || !(d.h > 0)) continue
+      const score = Math.abs(d.w / d.h - 0.75)
+      if (score < bestScore) { bestScore = score; best = it }
+    }
+    if (best) return best
+  }
+  return pool[0]
+}
+
+/** 某登记夹已入库图片的真实尺寸(规范路径 -> {w,h}), 供 pickCover 挑竖图用 */
+function dimsMapFor(db, folderId) {
+  const m = new Map()
+  if (!folderId) return m
+  let rows
+  try {
+    rows = db.prepare('SELECT path, px_w, px_h FROM images WHERE folder_id = ? AND px_w > 0 AND px_h > 0').all(folderId)
+  } catch { return m }          // 老库没有 px_w/px_h 列: 回落无尺寸行为
+  for (const r of rows || []) m.set(normalizeImagePath(r.path), { w: Number(r.px_w), h: Number(r.px_h) })
+  return m
 }
 const coverTagsJson = (cov) => JSON.stringify(cov?.tags || [])
 
@@ -179,7 +212,7 @@ export async function addFolder(raw = {}, onProgress = null) {
 
   const r = await scanFolder({ path: p, recursive, force: true }, onProgress)
   if (r?.error) return { error: r.error }
-  const cov = pickCover(r)
+  const cov = pickCover(r, dimsMapFor(db, before?.id))
 
   upsertFolder(db, {
     path: p,
@@ -290,7 +323,7 @@ export async function rescanFolder(raw = {}, onProgress = null) {
     : !!rec.recursive
   const r = await scanFolder({ path: p, recursive, force: true }, onProgress)
   if (r?.error) return { error: r.error }
-  const cov = pickCover(r)
+  const cov = pickCover(r, dimsMapFor(db, rec.id))
 
   upsertFolder(db, {
     path: p, recursive, last_scan_ms: Date.now(), stats: statsOf(r),
@@ -324,7 +357,7 @@ export async function openFolder(raw = {}, onProgress = null) {
 
   // 顺手更新统计与"上次打开时间"(封面只在还没有时补)
   if (rec) {
-    const cov = rec.cover ? null : pickCover(r)
+    const cov = rec.cover ? null : pickCover(r, dimsMapFor(db, rec.id))
     upsertFolder(db, {
       path: p,
       last_scan_ms: Date.now(),

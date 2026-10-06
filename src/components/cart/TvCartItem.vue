@@ -17,10 +17,18 @@
  * 第一张可见的 —— **只换显示, 不写回**(展示层过滤, 关掉安全模式原图就回来);
  * 候选里一张可见的都没有就显示默认占位封面。搜索结果自带 unsafe 标记, 判定
  * 与其它页面同一份口径(safety.isHidden)。
+ * 同轮补两处(用户反馈"封面要竖图、要符合安全模式"):
+ *   ① 自愈换图(横图换竖图/失败轮换)原来**不看安全**, 会把被藏的图写回 store
+ *      -> 挑候选时先把会被藏的剔掉(安全开着才剔, 关着行为不变);
+ *   ② 光箱/标签页 pill 入车的条目**没有 thumb**, 一直是占位图 -> 进购物车后
+ *      补挑一次(同判据: 最接近 3:4 的真竖图), 挑到就写回。
+ * 中文名兜底(2026-10-06): 系列页入车时 name 存的是英文短名(charShortName),
+ * 翻译在视图层没跟过来 -> 显示时按 tag 现查一次翻译库(存量条目也吃到)。
  */
 import { ref, computed, watch, onMounted } from 'vue'
 import TvImage from '../base/TvImage.vue'
 import { api } from '@/utils/api.js'
+import { stripZhSeries } from '@/utils/format.js'
 import { useCartStore } from '@/stores/useCartStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import coverDefault from '@/assets/cover-default.svg'
@@ -63,7 +71,19 @@ async function applySafetyThumb() {
   cur.value = safe?.path || ''           // 一张可见的都没有 -> 空串 = 默认占位封面
 }
 watch(() => `${safety.on}|${safety.level}`, applySafetyThumb)
-onMounted(applySafetyThumb)
+
+/* ---- 中文名兜底: 入车时的 name 可能是英文短名, 显示时现查一次翻译 ---- */
+const nameZh = ref('')
+onMounted(async () => {
+  healEmpty()
+  const tag = props.item.tag
+  if (!tag) return
+  try {
+    const m = await api.translate([tag])
+    const zh = stripZhSeries(m?.[tag] || '')
+    if (zh && zh !== tag) nameZh.value = zh
+  } catch { /* 没翻译库也能用 */ }
+})
 /** 附加标签(如给哥伦比亚追加 closed_eyes): 有就显示在系列行里, 让"这行导出会带啥"一眼可见 */
 const extras = computed(() => (Array.isArray(props.item.extra) ? props.item.extra : []))
 
@@ -76,11 +96,16 @@ async function fetchCands() {
   } catch { cands = [] }
   return cands
 }
+/** 候选挑选池: 安全模式开着时, 会被藏的图不参与挑选(别把看不见的图写回 store) */
+function visibleCands() {
+  if (!safety.on || !cands) return cands || []
+  return cands.filter((r) => !safety.isHidden(r))
+}
 /** 在候选里挑"最接近 3:4 的真竖图"(h 必须 > w, 否则宁可不换) */
 function bestPortrait(exclude) {
   let best = ''
   let bs = Infinity
-  for (const r of cands || []) {
+  for (const r of visibleCands()) {
     const w = Number(r.px_w) || 0
     const h = Number(r.px_h) || 0
     if (!(w > 0 && h > 0) || h <= w || r.path === exclude) continue
@@ -111,6 +136,17 @@ async function onLoaded() {
   } finally { swapping = false }
 }
 
+/** 无封面补挑: pill 入车的条目没有 thumb(一直占位图), 进购物车后补挑一次 */
+async function healEmpty() {
+  if (cur.value || swapped) return
+  swapping = true
+  try {
+    await fetchCands()
+    const p = bestPortrait('')
+    if (p) commitSwap(p)
+  } finally { swapping = false }
+}
+
 /** 图片加载失败(重试 2 次后): 换下一张候选; 一张都没有就空占位, 别挂着 ⚠ */
 async function onFailed() {
   if (swapping || safetySwapped) return
@@ -118,9 +154,10 @@ async function onFailed() {
   try {
     const list = await fetchCands()
     while (ci < list.length) {
-      const p = list[ci++].path
-      if (p === cur.value) continue
-      commitSwap(p)
+      const r = list[ci++]
+      if (safety.on && safety.isHidden(r)) continue   // 被藏的图不换上来
+      if (r.path === cur.value) continue
+      commitSwap(r.path)
       return                          // 换上了, 成败交给下一轮 loaded/failed
     }
     cur.value = ''
@@ -146,7 +183,7 @@ async function onFailed() {
       </div>
     </div>
     <div class="info">
-      <div class="name">{{ item.name || item.tag }}</div>
+      <div class="name">{{ nameZh || item.name || item.tag }}</div>
       <div class="meta">
         <span v-if="item.series" class="series">{{ item.series }}</span>
         <b>{{ item.images }}</b> 张

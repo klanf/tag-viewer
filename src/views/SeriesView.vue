@@ -214,18 +214,26 @@ function invertSelect() {
 }
 function clearSelect() { selected.value = new Set() }
 
-/** 把选中的角色加入购物车(与旧版 exportSelected 的语义一致: 已存在的算 skipped) */
+/** 把选中的角色加入购物车(与旧版 exportSelected 的语义一致: 已存在的算 skipped)。
+ *  入车时把视图里已查到的中文翻译带上(剥掉系列尾巴) —— 以前只传 c.name(英文短名),
+ *  购物车条目名就一直是英文, 中文翻译等于掉了(2026-10-06 用户反馈)。 */
+function cartNameOf(c) {
+  return stripZhSeries(charZh.value[c.tag]) || c.name
+}
 function addSelectedToCart() {
   if (!selected.value.size) { ui.warn('请先选择至少一个角色'); return }
-  const chars = charData.value.filter((c) => selected.value.has(c.tag))
+  const chars = charData.value
+    .filter((c) => selected.value.has(c.tag))
+    .map((c) => ({ ...c, name: cartNameOf(c) }))
   const r = cart.addMany(chars, curSeries.value)
   ui.ok(`🛒 新增 ${r.added}${r.skipped ? `, 已存在 ${r.skipped}` : ''}, 购物车共 ${cart.count}`, 2400)
   toggleSelectMode()
 }
 
 function toggleCartOne(c) {
-  const added = cart.toggle(c, curSeries.value)
-  ui.ok(added ? `🛒 已加入: ${c.name}` : `已移除: ${c.name}`, 'info', 1400)
+  const name = cartNameOf(c)
+  const added = cart.toggle({ ...c, name }, curSeries.value)
+  ui.ok(added ? `🛒 已加入: ${name}` : `已移除: ${name}`, 'info', 1400)
 }
 
 function inCart(tag) { return cart.has(tag) }
