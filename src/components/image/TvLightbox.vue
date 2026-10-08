@@ -128,9 +128,11 @@ function gotoTag(tag) {
 
 /* ---------------- 底部提示/位置指示 息屏(2026-10-08 用户需求) ----------------
    lb-hint(操作提示)和 lb-pos(n/m 指示)常年浮在图片下沿, 静止看图时嫌挡画面。
-   手感: 动鼠标就现形, 停 2.5s 淡出; 光标停在可点控件(lb-pos/翻页箭头/×)上时
-   不倒计时 —— 不然正要点箭头它先没了。键盘/滚轮翻页也算一次"活动", 顺带现形。 */
+   手感(2026-10-08 二次收敛): 只有光标进入图片区**底部控件带**才现形/续命——
+   在画面任意位置乱晃不再惊动控件; 进入底部带停 2.5s 照样淡出; 光标直接压在
+   可点控件(lb-pos/翻页箭头/×)上时不倒计时。滚轮/方向键翻页也算一次"活动"。 */
 const IDLE_HIDE_MS = 2500
+const BOTTOM_ZONE = 84    // lb-hint(bottom:48px) 顶缘往上再留余量
 const controlsOn = ref(true)
 let idleTimer = null
 
@@ -141,10 +143,20 @@ function pokeControls() {
 }
 
 function onMouseMove(e) {
-  const sticky = !!(e.target?.closest?.('.lb-pos, .lb-nav, .lb-close'))
-  controlsOn.value = true
-  clearTimeout(idleTimer)
-  if (!sticky) idleTimer = setTimeout(() => { controlsOn.value = false }, IDLE_HIDE_MS)
+  // 光标压在控件上: 常驻, 不倒计时(不然正要点箭头它先没了)
+  if (e.target?.closest?.('.lb-pos, .lb-nav, .lb-close')) {
+    controlsOn.value = true
+    clearTimeout(idleTimer)
+    return
+  }
+  // 仅底部控件带算"活动"
+  const wrap = e.target?.closest?.('.lb-img-wrap')
+  if (wrap && e.clientY >= wrap.getBoundingClientRect().bottom - BOTTOM_ZONE) {
+    pokeControls()
+    return
+  }
+  // 其余区域移动: 不现形; 控件若已可见(刚从底部带/sticky 移出), 按正常节奏息屏
+  if (controlsOn.value) pokeControls()
 }
 
 watch(() => lb.visible, (v) => {
@@ -449,7 +461,7 @@ function preheat() {
   transition: opacity .35s ease;
 }
 
-/* 息屏(2026-10-08): 鼠标静止 2.5s 后淡出, 不再挡画面。
+/* 息屏(2026-10-08): 光标进入底部控件带才现形, 带内静止 2.5s 后淡出。
    lb-pos 隐藏时连 pointer-events 一起收掉, 防止"看不见但挡着点" */
 .lb-img-wrap.idle .lb-pos { opacity: 0; pointer-events: none; }
 .lb-img-wrap.idle .lb-hint { opacity: 0; }

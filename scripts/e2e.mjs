@@ -559,29 +559,49 @@ async function main() {
       (await cdp.eval(`return __t.text('.lightbox .cs-main')`)).includes('去ban'), '')
 
     /* ---------------- 3b. 光箱底部控件息屏 + 标签 ★ 收藏(2026-10-08) ----------------
-     * 息屏契约: 动鼠标(lb-hint/lb-pos 本身挡画面) -> 现形; 静止 2.5s -> 淡出且
-     * lb-pos 的 pointer-events 一并收掉; 再动 -> 复现。合成 mousemove 冒泡到
-     * .lightbox 根上的 @mousemove 即可, 不需要 CDP 真实鼠标。 */
+     * 息屏契约(二次收敛): 只有光标进入图片区**底部控件带**才现形——画面任意
+     * 乱晃不惊动; 底部带内静止 2.5s -> 淡出且 lb-pos 的 pointer-events 一并
+     * 收掉; 压在控件上常驻。合成 mousemove 冒泡即可, 不需要 CDP 真实鼠标。 */
     const idle = await cdp.eval(`
       const root = document.querySelector('.lightbox')
-      root.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
-      await new Promise(r => setTimeout(r, 300))
-      const wrap = () => document.querySelector('.lb-img-wrap')
+      const wrap = document.querySelector('.lb-img-wrap')
       const pos = () => document.querySelector('.lb-pos')
-      const on = { wrapIdle: wrap().classList.contains('idle'), posOp: getComputedStyle(pos()).opacity }
-      await new Promise(r => setTimeout(r, 2800))     // 越过 2.5s 息屏阈值
-      const off = { wrapIdle: wrap().classList.contains('idle'), posOp: pos() ? getComputedStyle(pos()).opacity : 'gone', pe: pos() ? getComputedStyle(pos()).pointerEvents : '' }
-      root.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+      const moveWrap = (clientY) =>
+        wrap.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY }))
+      // 等开场现形自然过期, 拿到"已息屏"的干净起点
+      await new Promise(r => setTimeout(r, 2800))
+      const hidden0 = wrap.classList.contains('idle')
+      // 画面中部乱晃 -> 不该惊动控件
+      moveWrap(wrap.getBoundingClientRect().top + 40)
+      moveWrap(wrap.getBoundingClientRect().top + 120)
       await new Promise(r => setTimeout(r, 300))
-      const back = { wrapIdle: wrap().classList.contains('idle') }
-      return { on, off, back }
+      const midMove = wrap.classList.contains('idle')
+      // 移到底部控件带 -> 现形
+      moveWrap(wrap.getBoundingClientRect().bottom - 20)
+      await new Promise(r => setTimeout(r, 300))
+      const on = { wrapIdle: wrap.classList.contains('idle'), posOp: pos() ? getComputedStyle(pos()).opacity : '' }
+      // 底部带内静止 2.5s -> 息屏 + pe 收掉
+      await new Promise(r => setTimeout(r, 2800))
+      const off = { wrapIdle: wrap.classList.contains('idle'), posOp: pos() ? getComputedStyle(pos()).opacity : 'gone', pe: pos() ? getComputedStyle(pos()).pointerEvents : '' }
+      // 底部带内再动 -> 复现
+      moveWrap(wrap.getBoundingClientRect().bottom - 20)
+      await new Promise(r => setTimeout(r, 300))
+      const back = wrap.classList.contains('idle')
+      // 光标压在 lb-pos 上 -> 常驻, 停 3s 也不息屏
+      pos()?.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 3000))
+      const sticky = wrap.classList.contains('idle')
+      return { hidden0, midMove, on, off, back, sticky }
     `)
-    check('光箱息屏: 动鼠标后控件现形', idle.on.wrapIdle === false && Number(idle.on.posOp) > 0.5,
+    check('光箱息屏: 起点是息屏态(开场现形已过期)', idle.hidden0 === true, `idle类=${idle.hidden0}`)
+    check('光箱息屏: 画面中部乱晃不惊动控件', idle.midMove === true, `idle类=${idle.midMove}`)
+    check('光箱息屏: 光标进底部控件带现形', idle.on.wrapIdle === false && Number(idle.on.posOp) > 0.5,
       `idle类=${idle.on.wrapIdle} · pos透明度=${idle.on.posOp}`)
-    check('光箱息屏: 静止 2.5s 后淡出且不再挡点击(pointer-events=none)',
+    check('光箱息屏: 底部带内静止 2.5s 后淡出且不再挡点击(pointer-events=none)',
       idle.off.wrapIdle === true && Number(idle.off.posOp) < 0.1 && idle.off.pe === 'none',
       `idle类=${idle.off.wrapIdle} · pos透明度=${idle.off.posOp} · pe=${idle.off.pe}`)
-    check('光箱息屏: 再动鼠标立即复现', idle.back.wrapIdle === false, `idle类=${idle.back.wrapIdle}`)
+    check('光箱息屏: 底部带内再动立即复现', idle.back === false, `idle类=${idle.back}`)
+    check('光箱息屏: 光标压在 lb-pos 上常驻不停 3s 不隐藏', idle.sticky === false, `idle类=${idle.sticky}`)
 
     /* 标签 ★ 收藏(光箱入口): 点第一个未 ban pill 悬停浮层里的 ★(程序化点击不受
        pointer-events 限制, 与 🛒 测试同一套路), 断言 localStorage 落盘 + 内联常驻 ★ 出现。 */
