@@ -128,12 +128,12 @@ function gotoTag(tag) {
 
 /* ---------------- 底部提示/位置指示 息屏(2026-10-08 用户需求) ----------------
    lb-hint(操作提示)和 lb-pos(n/m 指示)常年浮在图片下沿, 静止看图时嫌挡画面。
-   手感(2026-10-08 二次收敛): 只有光标进入图片区**底部控件带**才现形/续命——
-   在画面任意位置乱晃不再惊动控件; 进入底部带停 2.5s 照样淡出; 光标直接压在
-   可点控件(lb-pos/翻页箭头/×)上时不倒计时。滚轮/方向键翻页也算一次"活动"。 */
+   手感(三次收敛): 控件**只**因光标进入图片区底部控件带而现形——画面乱晃、
+   滚轮/方向键翻页都不惊动; 打开光箱也不再先闪 2.5s, 直接息屏态开局。
+   进入底部带停 2.5s 照样淡出; 光标压在可点控件(lb-pos/翻页箭头/×)上不倒计时。 */
 const IDLE_HIDE_MS = 2500
 const BOTTOM_ZONE = 84    // lb-hint(bottom:48px) 顶缘往上再留余量
-const controlsOn = ref(true)
+const controlsOn = ref(false)
 let idleTimer = null
 
 function pokeControls() {
@@ -161,8 +161,7 @@ function onMouseMove(e) {
 
 watch(() => lb.visible, (v) => {
   clearTimeout(idleTimer)
-  if (v) pokeControls()          // 每次打开先现形, 之后按正常节奏息屏
-  else controlsOn.value = true   // 关掉时复位, 下次打开不残留息屏态
+  controlsOn.value = false   // 打开/关闭都从息屏态开局, 现形只归底部控件带管
 })
 
 /* ---------------- 滚轮翻页 ----------------
@@ -176,7 +175,6 @@ let wheelTimer = null
 
 function onWheel(e) {
   if (lb.count <= 1) return
-  pokeControls()
   const now = Date.now()
   if (now < wheelLock) return
   wheelAcc += e.deltaY
@@ -199,8 +197,8 @@ function onKey(e) {
   // 光标在输入框里时不要抢键(搜索框可能还残留焦点)
   if (tag === 'input' || tag === 'textarea' || el?.isContentEditable) return
   if (e.key === 'Escape') { e.preventDefault(); lb.close() }
-  else if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); pokeControls(); lb.next() }
-  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); pokeControls(); lb.prev() }
+  else if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); lb.next() }
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); lb.prev() }
   else if (e.key === 'Delete') { e.preventDefault(); delCurrent() }
 }
 

@@ -559,23 +559,30 @@ async function main() {
       (await cdp.eval(`return __t.text('.lightbox .cs-main')`)).includes('去ban'), '')
 
     /* ---------------- 3b. 光箱底部控件息屏 + 标签 ★ 收藏(2026-10-08) ----------------
-     * 息屏契约(二次收敛): 只有光标进入图片区**底部控件带**才现形——画面任意
-     * 乱晃不惊动; 底部带内静止 2.5s -> 淡出且 lb-pos 的 pointer-events 一并
-     * 收掉; 压在控件上常驻。合成 mousemove 冒泡即可, 不需要 CDP 真实鼠标。 */
+     * 息屏契约(三次收敛): 控件只因光标进入图片区**底部控件带**而现形——画面
+     * 乱晃、滚轮/方向键翻页、打开光箱都不惊动; 带内静止 2.5s -> 淡出且 lb-pos
+     * 的 pointer-events 一并收掉; 压在控件上常驻。合成事件冒泡即可。 */
     const idle = await cdp.eval(`
       const root = document.querySelector('.lightbox')
       const wrap = document.querySelector('.lb-img-wrap')
       const pos = () => document.querySelector('.lb-pos')
       const moveWrap = (clientY) =>
         wrap.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY }))
-      // 等开场现形自然过期, 拿到"已息屏"的干净起点
-      await new Promise(r => setTimeout(r, 2800))
+      await new Promise(r => setTimeout(r, 300))
+      // 打开即息屏态(不再有"先闪 2.5s"的开场现形)
       const hidden0 = wrap.classList.contains('idle')
       // 画面中部乱晃 -> 不该惊动控件
       moveWrap(wrap.getBoundingClientRect().top + 40)
       moveWrap(wrap.getBoundingClientRect().top + 120)
       await new Promise(r => setTimeout(r, 300))
       const midMove = wrap.classList.contains('idle')
+      // 滚轮 / ←→ 翻页 -> 也不惊动控件
+      wrap.dispatchEvent(new WheelEvent('wheel', { deltaY: 200, bubbles: true, cancelable: true }))
+      await new Promise(r => setTimeout(r, 300))
+      const wheelMove = wrap.classList.contains('idle')
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))
+      await new Promise(r => setTimeout(r, 300))
+      const keyMove = wrap.classList.contains('idle')
       // 移到底部控件带 -> 现形
       moveWrap(wrap.getBoundingClientRect().bottom - 20)
       await new Promise(r => setTimeout(r, 300))
@@ -591,10 +598,12 @@ async function main() {
       pos()?.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
       await new Promise(r => setTimeout(r, 3000))
       const sticky = wrap.classList.contains('idle')
-      return { hidden0, midMove, on, off, back, sticky }
+      return { hidden0, midMove, wheelMove, keyMove, on, off, back, sticky }
     `)
-    check('光箱息屏: 起点是息屏态(开场现形已过期)', idle.hidden0 === true, `idle类=${idle.hidden0}`)
+    check('光箱息屏: 打开即息屏态(不再有开场现形)', idle.hidden0 === true, `idle类=${idle.hidden0}`)
     check('光箱息屏: 画面中部乱晃不惊动控件', idle.midMove === true, `idle类=${idle.midMove}`)
+    check('光箱息屏: 滚轮翻页不惊动控件', idle.wheelMove === true, `idle类=${idle.wheelMove}`)
+    check('光箱息屏: ←→ 键翻页不惊动控件', idle.keyMove === true, `idle类=${idle.keyMove}`)
     check('光箱息屏: 光标进底部控件带现形', idle.on.wrapIdle === false && Number(idle.on.posOp) > 0.5,
       `idle类=${idle.on.wrapIdle} · pos透明度=${idle.on.posOp}`)
     check('光箱息屏: 底部带内静止 2.5s 后淡出且不再挡点击(pointer-events=none)',
