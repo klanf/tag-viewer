@@ -29,6 +29,7 @@ import TvState from '@/components/base/TvState.vue'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import { useTagFavStore } from '@/stores/useTagFavStore.js'
 import { api } from '@/utils/api.js'
 import { readLS, writeLS, LS } from '@/utils/lskey.js'
 import { nfmt } from '@/utils/format.js'
@@ -36,6 +37,7 @@ import { nfmt } from '@/utils/format.js'
 const ui = useUiStore()
 const router = useRouter()
 const safety = useSafetyStore()
+const tagFav = useTagFavStore()
 
 const kw = ref('')
 const BATCH = 300
@@ -46,14 +48,60 @@ const loading = ref(false)
 const error = ref('')
 const hideBanned = ref(readLS(LS.tagsHideBanned.key) !== '0')   // 默认隐藏
 
+/* ---------------- ★ 只看收藏(2026-10-08) ----------------
+ * 收藏在**前端 localStorage**(useTagFavStore), 服务端不知道 —— 所以「只看收藏」
+ * 走客户端拼装: 逐个收藏标签调 allTags({q}) 拿 count/zh/ban 状态(收藏一般几十个,
+ * 每个一次小查询, 毫秒级), 服务端大列表原封不动留着 —— 关掉开关立即恢复, 不用重拉。 */
+const favOnly = ref(readLS(LS.tagsFavOnly.key) === '1')
+const favRows = ref([])        // 收藏标签的词条(带 count/zh/banned)
+const favLoading = ref(false)
+
+async function loadFavRows() {
+  const names = tagFav.list
+  favLoading.value = true
+  try {
+    const rows = await Promise.all(names.map(async (tag) => {
+      try {
+        const d = await api.allTags({ q: tag, limit: 20, hide_banned: hideBanned.value ? '1' : '' })
+        // q 是子串匹配, 取完全相等的那条; 查不到(标签已不在库里)也给个壳, 收藏不丢
+        return d.tags?.find((t) => t.tag === tag) || { tag }
+      } catch { return { tag } }
+    }))
+    rows.sort((a, b) => (b.count || 0) - (a.count || 0))
+    favRows.value = rows
+  } finally {
+    favLoading.value = false
+  }
+}
+
+/** 收藏标签页 pill 上的 ★: 就地增删, favOnly 开着时取消的条目当场消失 */
+function toggleFavRow(tag) {
+  const added = tagFav.toggle(tag)
+  if (favOnly.value && !added) {
+    favRows.value = favRows.value.filter((t) => t.tag !== tag)
+  } else if (favOnly.value && added) {
+    favRows.value = [...favRows.value, { tag }].sort((a, b) => (b.count || 0) - (a.count || 0))
+  }
+}
+
+writeLS(LS.tagsFavOnly.key, favOnly.value ? '1' : '0')
+watch(favOnly, (v) => {
+  writeLS(LS.tagsFavOnly.key, v ? '1' : '0')
+  if (v) loadFavRows()
+  /* 关掉不重拉: tags.value 一直是服务端那份, 渲染切回去就行 */
+})
+
 /* ---------------- 安全模式: 敏感词从列表藏掉(客户端, 即时生效) ---------------- */
 const visibleTags = computed(() => {
-  if (!safety.on) return tags.value
-  return tags.value.filter((t) => !safety.isHidden({ tags: [t.tag] }))
+  const base = favOnly.value ? favRows.value : tags.value
+  if (!safety.on) return base
+  return base.filter((t) => !safety.isHidden({ tags: [t.tag] }))
 })
 /** 当前档位下藏掉了多少个词(只统计已加载的那批) */
 const safetyHidden = computed(() =>
-  safety.on ? tags.value.length - visibleTags.value.length : 0)
+  safety.on ? (favOnly.value ? favRows.value : tags.value).length - visibleTags.value.length : 0)
+/** 标题栏"共 N 个"的口径跟着视图走 */
+const shownTotal = computed(() => favOnly.value ? favRows.value.length : total.value)
 
 /* ---------------- 滚动加载 ---------------- */
 const scrollEl = ref(null)
@@ -150,6 +198,7 @@ async function toggleBan(tag) {
 onMounted(() => {
   safety.ensureLoaded()
   loadMore()
+  if (favOnly.value) loadFavRows()   // 开关记忆是开的: 首屏就要收藏列表
 })
 </script>
 <template>
@@ -180,7 +229,15 @@ onMounted(() => {
             : '已 ban 的词条正以灰色删除线显示; 点一下把它们藏起来'"
           @click="hideBanned = !hideBanned"
         />
-        <span class="hint">共 {{ nfmt(total) }} 个标签</span>
+        <TvChip
+          :label="favOnly ? `★ 只看收藏(${tagFav.list.length})` : '★ 只看收藏'"
+          :active="favOnly"
+          :title="favOnly
+            ? '正显示收藏的标签; 点一下回到全部标签'
+            : `只显示收藏的标签(现在 ${tagFav.list.length} 个, 收藏入口: 光箱/本页 pill 上的 ★)`"
+          @click="favOnly = !favOnly"
+        />
+        <span class="hint">共 {{ nfmt(shownTotal) }} 个标签</span>
         <span v-if="hideBanned && bannedHidden > 0" class="hint faint banned-hint">已隐藏 {{ nfmt(bannedHidden) }} 个已 ban</span>
         <span v-if="safetyHidden > 0" class="hint faint safety-hint">🛡 已隐藏 {{ nfmt(safetyHidden) }} 个敏感词</span>
         <span class="hint faint">点标签看它的图片 · 🚫 = 导出时剔除 · 灰色删除线 = 已 ban</span>
@@ -188,22 +245,26 @@ onMounted(() => {
       </div>
 
       <div ref="scrollEl" class="scroll" @scroll="loadMore">
-        <TvState v-if="loading && !tags.length" state="loading" text="加载中..." />
-        <TvState v-else-if="error && !tags.length" state="error" :text="`加载失败: ${error}`" />
+        <TvState v-if="favOnly && favLoading" state="loading" text="加载收藏..." />
+        <TvState v-else-if="loading && !tags.length && !favOnly" state="loading" text="加载中..." />
+        <TvState v-else-if="error && !tags.length && !favOnly" state="error" :text="`加载失败: ${error}`" />
         <TvTagList
           v-else
           :tags="visibleTags"
           show-ban
           show-count
           action="filter"
-          empty-text="没有匹配的标签(可能被「隐藏已ban」或安全模式藏掉了)"
+          favable
+          :fav-tags="tagFav.list"
+          empty-text="没有匹配的标签(可能被「隐藏已ban」/安全模式藏掉了, 或还没收藏任何标签 —— pill 上的 ★ 就是收藏)"
           @click="({ tag }) => showImages(tag)"
           @ban="toggleBan"
+          @fav="toggleFavRow"
           @hover="({ zh, event }) => ui.showTip(zh, event)"
           @leave="ui.hideTip"
         />
-        <div v-if="loading && tags.length" class="more-hint">加载中...</div>
-        <div v-else-if="done && tags.length" class="more-hint">到底了 · 共 {{ nfmt(total) }} 个标签</div>
+        <div v-if="loading && tags.length && !favOnly" class="more-hint">加载中...</div>
+        <div v-else-if="!favOnly && done && tags.length" class="more-hint">到底了 · 共 {{ nfmt(total) }} 个标签</div>
       </div>
     </div>
 

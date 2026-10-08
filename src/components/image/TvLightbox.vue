@@ -24,7 +24,7 @@
  *   · ← / → / Esc          -> 翻页 / 关闭
  *   · 底部居中显示 "第 n / 共 m 张", 可点箭头
  */
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import TvButton from '../base/TvButton.vue'
 import TvTagList from '../tag/TvTagList.vue'
@@ -33,6 +33,7 @@ import TvState from '../base/TvState.vue'
 import TvImage from '../base/TvImage.vue'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { useTagFavStore } from '@/stores/useTagFavStore.js'
 import { useImageCtxMenu } from '@/composables/useImageCtxMenu.js'
 import { useTrash } from '@/composables/useTrash.js'
 import { useCharCart } from '@/composables/useCharCart.js'
@@ -44,6 +45,7 @@ const lb = useLightboxStore()
 const ui = useUiStore()
 const router = useRouter()
 const charCart = useCharCart()
+const tagFav = useTagFavStore()
 
 /* tag 详情页(大图)同样支持右键菜单(复制/收藏/删除等);
    Del 键删除当前图: 走 useTrash 确认流程(可关提示)。
@@ -124,6 +126,33 @@ function gotoTag(tag) {
   }
 }
 
+/* ---------------- 底部提示/位置指示 息屏(2026-10-08 用户需求) ----------------
+   lb-hint(操作提示)和 lb-pos(n/m 指示)常年浮在图片下沿, 静止看图时嫌挡画面。
+   手感: 动鼠标就现形, 停 2.5s 淡出; 光标停在可点控件(lb-pos/翻页箭头/×)上时
+   不倒计时 —— 不然正要点箭头它先没了。键盘/滚轮翻页也算一次"活动", 顺带现形。 */
+const IDLE_HIDE_MS = 2500
+const controlsOn = ref(true)
+let idleTimer = null
+
+function pokeControls() {
+  controlsOn.value = true
+  clearTimeout(idleTimer)
+  idleTimer = setTimeout(() => { controlsOn.value = false }, IDLE_HIDE_MS)
+}
+
+function onMouseMove(e) {
+  const sticky = !!(e.target?.closest?.('.lb-pos, .lb-nav, .lb-close'))
+  controlsOn.value = true
+  clearTimeout(idleTimer)
+  if (!sticky) idleTimer = setTimeout(() => { controlsOn.value = false }, IDLE_HIDE_MS)
+}
+
+watch(() => lb.visible, (v) => {
+  clearTimeout(idleTimer)
+  if (v) pokeControls()          // 每次打开先现形, 之后按正常节奏息屏
+  else controlsOn.value = true   // 关掉时复位, 下次打开不残留息屏态
+})
+
 /* ---------------- 滚轮翻页 ----------------
    触控板一次滑动会连发几十个 wheel 事件(每个 deltaY 很小), 直接按事件切图会"飞"过去。
    所以累计到阈值才切一次, 切完进冷却期 —— 与大多数看图软件的手感一致。 */
@@ -135,6 +164,7 @@ let wheelTimer = null
 
 function onWheel(e) {
   if (lb.count <= 1) return
+  pokeControls()
   const now = Date.now()
   if (now < wheelLock) return
   wheelAcc += e.deltaY
@@ -157,8 +187,8 @@ function onKey(e) {
   // 光标在输入框里时不要抢键(搜索框可能还残留焦点)
   if (tag === 'input' || tag === 'textarea' || el?.isContentEditable) return
   if (e.key === 'Escape') { e.preventDefault(); lb.close() }
-  else if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); lb.next() }
-  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); lb.prev() }
+  else if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); pokeControls(); lb.next() }
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); pokeControls(); lb.prev() }
   else if (e.key === 'Delete') { e.preventDefault(); delCurrent() }
 }
 
@@ -166,6 +196,7 @@ onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   clearTimeout(wheelTimer)
+  clearTimeout(idleTimer)
 })
 
 /* 预热相邻图: 原图走自定义协议流式返回, 提前拉一下翻页就没有空窗 */
@@ -183,7 +214,7 @@ function preheat() {
 
 <template>
   <Teleport to="body">
-    <div v-if="lb.visible" class="lightbox" @click="lb.close()">
+    <div v-if="lb.visible" class="lightbox" @click="lb.close()" @mousemove="onMouseMove">
       <span class="lb-close" title="关闭 (Esc)" @click.stop="lb.close()">&times;</span>
 
       <!-- 左右翻页箭头: 挂在图片区内部, 锚定图片两侧 ——
@@ -191,6 +222,7 @@ function preheat() {
       <div class="lb-main">
         <div
           class="lb-img-wrap"
+          :class="{ idle: !controlsOn }"
           @click="onImgAreaClick"
           @wheel.prevent="onWheel"
           @contextmenu="ctxMenu.open($event, { path: lb.path, tags: lb.sortedTags, favable: true, favorited: lb.isFav })"
@@ -324,12 +356,15 @@ function preheat() {
               :ban-map="lb.data?.ban_map || {}"
               show-ban
               copyable
+              favable
+              :fav-tags="tagFav.list"
               chars-first
               action="filter"
               size="sm"
               @click="({ tag }) => gotoTag(tag)"
               @copy="copyTag"
               @ban="lb.toggleBan"
+              @fav="tagFav.toggle"
               @hover="({ zh, event }) => ui.showTip(zh, event)"
               @leave="ui.hideTip()"
               @mousemove="ui.moveTip($event)"
@@ -397,6 +432,7 @@ function preheat() {
   background: rgba(10, 13, 18, .72); color: #fff;
   font-size: 12px; padding: 4px 12px; border-radius: 999px;
   user-select: none;
+  transition: opacity .35s ease;
 }
 .lb-pos b { font-size: 13px; }
 .lb-pos .nav {
@@ -410,7 +446,13 @@ function preheat() {
   position: absolute; bottom: 48px; left: 50%; transform: translateX(-50%);
   color: #fff; opacity: .42; font-size: 11px;
   pointer-events: none; user-select: none; white-space: nowrap;
+  transition: opacity .35s ease;
 }
+
+/* 息屏(2026-10-08): 鼠标静止 2.5s 后淡出, 不再挡画面。
+   lb-pos 隐藏时连 pointer-events 一起收掉, 防止"看不见但挡着点" */
+.lb-img-wrap.idle .lb-pos { opacity: 0; pointer-events: none; }
+.lb-img-wrap.idle .lb-hint { opacity: 0; }
 
 .lb-side {
   flex: 0 0 var(--side-w);

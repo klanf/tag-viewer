@@ -59,6 +59,10 @@ export const LS = Object.freeze({
   tagsHideBanned: { key: 'tv_tags_hide_banned' },
   /** 系列页「显示无本地图的角色」开关(2026-10-06) —— 默认隐藏('0'), 开('1')才显示 0 图角色 */
   seriesShowZero: { key: 'tv_series_show_zero' },
+  /** 收藏的标签(2026-10-08) —— JSON 字符串数组, 光箱 pill ★ / 标签页开关共用 */
+  tagFavs: { key: 'tv_tag_favs' },
+  /** 标签页「只看收藏」开关(2026-10-08) —— 默认关('0') */
+  tagsFavOnly: { key: 'tv_tags_fav_only' },
   /**
    * 排序记忆(2026-09-23 用户要求: "每次进去都要点一下排序")。
    * **四个页面各存各的** —— 首页常年在"随机"、扫描页常年按修改时间, 混用一个键

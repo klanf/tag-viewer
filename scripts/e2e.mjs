@@ -558,6 +558,53 @@ async function main() {
     check('复制下拉: 菜单项选中后成为主按钮的当前模式',
       (await cdp.eval(`return __t.text('.lightbox .cs-main')`)).includes('去ban'), '')
 
+    /* ---------------- 3b. 光箱底部控件息屏 + 标签 ★ 收藏(2026-10-08) ----------------
+     * 息屏契约: 动鼠标(lb-hint/lb-pos 本身挡画面) -> 现形; 静止 2.5s -> 淡出且
+     * lb-pos 的 pointer-events 一并收掉; 再动 -> 复现。合成 mousemove 冒泡到
+     * .lightbox 根上的 @mousemove 即可, 不需要 CDP 真实鼠标。 */
+    const idle = await cdp.eval(`
+      const root = document.querySelector('.lightbox')
+      root.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 300))
+      const wrap = () => document.querySelector('.lb-img-wrap')
+      const pos = () => document.querySelector('.lb-pos')
+      const on = { wrapIdle: wrap().classList.contains('idle'), posOp: getComputedStyle(pos()).opacity }
+      await new Promise(r => setTimeout(r, 2800))     // 越过 2.5s 息屏阈值
+      const off = { wrapIdle: wrap().classList.contains('idle'), posOp: pos() ? getComputedStyle(pos()).opacity : 'gone', pe: pos() ? getComputedStyle(pos()).pointerEvents : '' }
+      root.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 300))
+      const back = { wrapIdle: wrap().classList.contains('idle') }
+      return { on, off, back }
+    `)
+    check('光箱息屏: 动鼠标后控件现形', idle.on.wrapIdle === false && Number(idle.on.posOp) > 0.5,
+      `idle类=${idle.on.wrapIdle} · pos透明度=${idle.on.posOp}`)
+    check('光箱息屏: 静止 2.5s 后淡出且不再挡点击(pointer-events=none)',
+      idle.off.wrapIdle === true && Number(idle.off.posOp) < 0.1 && idle.off.pe === 'none',
+      `idle类=${idle.off.wrapIdle} · pos透明度=${idle.off.posOp} · pe=${idle.off.pe}`)
+    check('光箱息屏: 再动鼠标立即复现', idle.back.wrapIdle === false, `idle类=${idle.back.wrapIdle}`)
+
+    /* 标签 ★ 收藏(光箱入口): 点第一个未 ban pill 悬停浮层里的 ★(程序化点击不受
+       pointer-events 限制, 与 🛒 测试同一套路), 断言 localStorage 落盘 + 内联常驻 ★ 出现。 */
+    const star = await cdp.eval(`
+      const pill = document.querySelector('.lightbox .lb-tags .pill:not(.banned)')
+      const fv = pill?.querySelector('.acts .fv')
+      if (!fv) return { clicked: false }
+      // ⚠️ .en 是显示名(角色 pill 会去掉 _(系列) 尾巴), 完整标签要读 data-tag
+      const tag = pill.dataset.tag || pill.querySelector('.en').textContent
+      fv.click()
+      await new Promise(r => setTimeout(r, 300))
+      const ls = JSON.parse(localStorage.getItem('tv_tag_favs') || '[]')
+      return {
+        clicked: true, tag, ls,
+        stOn: !!pill.querySelector('.st.fv.on'),          // 内联常驻 ★(已收藏态)
+        actsFv: !!pill.querySelector('.acts .fv'),        // 悬停浮层里仍有(取消入口)
+      }
+    `)
+    check('光箱: 标签 pill ★ 收藏落盘 localStorage(tv_tag_favs)',
+      star.clicked && star.ls.includes(star.tag), `tag=${star.tag} · ls=${JSON.stringify(star.ls)}`)
+    check('光箱: 已收藏 pill 出现内联常驻 ★(且悬停浮层里保留取消入口)',
+      star.stOn && star.actsFv, `内联★=${star.stOn} · 浮层★=${star.actsFv}`)
+
     await cdp.eval(`document.querySelector('.lightbox .lb-close').click(); return true`)
     check('大图预览可关闭', !(await cdp.eval(`return !!document.querySelector('.lightbox')`)))
 
@@ -1083,6 +1130,84 @@ async function main() {
     await waitFor(cdp, `__t.count('.tag-list .pill') > ${n0 + 100}`, { label: '滚动加载下一批', timeout: 30000 })
     const n1 = await cdp.eval(`return __t.count('.tag-list .pill')`)
     check('标签: 滚到底自动加载(页码器已撤)', n1 > n0 + 100, `${n0} -> ${n1} 个`)
+
+    /* ---------------- 标签收藏(2026-10-08): pill ★ + 「只看收藏」开关 ----------------
+     * 光箱段已经 ★ 了一个标签(ls 里应有 1 个); 这里从标签页再补一个,
+     * 然后开「只看收藏」断言列表恰好是这两个, 取消一个当场消失, 关掉恢复服务端列表。 */
+    const favLs0 = await cdp.eval(`return JSON.parse(localStorage.getItem('tv_tag_favs') || '[]')`)
+    check('标签收藏: 光箱里 ★ 的结果已在持久化键里', Array.isArray(favLs0) && favLs0.length === 1,
+      `ls=${JSON.stringify(favLs0)}`)
+
+    const star2 = await cdp.eval(`
+      const ls0 = JSON.parse(localStorage.getItem('tv_tag_favs') || '[]')
+      // 跳过光箱段已收过的标签: 两次 ★ 收的必须不同, 后面 "恰好 2 个" 的断言才成立
+      // (同样用 data-tag 取完整标签, .en 是显示名)
+      const pill = [...document.querySelectorAll('.tag-list .pill:not(.banned)')]
+        .find((p) => { const t = p.dataset.tag || p.querySelector('.en')?.textContent; return t && !ls0.includes(t) })
+      const fv = pill?.querySelector('.acts .fv')
+      if (!fv) return { clicked: false }
+      const tag = pill.dataset.tag || pill.querySelector('.en').textContent
+      fv.click()
+      await new Promise(r => setTimeout(r, 300))
+      return { clicked: true, tag, ls: JSON.parse(localStorage.getItem('tv_tag_favs') || '[]') }
+    `)
+    check('标签收藏: 标签页 pill 的 ★ 也能收(不走光箱)',
+      star2.clicked && star2.ls.length === 2 && star2.ls.includes(star2.tag),
+      `新增=${star2.tag} · ls=${JSON.stringify(star2.ls)}`)
+
+    await cdp.eval(`__t.clickText('.tags-view .bar .tv-chip', '只看收藏'); return true`)
+    // 先等开关真的激活且列表渲染出东西(条件别写死个数, 数量对账放 check 里,
+    // 超时也拿得到现场——上次写死 n===2 超时只剩 undefined, 排不了障)
+    // ⚠️ 表达式里带 return 字样会被 waitFor 当多语句体, IIFE 外必须显式 return
+    await waitFor(cdp, `
+      return (() => {
+        const c = [...document.querySelectorAll('.tags-view .bar .tv-chip')]
+          .find((e) => e.textContent.includes('只看收藏'))
+        return c && c.classList.contains('active') && __t.count('.tag-list .pill') > 0
+      })()
+    `, { label: '只看收藏列表渲染', timeout: 20000 })
+    const favOnly = await cdp.eval(`
+      const ls = JSON.parse(localStorage.getItem('tv_tag_favs') || '[]')
+      return {
+        n: __t.count('.tag-list .pill'),
+        ls,
+        lsSw: localStorage.getItem('tv_tags_fav_only'),
+        stOn: __t.count('.tag-list .pill .st.fv.on'),
+        rows: [...document.querySelectorAll('.tag-list .pill')].map((p) => p.dataset.tag),
+        label: ([...document.querySelectorAll('.tags-view .bar .tv-chip')]
+          .find((e) => e.textContent.includes('只看收藏')))?.textContent.trim(),
+      }
+    `)
+    check('标签收藏: 「只看收藏」开启后列表恰好是收藏的那几个',
+      favOnly.n === favOnly.ls.length && favOnly.stOn === favOnly.ls.length,
+      `渲染 ${favOnly.n} 个 ${JSON.stringify(favOnly.rows)} · ls=${JSON.stringify(favOnly.ls)} · 常驻★=${favOnly.stOn}`)
+    check('标签收藏: 开关态写进 localStorage(tv_tags_fav_only)',
+      favOnly.lsSw === '1' && favOnly.label.includes('只看收藏'), `键=${favOnly.lsSw} · 文案="${favOnly.label}"`)
+
+    // 在 favOnly 视图里取消一个 -> 条目当场消失 + ls 同步回落
+    const unstar = await cdp.eval(`
+      const pill = document.querySelector('.tag-list .pill .st.fv.on')
+      if (!pill) return { clicked: false }
+      const tag = pill.closest('.pill').dataset.tag
+      pill.click()
+      await new Promise(r => setTimeout(r, 300))
+      return { clicked: true, tag,
+        n: __t.count('.tag-list .pill'),
+        ls: JSON.parse(localStorage.getItem('tv_tag_favs') || '[]') }
+    `)
+    check('标签收藏: 收藏视图里再点 ★ = 取消, 条目当场消失',
+      unstar.clicked && unstar.n === unstar.ls.length && unstar.ls.length === 1
+      && !unstar.ls.includes(unstar.tag),
+      `剩 ${unstar.n} 条 · ls=${JSON.stringify(unstar.ls)} · 取消=${unstar.tag}`)
+
+    // 关掉开关 -> 服务端大列表原样回来(不重拉的代价是零)
+    await cdp.eval(`__t.clickText('.tags-view .bar .tv-chip', '只看收藏'); return true`)
+    await waitFor(cdp, `__t.count('.tag-list .pill') > 2`,
+      { label: '关闭只看收藏', timeout: 20000 })
+    check('标签收藏: 关掉开关恢复全部标签列表',
+      (await cdp.eval(`return localStorage.getItem('tv_tags_fav_only')`)) === '0', '')
+    // 收尾: 清掉测试留下的收藏, 别让后面的段落(以及人肉复跑)看到脏状态
+    await cdp.eval(`localStorage.removeItem('tv_tag_favs'); localStorage.removeItem('tv_tags_fav_only'); return true`)
 
     /* 点标签 -> 图片。2026-09-20 起这是**下一级子页面** /tags/xxx(独立路由),
        不是挂在标签列表上的 ?tag= —— 顺带把层级(H1 面包屑 / 后退一步 / 顶栏选中)钉住。 */

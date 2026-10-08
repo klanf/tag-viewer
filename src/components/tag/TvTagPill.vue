@@ -44,12 +44,19 @@ const props = defineProps({
    */
   cartable: { type: Boolean, default: false },
   inCart: { type: Boolean, default: false },
+  /**
+   * 显示 ★ 标签收藏按钮(2026-10-08) —— 与 🛒 同一套双层模式:
+   * 悬停浮层里常显; 已收藏时另出**内联常驻** ★(静态宽度不参与悬停动画)。
+   * 任何种类的 pill 都能挂(收藏的是标签名, 不限角色)。
+   */
+  favable: { type: Boolean, default: false },
+  inFav: { type: Boolean, default: false },
   size: { type: String, default: 'md' },        // sm | md
   active: { type: Boolean, default: false },
   /** 长标签: 超出宽度省略 */
   clip: { type: Boolean, default: false },
 })
-const emit = defineEmits(['click', 'ban', 'copy', 'cart'])
+const emit = defineEmits(['click', 'ban', 'copy', 'cart', 'fav'])
 
 const wild = computed(() => props.banned && props.banRule.includes('*'))
 
@@ -62,6 +69,7 @@ const kind = computed(() => {
 /** 悬停浮层里是否真有图标(决定浮层 DOM 是否渲染) */
 const hasHoverActs = computed(() =>
   props.copyable ||
+  props.favable ||
   (props.cartable && kind.value === 'char') ||
   props.showBan
 )
@@ -89,6 +97,7 @@ const banTitle = computed(() => {
 
 const copyTitle = computed(() => `复制这个标签: ${props.tag}`)
 const cartTitle = computed(() => props.inCart ? `移出购物车: ${props.tag}` : `加入购物车: ${props.tag}`)
+const favTitle = computed(() => props.inFav ? `取消收藏标签: ${props.tag}` : `收藏这个标签: ${props.tag}`)
 
 function onClick(e) {
   emit('click', { tag: props.tag, event: e })
@@ -105,12 +114,17 @@ function onCart(e) {
   e.stopPropagation()
   emit('cart', props.tag)
 }
+function onFav(e) {
+  e.stopPropagation()
+  emit('fav', props.tag)
+}
 </script>
 
 <template>
   <span
     :class="['pill', `k-${kind}`, `s-${size}`, { banned, active, clip }]"
     :title="pillTitle"
+    :data-tag="tag"
     @click="onClick"
   >
     <span class="en">{{ shownTag }}</span>
@@ -120,6 +134,7 @@ function onCart(e) {
          静态宽度不会触发重排循环 —— 抽搐的根源是"悬停改变宽度"而非占位本身 -->
     <i v-if="showBan && banned" class="st" :title="banTitle" @click="onBan">🚫</i>
     <i v-if="cartable && kind === 'char' && inCart" class="st ct on" :title="cartTitle" @click="onCart">🛒</i>
+    <i v-if="favable && inFav" class="st fv on" :title="favTitle" @click="onFav">★</i>
     <!-- 悬停动作浮层: 绝对定位盖在 pill 自身右段上方, 完全不占布局宽度。
          pill 几何永不变化 -> flex-wrap 永不因悬停重排 -> 不再"掉行又弹回"抽搐。
          ⚠️ 浮层必须带全套动作(含 🚫/🛒, 不论 banned/inCart): 浮层会盖住内联
@@ -127,6 +142,7 @@ function onCart(e) {
          被自己盖掉(2026-09-20 用户实测踩中) -->
     <span v-if="hasHoverActs" class="acts">
       <i v-if="copyable" class="cp" :title="copyTitle" @click="onCopy">📋</i>
+      <i v-if="favable" :class="['fv', { on: inFav }]" :title="favTitle" @click="onFav">★</i>
       <i v-if="cartable && kind === 'char'" :class="['ct', { on: inCart }]" :title="cartTitle" @click="onCart">🛒</i>
       <i v-if="showBan" class="ban" :title="banTitle" @click="onBan">🚫</i>
     </span>
@@ -218,6 +234,14 @@ function onCart(e) {
 }
 .ct.on { opacity: 1; }
 .ct:hover { opacity: 1 !important; }
+
+/* ★ 标签收藏: 与 🛒 同一套双层模式(悬停浮层常显 / 已收藏内联常驻) */
+.fv {
+  font-style: normal; font-size: 10px;
+  opacity: .5; cursor: pointer; transition: opacity var(--t-fast);
+}
+.fv.on { opacity: 1; color: var(--warn, #f59e0b); }
+.fv:hover { opacity: 1 !important; }
 
 /* 🚫 按钮: 悬停展开才显形, 已 ban 时常驻(整组随 .pill.banned 展开) */
 .ban {

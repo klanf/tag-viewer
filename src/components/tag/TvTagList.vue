@@ -29,6 +29,12 @@ const props = defineProps({
    */
   cartable: { type: Boolean, default: false },
   cartTags: { type: Array, default: () => [] },
+  /**
+   * 每个 pill 上挂 ★ 标签收藏按钮(2026-10-08, 任意种类 pill 都可)。
+   * favTags = 当前已收藏的标签名数组, 用来点亮"已收藏"状态。
+   */
+  favable: { type: Boolean, default: false },
+  favTags: { type: Array, default: () => [] },
   showCount: { type: Boolean, default: false },
   showZh: { type: Boolean, default: true },
   action: { type: String, default: 'copy' },
@@ -41,7 +47,7 @@ const props = defineProps({
   /** 每行高度上限, 超出滚动 */
   maxHeight: { type: String, default: '' },
 })
-const emit = defineEmits(['click', 'ban', 'copy', 'cart', 'hover', 'leave'])
+const emit = defineEmits(['click', 'ban', 'copy', 'cart', 'fav', 'hover', 'leave'])
 
 /** 归一化成统一对象 */
 const items = computed(() => {
@@ -95,6 +101,8 @@ const items = computed(() => {
       :copyable="copyable"
       :cartable="cartable"
       :in-cart="cartTags.includes(it.tag)"
+      :favable="favable"
+      :in-fav="favTags.includes(it.tag)"
       :show-count="showCount && it.count !== null"
       :show-zh="showZh"
       :action="action"
@@ -103,6 +111,7 @@ const items = computed(() => {
       @ban="(t) => emit('ban', t)"
       @copy="(t) => emit('copy', t)"
       @cart="(t) => emit('cart', t)"
+      @fav="(t) => emit('fav', t)"
       @mouseenter="emit('hover', { tag: it.tag, zh: it.zh, event: $event })"
     />
     <div v-if="!items.length && emptyText" class="empty-inline">{{ emptyText }}</div>
