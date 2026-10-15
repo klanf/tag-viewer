@@ -267,8 +267,9 @@ async function withSource() {
   return onSourceChange()
 }
 
-/* 来源条目点击 = 跳来源管理(2026-10-16 拍板: 首页的来源区不再做筛选,
- * 点条目直达登记表 —— 登记目录 / as_source·as_scan 开关 / 追平都在那边) */
+/* 来源卡片上的「管理」入口 = 跳来源管理(2026-10-16 二次修正)。
+ * 上一版把**整排胶囊**都改成跳转, 结果把原本的「点来源 = 筛选」覆盖掉了 ——
+ * 那是每天要用的动作, 不能牺牲。改成只在标题行右侧加一个小入口。 */
 function goSources() {
   router.push('/sources')
 }
@@ -356,9 +357,9 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
         :sources="src.list"
         :total="stats?.total_images ?? src.totalImages"
         :loading="statsLoading"
-        jump
-        title-hint="点击打开来源管理"
-        @jump="goSources"
+        manage
+        @change="withSource"
+        @manage="goSources"
       />
 
       <div class="panel">
