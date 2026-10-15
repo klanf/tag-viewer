@@ -56,7 +56,7 @@ const CHANNELS = new Set([
   'tagger:accel', 'app:settings:set', 'app:checkUpdate', 'app:version',
   'tagger:setup-download',
   // 图片删除(移入回收站) / 批量移动(扫描页选择模式)
-  'image:trash', 'image:moveMany',
+  'image:trash', 'image:moveMany', 'image:copyMany',
   // 收藏找回(按文件名搜已知目录)
   'fav:resolve',
   'dims:forPaths',

@@ -14,6 +14,7 @@
  *   · 导出时剔除黑名单、应用替换规则、按需补背景标签(都由主进程完成)
  */
 import { ref, computed, watch, onMounted, onActivated, onDeactivated } from 'vue'
+import { useRouter } from 'vue-router'
 import TvSourceChips from '@/components/filter/TvSourceChips.vue'
 import TvTagBars from '@/components/tag/TvTagBars.vue'
 import TvTabs from '@/components/base/TvTabs.vue'
@@ -41,6 +42,7 @@ import { api } from '@/utils/api.js'
 import { nfmt } from '@/utils/format.js'
 
 const src = useSourceStore()
+const router = useRouter()
 const app = useAppStore()
 const fav = useFavStore()
 const prefs = usePrefsStore()
@@ -265,6 +267,12 @@ async function withSource() {
   return onSourceChange()
 }
 
+/* 来源条目点击 = 跳来源管理(2026-10-16 拍板: 首页的来源区不再做筛选,
+ * 点条目直达登记表 —— 登记目录 / as_source·as_scan 开关 / 追平都在那边) */
+function goSources() {
+  router.push('/sources')
+}
+
 /* ---------------- 导出 ---------------- */
 async function doExport(withPath) {
   exporting.value = withPath ? 2 : 1
@@ -348,7 +356,9 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
         :sources="src.list"
         :total="stats?.total_images ?? src.totalImages"
         :loading="statsLoading"
-        @change="withSource"
+        jump
+        title-hint="点击打开来源管理"
+        @jump="goSources"
       />
 
       <div class="panel">
@@ -396,6 +406,10 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
               { value: 'random', label: '随机' },
               { value: 'path', label: '默认(路径)' },
               { value: 'time', label: '最新优先(时间)' },
+              { value: 'time_asc', label: '最旧优先(时间)' },
+              { value: 'name', label: '名称 A-Z' },
+              { value: 'size', label: '体积大→小' },
+              { value: 'dims', label: '分辨率大→小' },
             ]"
           />
           <TvSelect

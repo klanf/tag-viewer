@@ -204,6 +204,9 @@ export const api = {
   // 批量移动(扫描页选择模式)。同名自动改名; 返回 { moved:[{from,to,name}], failed:[{path,error}], destName }
   moveImages: (paths, target) => call('image:moveMany', { paths, target }),
 
+  // 批量复制(2026-10-16): 原文件不动, 副本落目标目录(同名自动改名), 不作废扫描缓存不改库
+  copyImages: (paths, target) => call('image:copyMany', { paths, target }),
+
   // 「移动到」预设文件夹(主进程 settings.json, 与右键菜单同一份)
   quickFolders: () => call('app:quickFolders'),
   addQuickFolder: (path) => call('app:quickFolders:add', { path }),

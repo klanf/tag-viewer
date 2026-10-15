@@ -74,3 +74,36 @@ export async function moveFile(imagePath, targetDir) {
   }
   return { ok: true, dest, name: path.basename(dest) }
 }
+
+/**
+ * 复制文件到指定文件夹(右键/批量条「复制到」背后的动作)。
+ * 与 moveFile 同一条硬规则: 同名自动改名, 绝不静默覆盖; 目的地就是源目录也没意义, 直接拒。
+ * 复制不动原文件, 也就不作废扫描缓存、不改库 —— 副本等重新扫描时自然入库。
+ */
+export async function copyFile(imagePath, targetDir) {
+  if (!imagePath || !targetDir) return { ok: false, error: '参数不完整' }
+  try {
+    const stat = await fsp.stat(imagePath)
+    if (!stat.isFile()) return { ok: false, error: '不是文件' }
+  } catch (err) {
+    return { ok: false, error: `源文件不可读: ${err.code || err.message}` }
+  }
+
+  if (path.dirname(path.resolve(imagePath)).toLowerCase() === path.resolve(targetDir).toLowerCase()) {
+    return { ok: false, error: '这个文件已经在该文件夹里了' }
+  }
+
+  try {
+    await fsp.mkdir(targetDir, { recursive: true })
+  } catch (err) {
+    return { ok: false, error: `目标文件夹不可用: ${err.message}` }
+  }
+
+  const dest = await uniqueDestination(targetDir, path.basename(imagePath))
+  try {
+    await fsp.copyFile(imagePath, dest)
+  } catch (err) {
+    return { ok: false, error: err.code === 'EPERM' || err.code === 'EBUSY' ? '文件被占用(可能正被别的程序打开)' : err.message }
+  }
+  return { ok: true, dest, name: path.basename(dest) }
+}

@@ -119,6 +119,15 @@ export function saveSettings(patch) {
         path: String(f.path),
       }))
   }
+  // recentOpenWith: 右键「用其他程序打开」二级菜单的最近使用列表, [{ name, path }]。
+  // MRU 语义: 调用方已把最新项放最前, 这里只做去重 + 截断(留 6 个, 菜单别太长)。
+  if (Array.isArray(patch.recentOpenWith)) {
+    const seen = new Set()
+    next.recentOpenWith = patch.recentOpenWith
+      .filter((a) => a && typeof a.path === 'string' && a.path && !seen.has(a.path.toLowerCase()) && seen.add(a.path.toLowerCase()))
+      .slice(0, 6)
+      .map((a) => ({ name: String(a.name || a.path.split(/[\\/]+/).pop() || a.path), path: String(a.path) }))
+  }
   // 反推偏好(2026-10-15 设置弹窗): 推理后端覆盖(auto/cuda/dml/cpu) + 置信度阈值。
   // 落 settings.json; 进程内环境变量由 applyTaggerEnv() 同步, 下一次反推生效。
   if (patch.taggerProvider !== undefined) {

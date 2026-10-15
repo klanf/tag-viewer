@@ -71,6 +71,11 @@ export function useImageCtxMenu() {
         } else {
           ui.err('复制图像失败: ' + (res.error || '未知原因'), 4600)
         }
+      } else if (action === 'copied') {
+        // 复制到(2026-10-16 新增): 原文件不动, 副本落在新位置 —— 不剔除卡片、不广播
+        ui.ok(`📋 已复制到 ${r.result?.name || ''}`, 'ok', 2400)
+      } else if (action === 'copy-failed') {
+        ui.err('复制失败: ' + (r.result?.error || '未知原因'), 3600)
       } else if (action === 'open-with') {
         // 成功了不打扰(对话框自己会弹出来); 只报失败, 免得"点了没反应"
         if (!r.result?.ok) ui.err(r.result?.error || '调不出「打开方式」', 3600)

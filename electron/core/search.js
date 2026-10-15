@@ -178,17 +178,35 @@ function shuffle(arr, rnd) {
 }
 
 /**
- * 就地排序: path=文件顺序(不动) / time=修改时间新→旧 / random=固定种子洗牌。
- * time 需要给每张图 stat 一次, 7 万次同步 stat 是这里唯一的开销点,
- * 所以只在真的选了 time 时才做。
+ * 就地排序: path=文件顺序(不动) / time=修改时间新→旧 / time_asc=旧→新 /
+ * random=固定种子洗牌 / name=文件名 A-Z / size=体积大→小 / dims=分辨率大→小。
+ * time/time_asc/size 需要给每张图 stat 一次, 7 万次同步 stat 是这里唯一的开销点,
+ * 所以只在真的选了这几档时才做; dims 直接用记录里的 px_w/px_h(扫描/入库时已带), 零 IO。
  */
 export function applySort(results, sort, seedKey, seed) {
-  if (sort === 'time') {
+  if (sort === 'time' || sort === 'time_asc') {
     const mt = new Map()
     for (const r of results) {
       try { mt.set(r.path, fs.statSync(r.path).mtimeMs) } catch { mt.set(r.path, 0) }
     }
-    results.sort((a, b) => (mt.get(b.path) || 0) - (mt.get(a.path) || 0))
+    if (sort === 'time') {
+      results.sort((a, b) => (mt.get(b.path) || 0) - (mt.get(a.path) || 0))
+    } else {
+      results.sort((a, b) => (mt.get(a.path) || 0) - (mt.get(b.path) || 0))
+    }
+  } else if (sort === 'name') {
+    // 文件名排序(不含目录段, 同名不同夹的挨在一起): localeCompare 走系统区域, 中文文件名也能排个大概
+    const nm = (p) => p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1).toLowerCase()
+    results.sort((a, b) => nm(a.path).localeCompare(nm(b.path), 'zh-Hans-CN', { numeric: true }))
+  } else if (sort === 'size') {
+    const sz = new Map()
+    for (const r of results) {
+      try { sz.set(r.path, fs.statSync(r.path).size) } catch { sz.set(r.path, 0) }
+    }
+    results.sort((a, b) => (sz.get(b.path) || 0) - (sz.get(a.path) || 0))
+  } else if (sort === 'dims') {
+    const px = (r) => (Number(r.px_w) || 0) * (Number(r.px_h) || 0)
+    results.sort((a, b) => px(b) - px(a))
   } else if (sort === 'random') {
     const s = seed !== undefined && seed !== null && seed !== ''
       ? Number(seed)
@@ -230,7 +248,7 @@ export function parseQuery(raw = {}) {
     excludeTags,
     excludeMatch: raw.exclude_match === 'exact' ? 'exact' : 'contains',
     excludeChar: raw.exclude_char !== '0' && raw.exclude_char !== false,
-    sort: ['time', 'random', 'path'].includes(raw.sort) ? raw.sort : 'path',
+    sort: ['time', 'time_asc', 'random', 'path', 'name', 'size', 'dims'].includes(raw.sort) ? raw.sort : 'path',
     seed: raw.seed,
     srcSet: parseSources(raw.source),
     favs: parseFavs(raw.fav),

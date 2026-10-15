@@ -380,6 +380,8 @@ function openImage(it) { lb.open(it.path, { list: imgPaths.value }) }
 const selectMode = ref(false)
 const selected = ref(new Set())     // path 集合
 const moving = ref(false)           // 批量移动进行中(锁弹窗与按钮)
+const copyOpen = ref(false)         // 「复制到」目标选择弹窗(2026-10-16)
+const copying = ref(false)          // 批量复制进行中
 const moveOpen = ref(false)         // 目标选择弹窗
 let lastSelIdx = -1                 // Shift 区间选的锚点(当前排序里的下标)
 
@@ -485,12 +487,36 @@ async function doMove(target) {
   }
 }
 
+/* ---------------- 批量复制(原文件不动, 副本落目标目录; 不剔除卡片不改库) ---------------- */
+function openCopy() {
+  if (!selected.value.size) { ui.warn('先勾选至少一张图'); return }
+  copyOpen.value = true
+}
+
+async function doCopy(target) {
+  if (!target?.path || copying.value) return
+  const paths = [...selected.value]
+  copying.value = true
+  try {
+    const r = await api.copyImages(paths, target.path)
+    if (r?.error) { ui.err('复制失败: ' + r.error); return }
+    const done = (r.moved || []).length
+    if (r.failed?.length) ui.err(`${r.failed.length} 张复制失败(${r.failed[0]?.error || '未知原因'})`, 3600)
+    if (done) ui.ok(`📋 已复制 ${done} 张到「${r.destName}」`, 'ok', 2600)
+    copyOpen.value = false
+  } catch (e) {
+    ui.err('复制失败: ' + e.message)
+  } finally {
+    copying.value = false
+  }
+}
+
 /** Esc 退出选择 / Ctrl+A 全选 / Del 批量删除 —— 只在本页、二级网格、非光箱时接管。
  *  ⚠️ 本视图在 KeepAlive 白名单里, 监听器卸载前一直在 —— 必须先判 route.name,
  *  否则在别的页面按 Esc/Ctrl+A 会被这里抢走。 */
 function onScanKey(e) {
   if (route.name !== 'scan' || level.value !== 'folder') return
-  if (lb.visible || moveOpen.value) return                 // 光箱/弹窗自己管键盘
+  if (lb.visible || moveOpen.value || copyOpen.value) return   // 光箱/弹窗自己管键盘
   if (!selectMode.value) return
   const k = e.key?.toLowerCase()
   if ((e.ctrlKey || e.metaKey) && k === 'a') {
@@ -645,11 +671,11 @@ onActivated(() => {
 
 <template>
   <div class="scan-view">
-    <!-- 来源管理的入口(2026-10-04 从顶栏挪来, 用户反馈"不常用, 找个别的地方放"):
-         登记目录 / as_source·as_scan 开关 / 追平都在那边。它与"看图"是同一类
-         目录操作, 但用得少, 不该占顶栏一格; **放在层级判断之外**, 这样从
-         文件夹详情返回、或 KeepAlive 复用(level 还停在 folder)时入口也在。 -->
+    <!-- 来源管理的入口(2026-10-04 从顶栏挪来; 2026-10-16 改为只在一级列表页显示:
+         原先绝对定位右上角, 和二级文件夹详情的「← 返回」按钮重叠(用户截图反馈)。
+         二级视图里改并入头部按钮行, 见下面 head 里的那份)。 -->
     <RouterLink
+      v-if="level === 'list'"
       to="/sources"
       class="to-sources"
       data-test="goto-sources"
@@ -778,6 +804,12 @@ onActivated(() => {
           <TvButton size="sm" variant="secondary" :loading="rescanning" @click="openFolder(cur, { refresh: true })">
             🔄 重扫这个文件夹
           </TvButton>
+          <RouterLink
+            to="/sources"
+            class="to-sources-inline"
+            data-test="goto-sources-folder"
+            title="文件夹登记表: 登记来源/扫描夹、开关用途、追平"
+          >🗄️ 来源管理</RouterLink>
           <TvButton size="sm" variant="secondary" @click="backToList">← 返回</TvButton>
         </div>
 
@@ -813,6 +845,14 @@ onActivated(() => {
               data-test="scan-batch-move"
               @click="openMove"
             >📤 移动到…</TvButton>
+            <TvButton
+              size="sm"
+              variant="secondary"
+              :disabled="!selected.size"
+              :loading="copying"
+              data-test="scan-batch-copy"
+              @click="openCopy"
+            >📋 复制到…</TvButton>
             <TvButton
               size="sm"
               variant="danger"
@@ -921,6 +961,14 @@ onActivated(() => {
         :busy="moving"
         @pick="doMove"
       />
+      <MoveTargetModal
+        v-model="copyOpen"
+        mode="copy"
+        :count="selected.size"
+        :folders="folders"
+        :busy="copying"
+        @pick="doCopy"
+      />
     </template>
   </div>
 </template>
@@ -967,6 +1015,14 @@ onActivated(() => {
 .err { color: var(--danger); font-size: 12px; margin-top: 10px; }
 
 .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* 二级视图头部里的「来源管理」入口: 观感对齐 TvButton secondary(顶栏链接同款 pill) */
+.to-sources-inline {
+  font-size: 12px; text-decoration: none; line-height: 1;
+  color: var(--text); background: var(--panel2);
+  border: 1px solid var(--border); border-radius: var(--r-pill);
+  padding: 6px 12px;
+}
+.to-sources-inline:hover { color: var(--accent); border-color: var(--accent); }
 .crumb { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
 .crumb .link { color: var(--accent); cursor: pointer; }
 .crumb .link:hover { text-decoration: underline; }

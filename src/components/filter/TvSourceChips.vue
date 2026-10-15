@@ -17,8 +17,13 @@ const props = defineProps({
   /** 「全部」胶囊上显示的总数 */
   total: { type: Number, default: 0 },
   loading: { type: Boolean, default: false },
+  /** 跳转模式(2026-10-16 首页专用): 点任何来源条目都不做筛选, 改发 'jump'
+   *  事件(父组件拿去 router.push('/sources'))。标签页/扫描页不传, 行为不变。 */
+  jump: { type: Boolean, default: false },
+  /** 跳转模式下鼠标悬停的提示文案 */
+  titleHint: { type: String, default: '' },
 })
-const emit = defineEmits(['update:modelValue', 'change'])
+const emit = defineEmits(['update:modelValue', 'change', 'jump'])
 
 const isAll = computed(() => !props.modelValue.length)
 
@@ -44,7 +49,8 @@ function toggle(name) {
       label="全部"
       :count="total"
       :active="isActive('全部')"
-      @click="toggle('全部')"
+      :title="jump ? titleHint : undefined"
+      @click="jump ? emit('jump', '全部') : toggle('全部')"
     />
     <TvChip
       v-for="s in sources"
@@ -52,7 +58,8 @@ function toggle(name) {
       :label="s.name"
       :count="s.images"
       :active="isActive(s.name)"
-      @click="toggle(s.name)"
+      :title="jump ? titleHint : undefined"
+      @click="jump ? emit('jump', s.name) : toggle(s.name)"
     />
     <span v-if="modelValue.length > 1" class="more">已选 {{ modelValue.length }} 个来源</span>
     <span v-if="loading" class="more">统计中...</span>

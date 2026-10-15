@@ -9,6 +9,8 @@ const props = defineProps({
   /** 不可点击的纯展示态 */
   readonly: { type: Boolean, default: false },
   tone: { type: String, default: '' },   // '' | accent | warn | danger | ok
+  /** 悬停提示; 不传回落到 label(保持旧观感) */
+  title: { type: String, default: '' },
 })
 const emit = defineEmits(['click', 'remove'])
 </script>
@@ -16,7 +18,7 @@ const emit = defineEmits(['click', 'remove'])
 <template>
   <span
     :class="['tv-chip', tone && `t-${tone}`, { active, readonly }]"
-    :title="label"
+    :title="title || label"
     @click="!readonly && emit('click', $event)"
   >
     <slot>{{ label }}</slot>

@@ -14,7 +14,7 @@
  * 选择即行动: 点预设/登记文件夹立刻 emit('pick', target) —— 父组件关弹窗跑
  * image:moveMany。同名冲突由后端自动改名(见 ipc.js image:moveMany 注释)。
  */
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import TvModal from '@/components/base/TvModal.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import { api } from '@/utils/api.js'
@@ -27,8 +27,13 @@ const props = defineProps({
   folders: { type: Array, default: () => [] },
   /** 父组件正在执行移动时锁住弹窗按钮 */
   busy: { type: Boolean, default: false },
+  /** 'move'(默认) | 'copy' —— 2026-10-16 复用到: 同一份数据源, 只换文案与动词 */
+  mode: { type: String, default: 'move' },
 })
 const emit = defineEmits(['update:modelValue', 'pick'])
+
+const isCopy = computed(() => props.mode === 'copy')
+const verb = computed(() => (isCopy.value ? '复制' : '移动'))
 
 const quick = ref([])
 const picked = ref(null)          // 「其他位置」选出来的 { path, name }
@@ -53,7 +58,7 @@ watch(() => props.modelValue, async (v) => {
 async function pickOther() {
   picking.value = true
   try {
-    const r = await api.pickFolder({ multi: false, title: '移动到哪个文件夹?' })
+    const r = await api.pickFolder({ multi: false, title: `${verb.value}到哪个文件夹?` })
     if (r?.canceled) return
     const p = r?.paths?.[0] || r?.path
     if (p) picked.value = { path: p, name: p.split(/[\\/]/).filter(Boolean).pop() || p }
@@ -84,7 +89,7 @@ function choose(t) {
 <template>
   <TvModal
     :model-value="modelValue"
-    :title="`📤 移动 ${count} 张图片到…`"
+    :title="`${isCopy ? '📋' : '📤'} ${verb} ${count} 张图片到…`"
     size="md"
     @update:model-value="emit('update:modelValue', $event)"
   >
@@ -134,7 +139,7 @@ function choose(t) {
             存为预设
           </TvButton>
           <TvButton size="sm" variant="primary" :loading="busy" @click="choose(picked)">
-            移动到这里
+            {{ verb }}到这里
           </TvButton>
         </div>
       </div>

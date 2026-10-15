@@ -13,6 +13,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { ipcMain, dialog, clipboard, shell, BrowserWindow, Menu, app } from 'electron'
 import { getWorkspace, getSettings, saveSettings, dataFile } from './core/workspace.js'
 import { bootstrap, status, whenReady } from './core/app-state.js'
@@ -58,7 +59,7 @@ import {
 // (安全模式界面要显示"开了会隐藏多少张"), 别拆成两行 import —— ESM 会因重复声明直接报错。
 import { ds, tagPoolSize, recomputeSafety, relocateRecord } from './core/dataset.js'
 import { searchStats, clearSearchCache } from './core/search.js'
-import { moveFile } from './core/fileTransfer.js'
+import { moveFile, copyFile } from './core/fileTransfer.js'
 import { charLibDiag } from './core/charlib.js'
 import { translateInfo } from './core/translate.js'
 import { resolveFavorites } from './core/favResolve.js'
@@ -146,6 +147,74 @@ function addQuickFolderAndReturn(dirPath) {
   const name = path.basename(clean) || clean
   saveSettings({ quickFolders: [...cur, { name, path: clean }] })
   return { action: 'quick-added', result: { ok: true, name } }
+}
+
+/** Inpaint 固定预置项(2026-10-16 用户指定); 不存在就不进菜单 */
+// path-check-ignore: 这就是真实预置路径 —— 用户指定的外部程序位置, 本来就是要写死的
+const INPAINT_EXE = 'F:\\软件\\Inpaint_v9.1_x64.exe'
+
+/** Photoshop 自动探测(结果缓存): 只扫常见安装目录, 不碰注册表 —— 本机 reg.exe 已被
+ *  安全策略拉黑, 文件系统扫描够用且够快(两级 readdir)。找不到返回 null。 */
+let psExeCache
+function detectPhotoshop() {
+  if (psExeCache !== undefined) return psExeCache
+  psExeCache = null
+  // path-check-ignore: PS 官方默认安装根目录, 探测目标本来就是固定盘符位置
+  const roots = ['C:\\Program Files\\Adobe', 'C:\\Program Files (x86)\\Adobe']
+  for (const root of roots) {
+    let subs = []
+    try { subs = fs.readdirSync(root, { withFileTypes: true }) } catch { continue }
+    for (const d of subs.filter((x) => x.isDirectory() && /Adobe Photoshop/i.test(x.name))) {
+      const exe = path.join(root, d.name, 'Photoshop.exe')
+      try { if (fs.statSync(exe).isFile()) { psExeCache = exe; break } } catch { /* 下一个 */ }
+      // 目录布局兼容: Adobe Photoshop XXXX 主程序可能在其子目录里
+      let inner = []
+      try { inner = fs.readdirSync(path.join(root, d.name), { withFileTypes: true }) } catch { continue }
+      for (const s of inner.filter((x) => x.isDirectory())) {
+        const exe2 = path.join(root, d.name, s.name, 'Photoshop.exe')
+        try { if (fs.statSync(exe2).isFile()) { psExeCache = exe2; break } } catch { /* 下一个 */ }
+      }
+      if (psExeCache) break
+    }
+    if (psExeCache) break
+  }
+  return psExeCache
+}
+
+/** 「用其他程序打开」的预置 + 最近使用合并清单(供二级菜单渲染) */
+function openWithPresets() {
+  const out = []
+  const ps = detectPhotoshop()
+  if (ps) out.push({ name: 'Photoshop', path: ps })
+  if (fs.existsSync(INPAINT_EXE)) out.push({ name: 'Inpaint', path: INPAINT_EXE })
+  const recents = Array.isArray(getSettings().recentOpenWith) ? getSettings().recentOpenWith : []
+  for (const r of recents) {
+    if (!out.some((x) => x.path.toLowerCase() === r.path.toLowerCase())) out.push({ name: r.name, path: r.path })
+  }
+  return out
+}
+
+/** 用过的外部程序记进 MRU(去重、置顶、留 6 个), 下次二级菜单排前面 */
+function recordRecentOpenWith(exe) {
+  const clean = path.resolve(exe)
+  const cur = Array.isArray(getSettings().recentOpenWith) ? getSettings().recentOpenWith : []
+  const rest = cur.filter((a) => a.path.toLowerCase() !== clean.toLowerCase())
+  saveSettings({ recentOpenWith: [{ name: path.basename(clean, '.exe'), path: clean }, ...rest] })
+}
+
+/** 外部程序打开图片: detached 起进程, 不等它退出。成败按 access 探测给结构化结果 */
+function spawnOpenWith(exe, imgPath) {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(exe, [imgPath], { detached: true, stdio: 'ignore', windowsHide: true })
+      child.on('error', (err) => resolve({ ok: false, error: err.message }))
+      // detached + unref: 起来就算成功(PS 自己还要加载半天, 不能等)
+      child.unref()
+      resolve({ ok: true })
+    } catch (err) {
+      resolve({ ok: false, error: err.message })
+    }
+  })
 }
 
 /**
@@ -295,8 +364,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
           //     「正在复制…」再动手，而点击回调里没有机会让渲染层画一帧 —— 收尾放在
           //     菜单关闭之后（见下面的 copy-image 分支）。
           //   · 打开方式要另起进程，也想把成败回给渲染层弹提示。
-          if (id === 'open') { shell.openPath(imgPath) }
-          else if (id === 'reveal') { shell.showItemInFolder(imgPath) }
+          if (id === 'reveal') { shell.showItemInFolder(imgPath) }
           else if (id === 'copy-path') { copyText(imgPath) }
           else if (id === 'copy-name') { copyText(name || path.basename(imgPath)) }
           else if (id === 'copy-tags') { copyText(tags || '') }
@@ -327,12 +395,37 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
         click: () => { chosen = { action: 'add-quick-pick' } },
       })
 
+      // 「用其他程序打开」二级菜单(2026-10-16): 预置(PS 自动探测 / Inpaint 固定路径)
+      // + 最近使用(settings.recentOpenWith, MRU) + 底部「浏览…」兜底(原来的系统对话框)。
+      const openWithSub = openWithPresets().map((a) => ({
+        label: `${a.name}     ${a.path}`.slice(0, 96),
+        click: () => { chosen = { action: 'openwith-exe', target: a.path } },
+      }))
+      if (!openWithSub.length) openWithSub.push({ label: '(没有可用程序)', enabled: false })
+      else openWithSub.push({ type: 'separator' })
+      openWithSub.push({
+        label: '浏览其他程序…',
+        click: () => { chosen = { action: 'open-with' } },
+      })
+
+      // 「复制到」子菜单: 复用「移动到」同一份预设(quickFolders), 只复制不搬移。
+      const copySub = quickFolders.map((f) => ({
+        label: `${f.name}     ${f.path}`.slice(0, 96),
+        click: () => { chosen = { action: 'copy', target: f.path } },
+      }))
+      if (!copySub.length) copySub.push({ label: '(还没有预设文件夹)', enabled: false })
+      else copySub.push({ type: 'separator' })
+      copySub.push({
+        label: '选择其他文件夹…',
+        click: () => { chosen = { action: 'copy-pick' } },
+      })
+
       const template = [
         item('🖼️ 复制图片到剪贴板', 'copy-image'),
-        item('🖥️ 用系统查看器打开', 'open'),
-        item('🗂️ 用其他程序打开…', 'open-with'),
+        { label: '🗂️ 用其他程序打开', submenu: openWithSub },
         item('📁 打开图片所在位置', 'reveal'),
         { label: '📤 移动到', submenu: moveSub },
+        { label: '📋 复制到', submenu: copySub },
         { type: 'separator' },
         item('📋 复制文件路径', 'copy-path'),
         item('📝 复制文件名', 'copy-name'),
@@ -376,6 +469,25 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       }
       if (act === 'open-with') {
         return { action: 'open-with', result: await openWithDialog(imgPath), from: imgPath }
+      }
+      if (act === 'openwith-exe' && chosen.target) {
+        const r = await spawnOpenWith(chosen.target, imgPath)
+        if (r.ok) recordRecentOpenWith(chosen.target)
+        return { action: 'open-with', result: r, from: imgPath }
+      }
+      if (act === 'copy' && chosen.target) {
+        const r = await copyFile(imgPath, chosen.target)
+        return { action: r.ok ? 'copied' : 'copy-failed', result: r, from: imgPath }
+      }
+      if (act === 'copy-pick') {
+        const pick = await dialog.showOpenDialog(win, {
+          title: '复制图片到…',
+          properties: ['openDirectory'],
+          defaultPath: path.dirname(imgPath),
+        })
+        if (pick.canceled || !pick.filePaths.length) return { action: null }
+        const r = await copyFile(imgPath, pick.filePaths[0])
+        return { action: r.ok ? 'copied' : 'copy-failed', result: r, from: imgPath }
       }
       if (act === 'move' && chosen.target) {
         const r = await moveFile(imgPath, chosen.target)
@@ -823,6 +935,23 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
         }
       }
       return { ok: moved.length > 0, moved, failed, dest: target, destName: path.basename(target), sync }
+    }),
+
+    // ---------------- 批量复制(扫描页选择模式, 2026-10-16) ----------------
+    /* 复制 = 原文件不动: 不 purgeScanCachePaths、不 relocateRecord、不补同步 ——
+     * 副本不在库里, 等目标目录下次扫描/同步自然入库。逐张容错同 moveMany。 */
+    'image:copyMany': safe(async ({ paths, target } = {}) => {
+      const list = (Array.isArray(paths) ? paths : [paths]).filter((p) => typeof p === 'string' && p)
+      if (!list.length || !target) return { error: '参数不完整' }
+      const copied = []
+      const failed = []
+      for (const raw of list) {
+        const p = toNativePath(raw)
+        const r = await copyFile(p, target)
+        if (r.ok) copied.push({ from: raw, to: r.dest, name: r.name })
+        else failed.push({ path: raw, error: r.error })
+      }
+      return { ok: copied.length > 0, moved: copied, failed, dest: target, destName: path.basename(target) }
     }),
 
     // ---------------- 移动目标选择器的数据源(快速预设) ----------------
