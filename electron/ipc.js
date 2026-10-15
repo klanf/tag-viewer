@@ -150,6 +150,16 @@ function addQuickFolderAndReturn(dirPath) {
   return { action: 'quick-added', result: { ok: true, name } }
 }
 
+/**
+ * 外部程序"启动后秒退"的通知出口: 这类失败发生在 invoke 已经回执之后,
+ * 渲染层拿不到, 只能走 app:toast 推送(与复制图像那条路同一条通道)。
+ */
+function pushOpenWithFail(r) {
+  const text = `⚠️ 程序启动后立刻退出: ${r?.error || '未知原因'}`
+  flog('open-with', `late-fail ${r?.error || ''}`)
+  mainWindow()?.webContents.send('app:toast', { text, tone: 'err', dur: 5000 })
+}
+
 /** 「用其他程序打开」的预置 + 最近使用合并清单(供二级菜单渲染) */
 function openWithPresets() {
   const out = []
@@ -437,11 +447,12 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
         return { action: 'open-with', result: await openWithDialog(imgPath), from: imgPath }
       }
       if (act === 'openwith-exe' && chosen.target) {
-        const r = await spawnOpenWith(chosen.target, imgPath)
+        // 外部程序"点了没反应"是最难排查的一类: 进程起没起来、参数对不对、起来了
+        // 有没有秒退, 界面上一概看不出。每次都落一行日志(launch.log 的 open-with
+        // 通道); "秒退"没有 invoke 回执可带, 只能从主进程直接推 toast。
+        const r = await spawnOpenWith(chosen.target, imgPath, { notify: pushOpenWithFail })
         if (r.ok) recordRecentOpenWith(chosen.target)
-        // 外部程序"点了没反应"是最难排查的一类: 进程起没起来、参数对不对, 界面上一概看不出。
-        // 所以每次都落一行日志(launch.log 的 open-with 通道), 下次复现直接看这里。
-        flog('open-with', `${r.ok ? 'ok' : 'FAIL'} exe=${chosen.target} file=${imgPath}${r.ok ? '' : ` err=${r.error}`}`)
+        flog('open-with', `${r.ok ? 'ok' : 'FAIL'} exe=${chosen.target} file=${imgPath} pid=${r.pid || '-'}${r.ok ? '' : ` err=${r.error}`}`)
         return { action: 'open-with', result: { ...r, exe: chosen.target }, from: imgPath }
       }
       if (act === 'openwith-pick') {

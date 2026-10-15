@@ -16,19 +16,36 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 
-export function spawnOpenWith(exe, imgPath) {
+export function spawnOpenWith(exe, imgPath, deps = {}) {
+  const notify = deps.notify || (() => {})
   return new Promise((resolve) => {
     let settled = false
+    const t0 = Date.now()
     const done = (r) => { if (!settled) { settled = true; resolve(r) } }
     try {
       const child = spawn(exe, [imgPath], {
         detached: true, stdio: 'ignore', windowsHide: true, cwd: path.dirname(exe),
       })
       child.on('error', (err) => done({ ok: false, error: err?.message || String(err) }))
-      child.on('spawn', () => done({ ok: true }))
+      child.on('spawn', () => done({ ok: true, pid: child.pid }))
+      /**
+       * 「起来了又秒退」的监听 —— 2026-10-16 Inpaint 实测: 菜单点了以后**既没窗口
+       * 也没报错**(它是 UPX 加壳的 GUI 程序, 不需要管理员), 因为 CreateProcess 层面
+       * 确实成功了, 进程却在 1 秒内自己退出。spawn 事件一到就结算成功是对的(不然
+       * 正常程序也会被误判), 但得把这个"秒退"单独报出来, 否则用户永远只看到没反应。
+       * 2 秒窗口: 正常 GUI 程序不会在 2 秒内自己结束。
+       */
+      child.on('exit', (code, signal) => {
+        if (Date.now() - t0 > 2000) return
+        notify({
+          ok: false,
+          error: `程序启动后立即退出(退出码 ${code}${signal ? ` 信号 ${signal}` : ''}、pid ${child.pid})`,
+          late: true,
+        })
+      })
       child.unref()
       // 兜底: 极端情况两个事件都不来(系统策略拦下但不报错), 3 秒后按成功结算, 别把界面挂住
-      setTimeout(() => done({ ok: true }), 3000)
+      setTimeout(() => done({ ok: true, pid: child.pid }), 3000)
     } catch (err) {
       done({ ok: false, error: err?.message || String(err) })
     }
