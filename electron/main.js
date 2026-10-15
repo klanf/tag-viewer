@@ -99,20 +99,22 @@ function patchSettings(patch) {
 /** 设置弹窗/引导条「一键下载」入口 —— 比 ensureRuntimeFlow 多三层状态反馈 */
 async function downloadModelNow() {
   if (runtimeBusy) { toast('反推环境正在下载中, 看右下角进度卡', 'info', 4000); return }
-  const cfg = taggerConfig()
-  const ready = cfg.pythonOnDisk && cfg.modelExists && cfg.csvExists
-    && !(await require('./runtime-setup.cjs').modelIntegrityIssue(cfg.model, cfg.csv))
-  if (ready) { toast('反推环境已就绪, 无需下载', 'info', 4000); return }
+  // 不做"看起来就绪"的提前返回 —— pythonOnDisk 只验证磁盘上有 exe, 验证不了
+  // onnxruntime 能不能 import(远端实测: 一个裸 miniconda 就能把引导下载骗跳过)。
+  // repair 模式强制走 ensurePythonRuntime 的 pkgsOk 探测, 不合格自动补嵌入式运行时。
   runtimeOfferSkipped = false   // 用户主动点了下载, 解除「暂不」的记忆
-  toast('开始下载反推环境… 看右下角进度卡', 'info', 5000)
-  await ensureRuntimeFlow({ force: true })
+  toast('开始检查/下载反推环境… 看右下角进度卡', 'info', 5000)
+  await ensureRuntimeFlow({ force: true, repair: true })
 }
 
-async function ensureRuntimeFlow({ force = false } = {}) {
+async function ensureRuntimeFlow({ force = false, repair = false } = {}) {
   if (!app.isPackaged || isDev || runtimeBusy) return
   if (!force && runtimeOfferSkipped) return
   const cfg = taggerConfig()
-  const needPython = !cfg.pythonOnDisk
+  // repair(一键下载): 不信 pythonOnDisk —— 它只看 exe 在不在磁盘上, 一个没装
+  // onnxruntime 的 conda 也能把它骗成 true(2026-10-15 远端实测)。强制进探测,
+  // 由 ensurePythonRuntime 的 pkgsOk 逐个甄别, 谁不合格补谁。
+  const needPython = repair ? true : !cfg.pythonOnDisk
   // "存在"≠"有效": 旧构建可能把上游变列序的 597KB csv 下到了固定文件名。
   // 这里用 modelIntegrityIssue(csv 体积+SHA / onnx 体积)兜住, 坏文件进下载分支被挪走重下。
   let needModel = !(cfg.modelExists && cfg.csvExists)

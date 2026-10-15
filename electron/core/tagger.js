@@ -32,7 +32,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { openDb, rebuildTags } from './store.js'
-import { dataFile, getSettings } from './workspace.js'
+import { dataFile, getSettings, getWorkspace } from './workspace.js'
 import { PROJECT_ROOT } from './paths.js'
 import { ensureQueueTable, queueStats } from './ingest.js'
 import { flog } from './filelog.js'
@@ -158,11 +158,18 @@ function commandCandidates(opts = {}) {
   push(opts.python)
   push(process.env.TV_PYTHON)
   try { push(getSettings().pythonPath) } catch { /* 命令行工具可能没 initWorkspace */ }
+  // 嵌入式运行时的**固定候选位**(settings.json 丢了/没写上也能自愈 —— 2026-10-15
+  // 远端实测: prep 没把 pythonPath 落盘, 装好的运行时就没被找到, 全部候选全灭)。
+  try { push(path.join(getWorkspace().appDir, 'runtime', 'python', 'python.exe')) } catch { /* 忽略 */ }
 
   // 包内自带解释器(绿色包 v2.1.0 起随包发 python/, embeddable + onnxruntime-directml)。
   // 排在显式配置之后 —— 用户在设置里指了 python 就尊重用户; 排在系统常见位置之前 ——
   // 包里带了就用包里的, 免依赖开箱即用。开发仓库里没有 python/ 目录, 这条是 no-op。
-  push(path.join(PROJECT_ROOT, 'python', 'python.exe'))
+  // **NSIS 安装包没有这条**: python/ 不打进 asar(asar 里的 exe 根本 spawn 不了,
+  // 2026-10-15 实测"握手超时"全是它), 只在绿色包目录布局下才有意义。
+  if (!PROJECT_ROOT.endsWith('.asar')) {
+    push(path.join(PROJECT_ROOT, 'python', 'python.exe'))
+  }
 
   const home = process.env.USERPROFILE || process.env.HOME || ''
   // ProgramData 不写字面盘符 —— preflight 有一条"仓库里不许出现盘符绝对路径"的检查
