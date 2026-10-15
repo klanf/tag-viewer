@@ -52,6 +52,16 @@ export const useAppStore = defineStore('app', () => {
    */
   const tagger = ref(null)
   /**
+   * 反推环境搭建进度(Python 运行时 / WD14 模型下载)。主进程在「现在下载」确认后
+   * 通过 tagger:setup-progress 推结构化消息:
+   *   { stage }                          —— 阶段文本(探测/解压/校验…)
+   *   { file, bytes, total, pct }        —— 某文件字节级下载进度
+   *   { done: true, stage }              —— 全部完成
+   * 下载失败主进程走 toast 报错, 这里只负责"进行中/完成"的可视化。
+   * 组件侧在 done 后停留几秒再收起(见 TvSetupProgress)。
+   */
+  const setup = ref(null)
+  /**
    * 数据集版本号 —— 每次"从 loading 变成 ready"就 +1。
    * 视图用它来决定"要不要重跑一次初始查询":
    *   窗口先渲染、数据后到, 视图挂载时发的第一次查询可能发生在数据就绪之前
@@ -238,6 +248,8 @@ export const useAppStore = defineStore('app', () => {
     // 主进程主动要说的短句（目前只有右键「复制图片到剪贴板」动手前的那句进度：
     // toPNG 是同步的，一进同步段主进程就发不出任何消息，所以必须**先说后干**）。
     onPush('app:toast', (p) => useUiStore().toast(p?.text || '', p?.tone || 'info', p?.dur ?? 1800))
+    // 反推环境搭建进度 —— 挂全局层: 下载发生时用户可能停在任意页面
+    onPush('tagger:setup-progress', (p) => { setup.value = p || null })
 
     applyStatus(await api.status())
     // 主进程是页面 did-finish-load 之后才开始加载数据, 有可能这里已经 ready 了
@@ -338,7 +350,7 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     phase, error, progress, stats, translate, workspace, config, sourcesInfo, loadMs, epoch,
-    theme, setTheme, ready, loading, totalImages, ingest, tagger, autoExport,
+    theme, setTheme, ready, loading, totalImages, ingest, tagger, setup, autoExport,
     init, reload, applyStatus, bumpEpoch, toggleTheme, applyTheme,
     ingestRun, ingestPause, taggerRun, taggerPause, taggerRefresh,
     pullAutoState, flushAutoNow, clearAutoPending,

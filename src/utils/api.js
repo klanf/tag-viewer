@@ -196,6 +196,7 @@ export const api = {
   settingsSet: (patch) => call('app:settings:set', patch),
   checkUpdate: () => call('app:checkUpdate'),
   appVersion: () => call('app:version'),
+  setupDownload: () => call('tagger:setup-download'),
 
   // 图片删除(移入系统回收站)
   trashImages: (paths) => call('image:trash', { paths }),

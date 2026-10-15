@@ -54,6 +54,7 @@ const CHANNELS = new Set([
   'tagger:status', 'tagger:config', 'tagger:run', 'tagger:pause',
   // 设置弹窗(2026-10-15): 加速探测 / 偏好写入 / 检查更新 / 版本号
   'tagger:accel', 'app:settings:set', 'app:checkUpdate', 'app:version',
+  'tagger:setup-download',
   // 图片删除(移入回收站) / 批量移动(扫描页选择模式)
   'image:trash', 'image:moveMany',
   // 收藏找回(按文件名搜已知目录)
@@ -80,6 +81,8 @@ const PUSH = new Set([
   'tagger:progress', 'export:auto', 'cart:auto',
   // 主进程主动要说的短句（右键「复制图片到剪贴板」动手前的进度提示）
   'app:toast',
+  // 反推环境下载进度（Python 运行时 / WD14 模型, TvSetupProgress 卡片消费）
+  'tagger:setup-progress',
 ])
 
 /** 自定义协议的 URL 构造 —— 与 imageproto.js 的解析必须成对 */

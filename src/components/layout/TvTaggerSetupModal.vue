@@ -16,6 +16,7 @@ import TvModal from '@/components/base/TvModal.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import { useAppStore } from '@/stores/useAppStore.js'
 import { useTaggerSetup } from '@/composables/useTaggerSetup.js'
+import { api } from '@/utils/api.js'
 
 const app = useAppStore()
 const { open } = useTaggerSetup()
@@ -30,6 +31,15 @@ const rechecked = ref(false)
 async function reprobe() {
   await app.taggerRefresh()
   rechecked.value = true
+}
+/** 一键下载: 主进程自动补齐 Python 运行时 + 模型(约 1.3GB), 右下角有进度卡 */
+const downloading = ref(false)
+async function oneClickDownload() {
+  downloading.value = true
+  try {
+    await api.setupDownload()
+    open.value = false   // 下载跑起来了, 让位给右下角进度卡
+  } catch { /* 失败主进程会 toast */ } finally { downloading.value = false }
 }
 </script>
 
@@ -75,7 +85,10 @@ async function reprobe() {
     <template #footer>
       <div class="foot">
         <span class="dim">彻底关掉自动反推: 环境变量 <span class="mono">TV_TAGGER=0</span></span>
-        <TvButton variant="primary" @click="reprobe">重新探测</TvButton>
+        <TvButton :disabled="downloading" @click="reprobe">重新探测</TvButton>
+        <TvButton variant="primary" :disabled="downloading" @click="oneClickDownload">
+          {{ downloading ? '启动中…' : '⬇️ 一键下载（约 1.3GB）' }}
+        </TvButton>
       </div>
     </template>
   </TvModal>

@@ -226,7 +226,7 @@ function kickAutoSync(folder, onIngestDone) {
   return { wanted: true, started: true, reason: '' }
 }
 
-export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdate } = {}) {
+export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdate, onSetupDownload } = {}) {
   // tagger:accel 的会话级缓存(见 handler 注释)
   let accelCache = null
   // 自动导出的结果(成功/失败)由主进程推给渲染层弹 toast。
@@ -675,6 +675,13 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       return { ok: true }
     }),
     'app:version': safe(() => ({ version: app.getVersion(), packaged: app.isPackaged })),
+    // 引导弹窗「一键下载」—— 主进程自动补齐 Python 运行时 + WD14 模型,
+    // 进度经 tagger:setup-progress 推给右下角 TvSetupProgress 卡片
+    'tagger:setup-download': safe(async () => {
+      if (!onSetupDownload) return { ok: false, note: '当前环境不支持自动下载' }
+      await onSetupDownload()
+      return { ok: true }
+    }),
 
     // ---------------- 文件夹登记表(扫描夹 + 看板来源 共用一份) ----------------
     // 真源是 tags.db 的 folders 表; scan_folders.json 降级为导出备份。

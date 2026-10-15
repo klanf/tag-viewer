@@ -279,6 +279,9 @@ function pushTail(line) {
   if (!s) return
   logTail.push(s)
   if (logTail.length > 12) logTail.shift()
+  // 落盘: 服务 stderr 是远端排障的唯一线索 —— UI 只显示最后一行,
+  // 不写文件的话"另一台机器上 code=101 到底为什么"就永远查不了(2026-10-15 实测)。
+  try { flog('tagger', `stderr: ${s}`) } catch { /* 忽略 */ }
 }
 
 function handleLine(line) {
@@ -334,6 +337,7 @@ function attach(child) {
   child.on('exit', (code, signal) => {
     const stale = proc !== child
     const wasStopped = !!child.__stopped
+    child.__exitCode = code   // 握手期硬崩的判据(startService 里据此退到 CPU 重试)
     if (!stale) {
       proc = null
       readyInfo = null
@@ -389,12 +393,16 @@ export async function startService(opts = {}, onLog) {
 
   for (const c of cfg.cmds) {
     const py = c.bin
+    // 握手期硬崩(auto/DML 下 DirectML 设备初始化能直接把进程带走, python 侧
+    // 的 except 兜不住)就退到 CPU 再试一次 —— 慢但能用, 好过永远 0%(2026-10-15 远端实测)。
+    const providerAttempts = cfg.provider === 'cpu' ? ['cpu'] : [cfg.provider, 'cpu']
+    for (const prov of providerAttempts) {
     buf = ''
     readyInfo = null
     logTail.length = 0
     const args = [...c.pre, cfg.script,
       '--model', model, '--csv', csv,
-      '--provider', cfg.provider,
+      '--provider', prov,
       '--threshold', String(cfg.threshold),
       '--char-threshold', String(cfg.charThreshold)]
     let child
@@ -402,30 +410,34 @@ export async function startService(opts = {}, onLog) {
       child = spawn(py, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
     } catch (e) {
       tried.push(`${c.label}: 启动失败 ${e.message}`)
-      continue
+      break
     }
     proc = child
     attach(child)
     const t0 = Date.now()
     const info = await waitReady(READY_TIMEOUT)
     if (!info) {
-      tried.push(`${c.label}: 握手超时或无输出${logTail.length ? ` (${logTail[logTail.length - 1]})` : ''}`)
+      const crashed = child.__exitCode != null && child.__exitCode !== 0
+      tried.push(`${c.label}[${prov}]: 握手超时或无输出${logTail.length ? ` (${logTail[logTail.length - 1]})` : ''}`)
       try { child.kill() } catch { /* 忽略 */ }
       proc = null
-      continue
+      // 没握手就崩了(不是超时挂着)且当前不是 CPU -> 换 CPU 再试; 否则下一个候选
+      if (crashed && prov !== 'cpu') continue
+      break
     }
     if (!info.ok) {
-      tried.push(`${c.label}: ${info.error || '依赖不可用'}`)
+      tried.push(`${c.label}[${prov}]: ${info.error || '依赖不可用'}`)
       try { child.kill() } catch { /* 忽略 */ }
       proc = null
       continue
     }
-    const provider = (info.providers || []).includes('CUDAExecutionProvider') && cfg.provider !== 'cpu'
+    const provider = (info.providers || []).includes('CUDAExecutionProvider') && prov !== 'cpu'
       ? 'CUDAExecutionProvider' : 'CPUExecutionProvider'
     activeConfig = cfg
     flog('tagger', `服务已就绪 ${c.label} provider=${info.providers?.join('/') || '?'} 握手 ${Date.now() - t0}ms`)
     onLog?.(`反推服务已就绪(${c.label}, 握手 ${Date.now() - t0}ms)`)
     return { ok: true, python: py, model, csv, provider, providers: info.providers || [], tried, cfg }
+    }
   }
 
   flog('tagger', `没有可用的反推解释器: ${JSON.stringify(tried)}`)

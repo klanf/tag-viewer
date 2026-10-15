@@ -96,6 +96,18 @@ function patchSettings(patch) {
   try { fs.writeFileSync(p, `${JSON.stringify({ ...cur, ...patch }, null, 2)}\n`, 'utf8') } catch { /* 只读等异常场景忽略 */ }
 }
 
+/** 设置弹窗/引导条「一键下载」入口 —— 比 ensureRuntimeFlow 多三层状态反馈 */
+async function downloadModelNow() {
+  if (runtimeBusy) { toast('反推环境正在下载中, 看右下角进度卡', 'info', 4000); return }
+  const cfg = taggerConfig()
+  const ready = cfg.pythonOnDisk && cfg.modelExists && cfg.csvExists
+    && !(await require('./runtime-setup.cjs').modelIntegrityIssue(cfg.model, cfg.csv))
+  if (ready) { toast('反推环境已就绪, 无需下载', 'info', 4000); return }
+  runtimeOfferSkipped = false   // 用户主动点了下载, 解除「暂不」的记忆
+  toast('开始下载反推环境… 看右下角进度卡', 'info', 5000)
+  await ensureRuntimeFlow({ force: true })
+}
+
 async function ensureRuntimeFlow({ force = false } = {}) {
   if (!app.isPackaged || isDev || runtimeBusy) return
   if (!force && runtimeOfferSkipped) return
@@ -126,29 +138,35 @@ async function ensureRuntimeFlow({ force = false } = {}) {
   runtimeBusy = true
   try {
     const { ensurePythonRuntime, ensureModel } = require('./runtime-setup.cjs')
+    // 进度可视化: 结构化推给渲染层(TvSetupProgress 卡片), toast 只留关键节点。
+    // 此前只有"每 10% 一条 toast", 1.27GB 下载用户基本在盲等 —— 2026-10-15 反馈。
+    const sendSetup = (p) => { try { win?.webContents?.send('tagger:setup-progress', p) } catch { /* 窗口没了就算了 */ } }
     if (needPython) {
       const res = await ensurePythonRuntime({
         destDir: path.join(app.getPath('userData'), 'runtime'),
         candidates: cfg.pythons,
-        onStage: (s) => toast(s, 'info', 5000),
+        onStage: (s) => { sendSetup({ stage: s }); toast(s, 'info', 5000) },
       })
       process.env.TV_PYTHON = res.exe
       patchSettings({ pythonPath: res.exe })
+      sendSetup({ stage: `Python 就绪: ${res.version || res.exe}` })
       toast(`Python 就绪: ${res.exe}`, 'info', 4000)
     }
     if (needModel) {
       const ws = getWorkspace()
-      let lastPct = 0
       const res = await ensureModel({
         destDir: path.join(ws.dataDir, 'models'),
         existsCheck: () => ({ modelPath: cfg.modelExists ? cfg.model : null, csvPath: cfg.csvExists ? cfg.csv : null }),
-        onStage: (s) => toast(s, 'info', 5000),
+        onStage: (s) => { sendSetup({ stage: s }); toast(s, 'info', 5000) },
         onProgress: (name, bytes) => {
-          const size = name.endsWith('.csv') ? 401399 : 1271365854
-          const pct = Math.min(100, Math.floor((bytes * 100) / size))
-          if (pct >= lastPct + 10) { lastPct = pct; toast(`正在下载 ${name}… ${pct}%`, 'info', 2500) }
+          const total = name.endsWith('.csv') ? 401399 : 1271365854
+          sendSetup({
+            file: name, bytes, total,
+            pct: Math.min(100, Math.floor((bytes * 100) / total)),
+          })
         },
       })
+      sendSetup({ done: true, stage: `WD14 模型就绪: ${path.basename(res.modelPath)}` })
       toast(`WD14 模型就绪: ${res.modelPath}`, 'info', 5000)
     }
     dialog.showMessageBox(win, {
@@ -666,6 +684,8 @@ app.whenReady().then(() => {
       onReload: () => { /* 数据集重载后由渲染进程自己重取 */ },
       // 设置弹窗「检查更新」按钮 —— 复用菜单 Help → 检查更新… 的完整流程(主进程弹窗)
       onCheckUpdate: () => { checkForUpdateManually() },
+      // 引导弹窗「一键下载」—— 自动补齐 Python 运行时 + WD14 模型(带右下角进度卡)
+      onSetupDownload: () => { downloadModelNow().catch((e) => log('warn', `一键下载异常: ${e?.stack || e}`)) },
       // 同步跑完: 内存里的数据集已经过期, 必须重载一次, 否则看板数字和搜索
       // 索引还停在同步前(库是新的、界面是旧的)。quiet(2026-10-03): 移动一张图
       // 就会走这条链路, 全屏遮罩会打断浏览 —— 后台双缓冲重载, 完成后原地刷新。

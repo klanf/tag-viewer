@@ -19,6 +19,7 @@ import TvLightbox from '@/components/image/TvLightbox.vue'
 import TvCartDrawer from '@/components/cart/TvCartDrawer.vue'
 import TvFloatNav from '@/components/layout/TvFloatNav.vue'
 import TvIngestBadge from '@/components/layout/TvIngestBadge.vue'
+import TvSetupProgress from '@/components/layout/TvSetupProgress.vue'
 import TvTaggerSetupModal from '@/components/layout/TvTaggerSetupModal.vue'
 import TvSettingsModal from '@/components/layout/TvSettingsModal.vue'
 import TvTrashConfirm from '@/components/image/TvTrashConfirm.vue'
@@ -46,6 +47,7 @@ onMounted(() => app.init())
     <TvCartDrawer />
     <TvFloatNav />
     <TvIngestBadge />
+    <TvSetupProgress />
     <TvTaggerSetupModal />
     <TvSettingsModal />
     <TvTrashConfirm />
