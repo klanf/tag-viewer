@@ -332,7 +332,10 @@ function attach(child) {
     if (proc !== child) return
     for (const l of String(chunk).split('\n')) pushTail(l)
   })
-  child.on('error', (e) => { if (proc === child) failAll(`反推服务启动失败: ${e.message}`) })
+  child.on('error', (e) => {
+    child.__spawnError = e?.message || String(e)   // 供 tried 信息区分"文件不存在"和"握手超时"
+    if (proc === child) failAll(`反推服务启动失败: ${e.message}`)
+  })
   /**
    * 所有清理动作都先判断 `proc === child`。
    *
@@ -425,7 +428,11 @@ export async function startService(opts = {}, onLog) {
     const info = await waitReady(READY_TIMEOUT)
     if (!info) {
       const crashed = child.__exitCode != null && child.__exitCode !== 0
-      tried.push(`${c.label}[${prov}]: 握手超时或无输出${logTail.length ? ` (${logTail[logTail.length - 1]})` : ''}`)
+      // 三种失败分开报: spawn 失败(路径不存在/被占用) / 进程异常退出 / 真超时 ——
+      // 此前全是"握手超时或无输出", 排障时根本分不清(2026-10-15 远端实测)
+      const why = child.__spawnError ? `启动失败: ${child.__spawnError}`
+        : crashed ? `进程异常退出(code=${child.__exitCode})` : '握手超时或无输出'
+      tried.push(`${c.label}[${prov}]: ${why}${logTail.length ? ` (${logTail[logTail.length - 1]})` : ''}`)
       try { child.kill() } catch { /* 忽略 */ }
       proc = null
       // 没握手就崩了(不是超时挂着)且当前不是 CPU -> 换 CPU 再试; 否则下一个候选

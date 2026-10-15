@@ -114,7 +114,12 @@ async function ensureRuntimeFlow({ force = false, repair = false } = {}) {
   // repair(一键下载): 不信 pythonOnDisk —— 它只看 exe 在不在磁盘上, 一个没装
   // onnxruntime 的 conda 也能把它骗成 true(2026-10-15 远端实测)。强制进探测,
   // 由 ensurePythonRuntime 的 pkgsOk 逐个甄别, 谁不合格补谁。
-  const needPython = repair ? true : !cfg.pythonOnDisk
+  // 非 repair 也别全信: "自己的 python"= 嵌入式运行时或 settings.pythonPath 二者
+  // 有一条在磁盘上才算数。裸 miniconda 算「可以试的候选」, 不算「环境已就绪」——
+  // 否则新装机器永远等不到引导下载, 只剩一个注定降级的反推(远端二次实测)。
+  const ownPython = [path.join(app.getPath('userData'), 'runtime', 'python', 'python.exe'),
+    getSettings().pythonPath].some((p) => { try { return !!p && fs.existsSync(p) } catch { return false } })
+  const needPython = repair ? true : !ownPython
   // "存在"≠"有效": 旧构建可能把上游变列序的 597KB csv 下到了固定文件名。
   // 这里用 modelIntegrityIssue(csv 体积+SHA / onnx 体积)兜住, 坏文件进下载分支被挪走重下。
   let needModel = !(cfg.modelExists && cfg.csvExists)
