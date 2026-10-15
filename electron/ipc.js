@@ -60,6 +60,7 @@ import {
 import { ds, tagPoolSize, recomputeSafety, relocateRecord } from './core/dataset.js'
 import { searchStats, clearSearchCache } from './core/search.js'
 import { moveFile, copyFile } from './core/fileTransfer.js'
+import { spawnOpenWith, detectPhotoshop, INPAINT_EXE } from './core/externalApp.js'
 import { charLibDiag } from './core/charlib.js'
 import { translateInfo } from './core/translate.js'
 import { resolveFavorites } from './core/favResolve.js'
@@ -149,44 +150,14 @@ function addQuickFolderAndReturn(dirPath) {
   return { action: 'quick-added', result: { ok: true, name } }
 }
 
-/** Inpaint 固定预置项(2026-10-16 用户指定); 不存在就不进菜单 */
-// path-check-ignore: 这就是真实预置路径 —— 用户指定的外部程序位置, 本来就是要写死的
-const INPAINT_EXE = 'F:\\软件\\Inpaint_v9.1_x64.exe'
-
-/** Photoshop 自动探测(结果缓存): 只扫常见安装目录, 不碰注册表 —— 本机 reg.exe 已被
- *  安全策略拉黑, 文件系统扫描够用且够快(两级 readdir)。找不到返回 null。 */
-let psExeCache
-function detectPhotoshop() {
-  if (psExeCache !== undefined) return psExeCache
-  psExeCache = null
-  // path-check-ignore: PS 官方默认安装根目录, 探测目标本来就是固定盘符位置
-  const roots = ['C:\\Program Files\\Adobe', 'C:\\Program Files (x86)\\Adobe']
-  for (const root of roots) {
-    let subs = []
-    try { subs = fs.readdirSync(root, { withFileTypes: true }) } catch { continue }
-    for (const d of subs.filter((x) => x.isDirectory() && /Adobe Photoshop/i.test(x.name))) {
-      const exe = path.join(root, d.name, 'Photoshop.exe')
-      try { if (fs.statSync(exe).isFile()) { psExeCache = exe; break } } catch { /* 下一个 */ }
-      // 目录布局兼容: Adobe Photoshop XXXX 主程序可能在其子目录里
-      let inner = []
-      try { inner = fs.readdirSync(path.join(root, d.name), { withFileTypes: true }) } catch { continue }
-      for (const s of inner.filter((x) => x.isDirectory())) {
-        const exe2 = path.join(root, d.name, s.name, 'Photoshop.exe')
-        try { if (fs.statSync(exe2).isFile()) { psExeCache = exe2; break } } catch { /* 下一个 */ }
-      }
-      if (psExeCache) break
-    }
-    if (psExeCache) break
-  }
-  return psExeCache
-}
-
 /** 「用其他程序打开」的预置 + 最近使用合并清单(供二级菜单渲染) */
 function openWithPresets() {
   const out = []
   const ps = detectPhotoshop()
   if (ps) out.push({ name: 'Photoshop', path: ps })
   if (fs.existsSync(INPAINT_EXE)) out.push({ name: 'Inpaint', path: INPAINT_EXE })
+  // PS 没探测到时给一句说明(不然用户会以为"菜单漏了这一项")
+  if (!ps) out.push({ name: 'Photoshop', path: '', missing: '未找到 Photoshop' })
   const recents = Array.isArray(getSettings().recentOpenWith) ? getSettings().recentOpenWith : []
   for (const r of recents) {
     if (!out.some((x) => x.path.toLowerCase() === r.path.toLowerCase())) out.push({ name: r.name, path: r.path })
@@ -202,20 +173,6 @@ function recordRecentOpenWith(exe) {
   saveSettings({ recentOpenWith: [{ name: path.basename(clean, '.exe'), path: clean }, ...rest] })
 }
 
-/** 外部程序打开图片: detached 起进程, 不等它退出。成败按 access 探测给结构化结果 */
-function spawnOpenWith(exe, imgPath) {
-  return new Promise((resolve) => {
-    try {
-      const child = spawn(exe, [imgPath], { detached: true, stdio: 'ignore', windowsHide: true })
-      child.on('error', (err) => resolve({ ok: false, error: err.message }))
-      // detached + unref: 起来就算成功(PS 自己还要加载半天, 不能等)
-      child.unref()
-      resolve({ ok: true })
-    } catch (err) {
-      resolve({ ok: false, error: err.message })
-    }
-  })
-}
 
 /**
  * 目录路径 -> 它所属(或就是)的登记文件夹记录; 没命中返回 null。
@@ -397,14 +354,23 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
 
       // 「用其他程序打开」二级菜单(2026-10-16): 预置(PS 自动探测 / Inpaint 固定路径)
       // + 最近使用(settings.recentOpenWith, MRU) + 底部「浏览…」兜底(原来的系统对话框)。
-      const openWithSub = openWithPresets().map((a) => ({
-        label: `${a.name}     ${a.path}`.slice(0, 96),
-        click: () => { chosen = { action: 'openwith-exe', target: a.path } },
-      }))
+      const openWithSub = openWithPresets().map((a) => a.missing
+        ? { label: `${a.name} —— ${a.missing}`, enabled: false }
+        : {
+          label: `${a.name}     ${a.path}`.slice(0, 96),
+          click: () => { chosen = { action: 'openwith-exe', target: a.path } },
+        })
       if (!openWithSub.length) openWithSub.push({ label: '(没有可用程序)', enabled: false })
       else openWithSub.push({ type: 'separator' })
+      // 两根兜底: 自己挑 exe(拿得到路径 -> 能进 MRU, 下次排前面) 与系统原生对话框。
+      // 分开是因为原生那个「选择应用」对话框**不告诉调用方用户选了谁**, 没法记;
+      // 但它能列出 UWP/商店应用, 所以不能只留自己挑的那条。
       openWithSub.push({
-        label: '浏览其他程序…',
+        label: '选择其他程序…(会记住)',
+        click: () => { chosen = { action: 'openwith-pick' } },
+      })
+      openWithSub.push({
+        label: 'Windows 打开方式…',
         click: () => { chosen = { action: 'open-with' } },
       })
 
@@ -473,7 +439,28 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       if (act === 'openwith-exe' && chosen.target) {
         const r = await spawnOpenWith(chosen.target, imgPath)
         if (r.ok) recordRecentOpenWith(chosen.target)
-        return { action: 'open-with', result: r, from: imgPath }
+        // 外部程序"点了没反应"是最难排查的一类: 进程起没起来、参数对不对, 界面上一概看不出。
+        // 所以每次都落一行日志(launch.log 的 open-with 通道), 下次复现直接看这里。
+        flog('open-with', `${r.ok ? 'ok' : 'FAIL'} exe=${chosen.target} file=${imgPath}${r.ok ? '' : ` err=${r.error}`}`)
+        return { action: 'open-with', result: { ...r, exe: chosen.target }, from: imgPath }
+      }
+      if (act === 'openwith-pick') {
+        const pick = await dialog.showOpenDialog(win, {
+          title: '选择用来打开图片的程序',
+          properties: ['openFile'],
+          filters: [{ name: '程序', extensions: ['exe'] }],
+          // path-check-ignore: 打开文件框的默认落点, 写在 filters 之后
+          defaultPath: 'C:\\Program Files',
+        })
+        if (pick.canceled || !pick.filePaths.length) return { action: null }
+        const exe = pick.filePaths[0]
+        if (!/\.exe$/i.test(exe)) {
+          return { action: 'open-with', result: { ok: false, error: '只能选 .exe 程序' }, from: imgPath }
+        }
+        const r = await spawnOpenWith(exe, imgPath)
+        if (r.ok) recordRecentOpenWith(exe)
+        flog('open-with', `${r.ok ? 'ok' : 'FAIL'} exe=${exe} file=${imgPath}${r.ok ? '' : ` err=${r.error}`}`)
+        return { action: 'open-with', result: { ...r, exe }, from: imgPath }
       }
       if (act === 'copy' && chosen.target) {
         const r = await copyFile(imgPath, chosen.target)

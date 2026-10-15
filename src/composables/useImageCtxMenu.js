@@ -77,8 +77,14 @@ export function useImageCtxMenu() {
       } else if (action === 'copy-failed') {
         ui.err('复制失败: ' + (r.result?.error || '未知原因'), 3600)
       } else if (action === 'open-with') {
-        // 成功了不打扰(对话框自己会弹出来); 只报失败, 免得"点了没反应"
-        if (!r.result?.ok) ui.err(r.result?.error || '调不出「打开方式」', 3600)
+        // 系统对话框那条路: 成功了对话框自己会弹出来, 不打扰;
+        // 但**直接指定 exe** 的那条路必须报一句成功 —— 有些程序(Inpaint 这类单 exe)
+        // 启动慢或压根不给窗口, 不报错的话用户只看到"点了没反应"。
+        if (!r.result?.ok) {
+          ui.err(r.result?.error || '调不出「打开方式」', 3600)
+        } else if (r.result?.exe) {
+          ui.ok(`已用 ${r.result.exe.split(/[\\/]/).pop().replace(/\.exe$/i, '')} 打开`, 'ok', 1800)
+        }
       }
     } catch (err) {
       // console.error 会被主进程转发进 logs/launch.log([render] 行), 方便排查
