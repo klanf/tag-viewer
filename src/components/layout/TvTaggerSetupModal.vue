@@ -11,7 +11,7 @@
  * 判定字段来自 tagger:status 的 config(静态可用性, 不拉起进程):
  *   config.missing = ['WD14 模型', '标签表', ...], config.available = missing 为空
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import TvModal from '@/components/base/TvModal.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import { useAppStore } from '@/stores/useAppStore.js'
@@ -32,15 +32,21 @@ async function reprobe() {
   await app.taggerRefresh()
   rechecked.value = true
 }
-/** 一键下载: 主进程自动补齐 Python 运行时 + 模型(约 1.3GB), 右下角有进度卡 */
+/** 一键下载: 主进程自动补齐 Python 运行时 + 模型(约 1.3GB), 进度直接画在弹窗里 */
 const downloading = ref(false)
+const setupP = computed(() => app.setup || {})
+function mb(v) { const n = Number(v) || 0; return `${(n / 1048576).toFixed(1)} MB` }
 async function oneClickDownload() {
   downloading.value = true
-  try {
-    await api.setupDownload()
-    open.value = false   // 下载跑起来了, 让位给右下角进度卡
-  } catch { /* 失败主进程会 toast */ } finally { downloading.value = false }
+  try { await api.setupDownload() } catch { /* 失败走 error 推送 */ } finally { downloading.value = false }
 }
+/* 下载不再"跑起来就关弹窗让位小卡"(2026-10-15): 进度内嵌在本弹窗, 弹窗本身锁背景。
+ * done → 重新探测并自动关; error → 弹窗里给「重试下载」。 */
+watch(() => setupP.value.done, (d) => {
+  if (!d) return
+  reprobe()
+  open.value = false
+})
 </script>
 
 <template>
@@ -82,13 +88,26 @@ async function oneClickDownload() {
       </p>
     </div>
 
+    <!-- 下载进度内嵌(2026-10-15): 不再依赖右下角小卡 -->
+    <div v-if="setupP.file || setupP.stage" class="dl">
+      <div class="dl-stage">{{ setupP.stage || `正在下载: ${setupP.file}` }}</div>
+      <template v-if="setupP.bytes">
+        <div class="dl-bar"><div class="dl-fill" :style="{ width: `${setupP.pct || 0}%` }" /></div>
+        <div class="dl-nums">{{ setupP.pct || 0 }}% · {{ mb(setupP.bytes) }} / {{ mb(setupP.total) }}</div>
+      </template>
+      <div v-if="setupP.error" class="dl-err">下载失败: {{ setupP.error }}</div>
+    </div>
+
     <template #footer>
       <div class="foot">
         <span class="dim">彻底关掉自动反推: 环境变量 <span class="mono">TV_TAGGER=0</span></span>
-        <TvButton :disabled="downloading" @click="reprobe">重新探测</TvButton>
-        <TvButton variant="primary" :disabled="downloading" @click="oneClickDownload">
-          {{ downloading ? '启动中…' : '⬇️ 一键下载（约 1.3GB）' }}
-        </TvButton>
+        <TvButton v-if="setupP.error" variant="primary" @click="oneClickDownload">重试下载</TvButton>
+        <template v-else>
+          <TvButton :disabled="downloading" @click="reprobe">重新探测</TvButton>
+          <TvButton variant="primary" :disabled="downloading" @click="oneClickDownload">
+            {{ downloading ? '启动中…' : '⬇️ 一键下载（约 1.3GB）' }}
+          </TvButton>
+        </template>
       </div>
     </template>
   </TvModal>
@@ -120,5 +139,11 @@ async function oneClickDownload() {
   overflow-x: auto;
 }
 .dim { color: var(--faint); font-size: 12px; }
+.dl { margin-top: 12px; padding: 10px 12px; background: var(--panel3); border-radius: var(--r-md, 8px); }
+.dl-stage { font-size: 12px; margin-bottom: 6px; }
+.dl-bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
+.dl-fill { height: 100%; background: var(--accent); transition: width .25s ease; }
+.dl-nums { font-size: 11px; color: var(--muted); margin-top: 5px; }
+.dl-err { color: var(--danger); font-size: 12px; margin-top: 6px; word-break: break-all; }
 .foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 </style>

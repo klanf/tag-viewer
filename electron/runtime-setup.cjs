@@ -130,7 +130,19 @@ async function pkgsOk(exe) {
  * @returns {{exe: string, fresh: boolean, version: string}}
  */
 async function ensurePythonRuntime({ destDir, candidates, onStage = () => {}, onProgress = () => {} }) {
-  const found = await probePython(candidates);
+  // 2026-10-15 修正: 候选不能只看 --version —— 一个没装 onnxruntime 的裸
+  // miniconda 也会被判"可用 Python"而跳过安装(远端实测: 引导永远补不上运行时)。
+  // 候选必须过 pkgsOk(真跑 import numpy+onnxruntime)才算数。
+  let found = null
+  for (const bin of candidates || []) {
+    if (!bin || (!bin.includes('\\') && !bin.includes('/'))) continue // PATH 裸名跳过（商店占位程序陷阱）
+    if (await pkgsOk(bin)) {
+      let version = ''
+      try { version = (await execFile(bin, ['--version'], { timeoutMs: 15_000 })).replace(/^[^\d]*/, '').trim() } catch { /* 有包就行 */ }
+      found = { bin, version }
+      break
+    }
+  }
   if (found) {
     onStage(`已检测到可用 Python（${found.version}），跳过安装`);
     return { exe: found.bin, fresh: false, version: found.version };

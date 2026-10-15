@@ -815,12 +815,23 @@ export function taggerStatus() {
   let queue = { pending: 0, failed: 0, done: 0, total: 0 }
   try { queue = queueStats() } catch { /* 库还没建好 */ }
   const cfg = taggerConfig()
+  // 「自己的 python」= 嵌入式运行时或 settings.pythonPath 在磁盘上(与 main.js
+  // ensureRuntimeFlow 的 ownPython 同判)。裸 conda 不算 —— 它验证不了 onnxruntime
+  // 能不能 import, 渲染层据此判定首启要不要进环境下载面板(2026-10-15 远端实测:
+  // 只看 degraded 会在反推没跑过之前漏报, 选完文件夹直接卡死等打标)。
+  let pythonOwned = false
+  try {
+    const appDir = getWorkspace().appDir
+    pythonOwned = [path.join(appDir, 'runtime', 'python', 'python.exe'), getSettings().pythonPath]
+      .some((p) => { try { return !!p && fs.existsSync(p) } catch { return false } })
+  } catch { /* workspace 还没起来就当没有 */ }
   return {
     ...taggerState,
     queue,
     config: {
       python: cfg.python || '',
       pythonOnDisk: cfg.pythonOnDisk,
+      pythonOwned,
       script: cfg.script || '',
       model: cfg.model || '',
       csv: cfg.csv || '',

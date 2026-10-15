@@ -57,23 +57,31 @@ async function startWithFolder() {
     }
     // 已在跑就静默跳过(登记跃迁本身会自动接同步; 这里兜底)
     api.ingestRun().catch(() => {})
-    scanning.value = true
-    const ok = await waitFirstRecords(10 * 60 * 1000)
-    if (!ok) {
-      // 2026-10-03: 别再把"入队等反推"误报成"没扫到图" —— 拉一次队列状态区分
+    // 2026-10-15 首启向导: 扫描先入库(与下载并行), 但反推必须等环境就绪 ——
+    // 环境没好就拉反推只会降级, 用户卡在 0% 打标页(远端实测)。环境是向导正式一步。
+    await ensureEnvThen(async () => {
+      scanning.value = true
       try {
-        const st = await api.ingestStatus()
-        const q = st?.queue || {}
-        const total = Number(q.total) || 0
-        if (total > 0) {
-          pickErr.value = `已扫到 ${total} 张图并在后台反推打标中（已完成 ${Number(q.done) || 0} 张）—— 点「重试」查看进度，反推完成后自动进入看板`
-        } else {
-          pickErr.value = '扫描完成但没找到支持的图片 —— 确认这个文件夹里真的有图片，然后点「重试」'
+        const ok = await waitFirstRecords(10 * 60 * 1000)
+        if (!ok) {
+          // 2026-10-03: 别再把"入队等反推"误报成"没扫到图" —— 拉一次队列状态区分
+          try {
+            const st = await api.ingestStatus()
+            const q = st?.queue || {}
+            const total = Number(q.total) || 0
+            if (total > 0) {
+              pickErr.value = `已扫到 ${total} 张图并在后台反推打标中（已完成 ${Number(q.done) || 0} 张）—— 反推继续在后台跑，完成后重新打开即可`
+            } else {
+              pickErr.value = '扫描完成但没找到支持的图片 —— 确认这个文件夹里真的有图片，然后点「重试」'
+            }
+          } catch { pickErr.value = '扫描未产生入库记录 —— 确认文件夹里有图片后重新选择，或重启应用' }
+          return
         }
-      } catch { pickErr.value = '扫描未产生入库记录 —— 请点「重试」再试一次' }
-      return
-    }
-    await reload()
+        await reload()
+      } finally {
+        scanning.value = false
+      }
+    })
   } catch (e) {
     pickErr.value = String(e?.message || e)
   } finally {
@@ -82,10 +90,56 @@ async function startWithFolder() {
   }
 }
 
+/* ---- 首启向导 · 环境准备(2026-10-15) ----
+ * WD14 反推环境(Python 运行时 + 模型)是首启的必须步骤, 不再走旁路 native dialog。
+ * 画在 boot 全屏遮罩正中 = 界面天然锁定; 进度字节级; 失败给「重试下载」(断点续传)。
+ * 环境就绪(tagger:status 不再 degraded)后自动继续后续步骤, 不允许跳过。
+ */
+const envUi = ref(null)          // null=不在环境步骤 | { phase:'running'|'error' }
+const envAfter = ref(null)       // 环境就绪后的续跑回调
+const setupP = computed(() => app.setup || {})
+
+/** 环境没就绪 → 进下载面板, 就绪后执行 cb; 已就绪直接 cb。
+ *  判定用静态 config, 不能用 degraded —— 那个要反推真跑过一次才置位,
+ *  选完文件夹那一刻永远是 false, 环境面板会被跳过(2026-10-15 远端实测)。
+ *  规则: 模型/脚本/标签表缺一(available=false) 或 没有自持 python(嵌入式运行时/
+ *  settings.pythonPath 都不在盘上, 裸 conda 不算) → 需要下载。 */
+function envNeeded(ts) {
+  if (!ts) return false
+  const c = ts.config || {}
+  return ts.degraded === true || c.available === false || c.pythonOwned === false
+}
+
+async function ensureEnvThen(cb) {
+  const ts = await api.taggerStatus().catch(() => null)
+  if (!envNeeded(ts)) { await cb(); return }
+  envUi.value = { phase: 'running' }
+  envAfter.value = cb
+  api.setupDownload().catch(() => { /* 失败走 error 推送 */ })
+}
+
+function retryEnv() {
+  envUi.value = { phase: 'running' }
+  api.setupDownload().catch(() => {})
+}
+
+function mb(v) { const n = Number(v) || 0; return `${(n / 1048576).toFixed(1)} MB` }
+
+watch(() => setupP.value.done, (d) => {
+  if (!d || !envUi.value) return
+  envUi.value = null
+  api.taggerRun().catch(() => {})       // 环境好了立刻拉反推(用户拍板: 立即放行)
+  const f = envAfter.value; envAfter.value = null
+  Promise.resolve(f ? f() : null).catch(() => {})
+})
+watch(() => setupP.value.error, (e) => {
+  if (e && envUi.value) envUi.value = { phase: 'error' }
+})
+
 /** 轮询 ingest:status, 等到 stats.inserted > 0(第一批图真正落库)或超时。
  *  完成判定: lastRunAt 晚于我们的起点 && 已不在跑 —— 说明这一轮扫完了。
- *  2026-10-03: 裸图(无内嵌提示词)不落 images 表、只进打标队列 —— 所以第二个
- *  放行条件是 queue.done ≥ 10(反推已产出前 10 张), 不能死等 inserted。 */
+ *  2026-10-15: 放行条件 done≥10 改成 done≥1(用户拍板"环境好了立即放行") ——
+ *  反推出第一张就进看板, 剩下的在后台继续跑完。 */
 function waitFirstRecords(timeoutMs) {
   const deadline = Date.now() + timeoutMs
   const SYNC_RUNNING = new Set(['running', 'enum', 'compare', 'read', 'dims', 'folder-done', 'rebuild-tags'])
@@ -113,7 +167,7 @@ function waitFirstRecords(timeoutMs) {
           resolve(true)
           return
         }
-        if (done >= 10) {
+        if (done >= 1) {
           scanNote.value = `正在反推打标… 已入库 ${done} / ${total} 张`
           resolve(true)
           return
@@ -142,8 +196,8 @@ async function reload() {
 /* ---- 反推暂态放行(2026-10-03) ----
  * 库里 folders 有行、队列压着裸图、images 还是 0 → 数据集加载 phase=error,
  * 错误文案是 dataset.js 的"…正在打标队列里等待反推入库"。这是**暂态**不是死局:
- * 反推在后台跑, 队列 done 涨到 10 张时重载数据集就能进看板, 反推继续在后台跑完。
- * 90 秒一张没动 → 大概率反推降级(没 python/模型), 把降级原因亮出来别让用户干等。 */
+ * 反推在后台跑, 队列 done≥1 时重载数据集就能进看板, 反推继续在后台跑完。
+ * 若反推一直没动(降级 = 环境没好), 直接进环境下载面板 —— 不再让用户干等 90 秒。 */
 const taggingWait = computed(() => app.phase === 'error' && /打标队列|等待反推/.test(app.error || ''))
 const tagQ = ref({ done: 0, total: 0, pending: 0 })
 const tagWarn = ref('')
@@ -158,9 +212,19 @@ function startTagPoll() {
   tagPollStarted = true
   let lastDone = -1
   let stallSince = Date.now()
+  let envKicked = false
   const tick = async () => {
     if (app.ready || !taggingWait.value) return          // 已放行 / 状态已变, 停
     try {
+      // 首拍探一次环境: 反推降级(没 python/模型)就开下载, 别让用户对着 0% 干等
+      if (!envKicked) {
+        envKicked = true
+        const ts = await api.taggerStatus().catch(() => null)
+        if (envNeeded(ts)) {
+          tagWarn.value = ''
+          await ensureEnvThen(() => { api.taggerRun().catch(() => {}) })
+        }
+      }
       const st = await api.ingestStatus()
       const q = st?.queue || {}
       tagQ.value = { done: Number(q.done) || 0, total: Number(q.total) || 0, pending: Number(q.pending) || 0 }
@@ -172,7 +236,7 @@ function startTagPoll() {
         const ts = await api.taggerStatus().catch(() => null)
         if (ts?.degraded) tagWarn.value = `反推未在运行: ${ts.reason || '未知原因'}（修好环境后重启应用即可接着跑，队列里的图不会丢）`
       }
-      if (tagQ.value.done >= 10) {
+      if (tagQ.value.done >= 1) {
         await reload()
         if (app.ready) return                            // 放行成功, 遮罩随 app.ready 消失
       }
@@ -192,8 +256,29 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
         <div class="ttl">Tag 可视化看板</div>
 
         <template v-if="app.phase === 'error'">
-          <!-- 反推暂态: 图已入队、正在后台打标 —— 给进度条, done≥10 自动放行进看板 -->
-          <template v-if="taggingWait">
+          <!-- 首启向导 · 环境准备(2026-10-15): WD14 下载是必须步骤, 画在遮罩正中, 界面天然锁定 -->
+          <template v-if="envUi">
+            <div class="err" style="color: var(--accent);">⚙️ 反推环境准备</div>
+            <div class="hint" style="margin-top: 4px;">
+              需要下载 Python 运行时（约 150MB）与 WD14 反推模型（约 1.27GB）。<br>
+              支持断点续传，下载完成后自动继续，期间请保持网络畅通。
+            </div>
+            <template v-if="!setupP.error">
+              <div class="phase" style="margin-top: 14px;">{{ setupP.stage || '正在连接下载源…' }}</div>
+              <div class="bar"><div class="fill" :style="{ width: `${setupP.pct || 0}%` }" /></div>
+              <div class="nums">
+                <span>{{ setupP.pct || 0 }}%</span>
+                <span v-if="setupP.bytes">{{ mb(setupP.bytes) }} / {{ mb(setupP.total) }}</span>
+              </div>
+            </template>
+            <div v-else class="err2">下载失败: {{ setupP.error }}</div>
+            <div class="btns" v-if="setupP.error">
+              <TvButton variant="primary" @click="retryEnv">重试下载</TvButton>
+            </div>
+          </template>
+
+          <!-- 反推暂态: 图已入队、正在后台打标 —— 给进度条, done≥1 自动放行进看板 -->
+          <template v-else-if="taggingWait">
             <div class="err" style="color: var(--accent);">🖼️ 图片已全部扫到，正在反推打标</div>
             <div class="bar"><div class="fill" :style="{ width: `${tagPct}%` }" /></div>
             <div class="nums">
@@ -201,7 +286,7 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
               <span>已入库 {{ nfmt(tagQ.done) }} / {{ nfmt(tagQ.total) }} 张</span>
             </div>
             <div class="hint">
-              反推在后台跑，入库满 10 张自动进入看板，之后反推继续在后台完成。<br>
+              反推在后台跑，反推出第一批标签即自动进入看板，之后反推继续在后台完成。<br>
               期间关掉窗口也没关系，下次启动会接着跑（队列不会丢）。
             </div>
             <div v-if="tagWarn" class="err2">{{ tagWarn }}</div>
@@ -218,6 +303,7 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
             <!-- 首次使用: 不用碰任何配置文件, 选个文件夹登记就开跑 -->
             <div class="hint">
               点下面的按钮选一个装满图的文件夹，登记后自动扫描入库。<br>
+              首次使用会先自动下载反推环境（Python + 模型，约 1.4GB，断点续传），下载完自动打标。<br>
               中文标签已内置，开箱即有。数据目录: <code>{{ app.workspace.dataDir || '(未设置)' }}</code>
             </div>
             <div v-if="pickErr" class="err2">{{ pickErr }}</div>
@@ -229,7 +315,6 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
             <div v-if="scanning" class="hint">{{ scanNote }}（完成后自动进入看板）</div>
             <div class="btns">
               <TvButton variant="secondary" @click="reveal">打开数据目录</TvButton>
-              <TvButton variant="secondary" @click="reload">重试</TvButton>
             </div>
           </template>
 
@@ -241,8 +326,7 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
               检查 <code>tag_viewer_config.json</code> 里的 <code>data_files_dir</code> 是否存在。
             </div>
             <div class="btns">
-              <TvButton variant="primary" @click="reload">重试</TvButton>
-              <TvButton variant="secondary" @click="reveal">打开数据目录</TvButton>
+              <TvButton variant="primary" @click="reveal">打开数据目录</TvButton>
             </div>
           </template>
         </template>

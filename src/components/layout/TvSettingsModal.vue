@@ -50,13 +50,16 @@ const PROVIDER_LABEL = {
   TensorrtExecutionProvider: 'TensorRT',
 }
 
-/** 每次打开都重拉: 版本 / 加速探测 / 当前偏好 */
+/** 每次打开都重拉: 版本 / 加速探测 / 当前偏好 / 反推状态 */
 async function loadAll() {
   probing.value = true
   try {
     const [v, a] = await Promise.all([
       api.appVersion().catch(() => null),
       api.taggerAccel().catch((e) => ({ ok: false, error: e.message })),
+      // Python 字段读 app.tagger.config.python —— 不刷新的话显示的是启动时的旧值,
+      // 首启下载完环境的机器会一直显示"未配置"(2026-10-15 用户截图实测)
+      app.taggerRefresh().catch(() => null),
     ])
     if (v) { version.value = v.version; packed.value = v.packaged }
     accel.value = a
@@ -158,7 +161,11 @@ const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider'
         </div>
         <div class="row">
           <span class="k">Python</span>
-          <span class="v"><span class="mono">{{ app.tagger?.config?.python || '未配置' }}</span></span>
+          <span class="v">
+            <span class="mono">{{ app.tagger?.config?.python || '未配置' }}</span>
+            <span v-if="app.tagger?.config?.python && !app.tagger?.config?.pythonOwned" class="dim">（候选自动探测）</span>
+            <span v-else-if="app.tagger?.config?.python" class="dim">（嵌入式运行时）</span>
+          </span>
         </div>
       </section>
 

@@ -85,8 +85,10 @@ function setupUpdater() {
  * 模型从 hf-mirror 直拉(断点续传+SHA256 锚点), 落数据目录 models/(tagger 候选认原名)。
  * 支持安装器或快捷方式带 --download-model 直进下载(跳过确认弹窗)。
  */
-let runtimeOfferSkipped = false
 let runtimeBusy = false
+
+/** 反推环境进度统一出口: 推给渲染层(首启向导/修复弹窗/右下角小卡都吃这一路)。 */
+const sendSetup = (p) => { try { win?.webContents?.send('tagger:setup-progress', p) } catch { /* 窗口没了就算了 */ } }
 
 function patchSettings(patch) {
   const p = path.join(app.getPath('userData'), 'settings.json')
@@ -98,28 +100,40 @@ function patchSettings(patch) {
 
 /** 设置弹窗/引导条「一键下载」入口 —— 比 ensureRuntimeFlow 多三层状态反馈 */
 async function downloadModelNow() {
-  if (runtimeBusy) { toast('反推环境正在下载中, 看右下角进度卡', 'info', 4000); return }
+  if (runtimeBusy) { toast('反推环境正在下载中', 'info', 4000); return }
   // 不做"看起来就绪"的提前返回 —— pythonOnDisk 只验证磁盘上有 exe, 验证不了
   // onnxruntime 能不能 import(远端实测: 一个裸 miniconda 就能把引导下载骗跳过)。
   // repair 模式强制走 ensurePythonRuntime 的 pkgsOk 探测, 不合格自动补嵌入式运行时。
-  runtimeOfferSkipped = false   // 用户主动点了下载, 解除「暂不」的记忆
-  toast('开始检查/下载反推环境… 看右下角进度卡', 'info', 5000)
+  toast('开始检查/下载反推环境…', 'info', 5000)
   await ensureRuntimeFlow({ force: true, repair: true })
+}
+
+/**
+ * 探测反推环境缺什么, 推给渲染层(probe) —— 不弹任何窗口。
+ * 首启向导(TvBootOverlay)在挂载/进入环境步骤时拉 tagger:status 判定;
+ * 这里 4 秒的兜底探测把结果也推一份, 双保险。
+ */
+function probeRuntime() {
+  try {
+    if (!app.isPackaged || isDev) return
+    const cfg = taggerConfig()
+    const ownPython = [path.join(app.getPath('userData'), 'runtime', 'python', 'python.exe'),
+      getSettings().pythonPath].some((p) => { try { return !!p && fs.existsSync(p) } catch { return false } })
+    sendSetup({ probe: { needPython: !ownPython, needModel: !(cfg.modelExists && cfg.csvExists) } })
+  } catch { /* 探测失败不打扰 */ }
 }
 
 async function ensureRuntimeFlow({ force = false, repair = false } = {}) {
   if (!app.isPackaged || isDev || runtimeBusy) return
-  if (!force && runtimeOfferSkipped) return
+  // 2026-10-15 交互重设计: 「现在下载/暂不」native dialog 全部移除, 由渲染层首启向导
+  // (TvBootOverlay) 统一处理 —— 环境准备是向导的正式一步, 下载进度画在遮罩正中。
+  // 非 repair 调用(boot 兜底)只做探测推送, 不再弹窗询问。
+  if (!repair) { probeRuntime(); return }
   const cfg = taggerConfig()
   // repair(一键下载): 不信 pythonOnDisk —— 它只看 exe 在不在磁盘上, 一个没装
   // onnxruntime 的 conda 也能把它骗成 true(2026-10-15 远端实测)。强制进探测,
   // 由 ensurePythonRuntime 的 pkgsOk 逐个甄别, 谁不合格补谁。
-  // 非 repair 也别全信: "自己的 python"= 嵌入式运行时或 settings.pythonPath 二者
-  // 有一条在磁盘上才算数。裸 miniconda 算「可以试的候选」, 不算「环境已就绪」——
-  // 否则新装机器永远等不到引导下载, 只剩一个注定降级的反推(远端二次实测)。
-  const ownPython = [path.join(app.getPath('userData'), 'runtime', 'python', 'python.exe'),
-    getSettings().pythonPath].some((p) => { try { return !!p && fs.existsSync(p) } catch { return false } })
-  const needPython = repair ? true : !ownPython
+  const needPython = true
   // "存在"≠"有效": 旧构建可能把上游变列序的 597KB csv 下到了固定文件名。
   // 这里用 modelIntegrityIssue(csv 体积+SHA / onnx 体积)兜住, 坏文件进下载分支被挪走重下。
   let needModel = !(cfg.modelExists && cfg.csvExists)
@@ -127,27 +141,11 @@ async function ensureRuntimeFlow({ force = false, repair = false } = {}) {
     const why = await require('./runtime-setup.cjs').modelIntegrityIssue(cfg.model, cfg.csv)
     if (why) { log('warn', `模型文件校验不通过: ${why}, 进入重新下载分支`); needModel = true }
   }
-  if (!needPython && !needModel) return
-
-  if (!force) {
-    const missing = [
-      needPython ? 'Python 运行时（嵌入式版 + 反推依赖包，约 150MB）' : '',
-      needModel ? `WD14 反推模型（${(1271365854 / 1048576 / 1024).toFixed(2)}GB，从 hf-mirror 下载，支持断点续传）` : '',
-    ].filter(Boolean)
-    const { response } = await dialog.showMessageBox(win, {
-      type: 'question', title: '反推环境', buttons: ['现在下载', '暂不'], defaultId: 0, cancelId: 1,
-      message: 'WD14 反推环境未就绪',
-      detail: `还差:\n  · ${missing.join('\n  · ')}\n\n现在下载吗? 也可以以后在扫描页看「看看怎么装」手动配置。`,
-    })
-    if (response !== 0) { runtimeOfferSkipped = true; return }
-  }
 
   runtimeBusy = true
   try {
     const { ensurePythonRuntime, ensureModel } = require('./runtime-setup.cjs')
-    // 进度可视化: 结构化推给渲染层(TvSetupProgress 卡片), toast 只留关键节点。
-    // 此前只有"每 10% 一条 toast", 1.27GB 下载用户基本在盲等 —— 2026-10-15 反馈。
-    const sendSetup = (p) => { try { win?.webContents?.send('tagger:setup-progress', p) } catch { /* 窗口没了就算了 */ } }
+    // 进度可视化: 结构化推给渲染层, toast 只留关键节点。
     if (needPython) {
       const res = await ensurePythonRuntime({
         destDir: path.join(app.getPath('userData'), 'runtime'),
@@ -157,7 +155,6 @@ async function ensureRuntimeFlow({ force = false, repair = false } = {}) {
       process.env.TV_PYTHON = res.exe
       patchSettings({ pythonPath: res.exe })
       sendSetup({ stage: `Python 就绪: ${res.version || res.exe}` })
-      toast(`Python 就绪: ${res.exe}`, 'info', 4000)
     }
     if (needModel) {
       const ws = getWorkspace()
@@ -174,19 +171,13 @@ async function ensureRuntimeFlow({ force = false, repair = false } = {}) {
         },
       })
       sendSetup({ done: true, stage: `WD14 模型就绪: ${path.basename(res.modelPath)}` })
-      toast(`WD14 模型就绪: ${res.modelPath}`, 'info', 5000)
+    } else {
+      sendSetup({ done: true, stage: 'WD14 模型已就绪' })
     }
-    dialog.showMessageBox(win, {
-      type: 'info', title: '反推环境',
-      message: '反推环境配置完成。',
-      detail: '新下载的模型/解释器从下次反推起生效; 正在跑的扫描页刷新一下即可看到状态更新。',
-    })
   } catch (e) {
     log('warn', `反推环境引导失败: ${e?.stack || e}`)
-    dialog.showMessageBox(win, {
-      type: 'warning', title: '反推环境', message: '环境下载未完成',
-      detail: `${e?.message || e}\n\n可稍后重试(重新打开应用会再次询问), 或按 docs/新手上手.md 手动配置。`,
-    })
+    // 失败不再弹窗: 推 error 给向导, 由「重试下载」按钮(断点续传)接手
+    sendSetup({ error: e?.message || String(e) })
   } finally {
     runtimeBusy = false
   }
@@ -273,6 +264,14 @@ if (!app.isPackaged) {
  * app.getPath('userData') 在 ready 之前虽然可用, 但这里是"绝不能抛异常"的位置
  * (抛了就双击没反应), 所以整体包一层 try。
  */
+// TV_USERDATA: 调试/测试钩子 —— 必须在 LOG_DIR/单实例锁**之前**改 userData
+// (锁按 userData 路径区分, 日志目录也从它派生)。这样本机可以在真实实例旁边
+// 并行跑一个"全新装机"实例(无运行时/无模型/无配置), 不碰真实数据。
+// 2026-10-15 踩: 放到锁后面太迟 —— paths 在模块加载期就已解析, 测试实例直接写穿到真实目录。
+if (process.env.TV_USERDATA) {
+  try { fs.mkdirSync(process.env.TV_USERDATA, { recursive: true }) } catch { /* 让 electron 自己报 */ }
+  app.setPath('userData', process.env.TV_USERDATA)
+}
 const LOG_DIR = (() => {
   try {
     return resolveLogDir({
@@ -308,7 +307,7 @@ function initLog() {
     fs.rmSync(READY_FLAG, { force: true })
     fs.mkdirSync(LOG_DIR, { recursive: true })
   } catch { /* ignore */ }
-  log('boot', `pid=${process.pid} electron=${process.versions.electron} node=${process.versions.node} chrome=${process.versions.chrome}`)
+  log('boot', `pid=${process.pid} v=${app.getVersion()} electron=${process.versions.electron} node=${process.versions.node} chrome=${process.versions.chrome}`)
   log('boot', `argv=${JSON.stringify(process.argv.slice(1))}`)
   log('boot', `cwd=${process.cwd()}`)
   log('boot', `dev=${isDev} logDir=${LOG_DIR}`)
@@ -715,12 +714,13 @@ app.whenReady().then(() => {
 
   createWindow()
   setupUpdater()
-  // 反推环境引导: 错开启动高峰(数据加载在跑), 4 秒后再探测;
+  // 反推环境: boot 后错开高峰(数据加载在跑)探测一次, 结果推给渲染层向导 —— 不再弹窗。
   // 触发直进下载: 环境变量 TV_DOWNLOAD_MODEL=1(安装器/启动器注入 —— 打包版会把
   // 命令行里的自定义 --开关 当成未知 Electron 选项拒掉, 实测 bad option, 所以用环境变量)。
   const wantModelNow = process.argv.includes('--download-model') || process.env.TV_DOWNLOAD_MODEL === '1'
   setTimeout(() => {
-    ensureRuntimeFlow({ force: wantModelNow }).catch((e) => log('warn', `runtime flow 异常: ${e?.stack || e}`))
+    if (wantModelNow) ensureRuntimeFlow({ force: true, repair: true }).catch((e) => log('warn', `runtime flow 异常: ${e?.stack || e}`))
+    else probeRuntime()
   }, wantModelNow ? 1500 : 4000)
 
   app.on('activate', () => {
