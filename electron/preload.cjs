@@ -52,6 +52,8 @@ const CHANNELS = new Set([
   'ingest:status', 'ingest:run', 'ingest:pause',
   // WD14 反推(消费 tag_queue)
   'tagger:status', 'tagger:config', 'tagger:run', 'tagger:pause',
+  // 设置弹窗(2026-10-15): 加速探测 / 偏好写入 / 检查更新 / 版本号
+  'tagger:accel', 'app:settings:set', 'app:checkUpdate', 'app:version',
   // 图片删除(移入回收站) / 批量移动(扫描页选择模式)
   'image:trash', 'image:moveMany',
   // 收藏找回(按文件名搜已知目录)

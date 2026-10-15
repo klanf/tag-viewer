@@ -13,7 +13,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { ipcMain, dialog, clipboard, shell, BrowserWindow, Menu } from 'electron'
+import { ipcMain, dialog, clipboard, shell, BrowserWindow, Menu, app } from 'electron'
 import { getWorkspace, getSettings, saveSettings, dataFile } from './core/workspace.js'
 import { bootstrap, status, whenReady } from './core/app-state.js'
 import {
@@ -226,7 +226,9 @@ function kickAutoSync(folder, onIngestDone) {
   return { wanted: true, started: true, reason: '' }
 }
 
-export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
+export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdate } = {}) {
+  // tagger:accel 的会话级缓存(见 handler 注释)
+  let accelCache = null
   // 自动导出的结果(成功/失败)由主进程推给渲染层弹 toast。
   // 注册一次即可: 防抖到期时主窗口可能已经不是同一个, 所以每次都现取。
   setAutoNotifier((payload) => mainWindow()?.webContents.send('export:auto', payload))
@@ -641,6 +643,38 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone } = {}) {
       return { ok: true, started: true }
     }),
     'tagger:pause': safe(() => pauseTagger()),
+
+    // ---------------- 设置弹窗(2026-10-15): 加速探测 / 偏好写入 / 检查更新 ----------------
+    // 'tagger:accel': 探测当前反推解释器的 onnxruntime 加速能力(进程内有缓存 ——
+    //   装包不会在会话中途变, 反复打开弹窗不重复跑子进程; 换了解释器则重探)。
+    'tagger:accel': safe(async () => {
+      const cfg = taggerConfig()
+      const exe = cfg.pythonOnDisk ? cfg.python : (getSettings().pythonPath || '')
+      if (!exe) return { ok: false, error: '还没有可用的 Python 解释器' }
+      if (!accelCache || accelCache.exe !== exe) {
+        const { detectAccelerators } = await import('./runtime-setup.cjs')
+        accelCache = { exe, result: await detectAccelerators(exe) }
+      }
+      return {
+        ...accelCache.result,
+        exe: accelCache.exe,
+        usedProvider: taggerStatus().provider || '',
+      }
+    }),
+    // 'app:settings:set': 渲染层写反推偏好(provider 覆盖 / 阈值), 白名单在 workspace.saveSettings
+    'app:settings:set': safe((patch) => {
+      const next = saveSettings(patch || {})
+      const env = applyTaggerEnv()
+      return { settings: next, env }
+    }),
+    // 'app:checkUpdate': 复用菜单 Help → 检查更新… 的完整流程(主进程弹窗交互);
+    //    开发模式没有 updater, 回一句说明而不是报错。
+    'app:checkUpdate': safe(async () => {
+      if (!onCheckUpdate) return { ok: false, note: '当前是开发模式或绿色包，不支持应用内更新' }
+      await onCheckUpdate()
+      return { ok: true }
+    }),
+    'app:version': safe(() => ({ version: app.getVersion(), packaged: app.isPackaged })),
 
     // ---------------- 文件夹登记表(扫描夹 + 看板来源 共用一份) ----------------
     // 真源是 tags.db 的 folders 表; scan_folders.json 降级为导出备份。

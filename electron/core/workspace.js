@@ -119,10 +119,42 @@ export function saveSettings(patch) {
         path: String(f.path),
       }))
   }
+  // 反推偏好(2026-10-15 设置弹窗): 推理后端覆盖(auto/cuda/dml/cpu) + 置信度阈值。
+  // 落 settings.json; 进程内环境变量由 applyTaggerEnv() 同步, 下一次反推生效。
+  if (patch.taggerProvider !== undefined) {
+    const v = String(patch.taggerProvider)
+    next.taggerProvider = ['auto', 'cuda', 'dml', 'cpu'].includes(v) ? v : 'auto'
+  }
+  if (patch.taggerThreshold !== undefined) {
+    const v = Number(patch.taggerThreshold)
+    if (Number.isFinite(v)) next.taggerThreshold = Math.min(0.95, Math.max(0.01, v))
+  }
+  if (patch.taggerCharThreshold !== undefined) {
+    const v = Number(patch.taggerCharThreshold)
+    if (Number.isFinite(v)) next.taggerCharThreshold = Math.min(0.99, Math.max(0.05, v))
+  }
   state.settings = next
   fs.writeFileSync(path.join(state.appDir, 'settings.json'),
     JSON.stringify(next, null, 2), 'utf8')
   return next
+}
+
+/**
+ * 把反推偏好同步进本进程环境变量(tagger_serve.py 在 spawn 时读 env)。
+ * main.js 启动时调一次; 设置弹窗保存后也调 —— 服务是每次反推重新拉起的,
+ * 所以下一次反推自然用上新值, 不用重启应用。
+ * 返回本次实际生效的值(给设置弹窗回显)。
+ */
+export function applyTaggerEnv() {
+  const s = state.settings || {}
+  if (s.taggerProvider) process.env.TV_TAGGER_PROVIDER = s.taggerProvider
+  if (s.taggerThreshold !== undefined) process.env.TV_WD14_THRESHOLD = String(s.taggerThreshold)
+  if (s.taggerCharThreshold !== undefined) process.env.TV_WD14_CHAR_THRESHOLD = String(s.taggerCharThreshold)
+  return {
+    provider: process.env.TV_TAGGER_PROVIDER || 'auto',
+    threshold: Number(process.env.TV_WD14_THRESHOLD ?? 0.35),
+    charThreshold: Number(process.env.TV_WD14_CHAR_THRESHOLD ?? 0.85),
+  }
 }
 
 /**

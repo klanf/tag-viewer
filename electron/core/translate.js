@@ -21,16 +21,17 @@
  *   ② 配置为空 / 路径不存在     -> 在**数据目录下**自动找 `weilin_data*`
  *      (paths.js 的 KNOWLEDGE_DIR_PREFIXES 早就把这类目录定义为"知识目录",
  *       所以放进数据目录就该直接被认出来, 不需要用户再手写一遍绝对路径)
- *   ③ 数据目录也没有            -> 回落到**仓库内置**的 knowledge/(2026-10-02 起
- *      随仓库分发, 见 knowledge/README.md) —— 新装机器零配置就有中文标签
- *   ④ 连内置都没有              -> 不启用翻译, 并把 dirMissing 标成 true
+ *   ③ 数据目录也没有            -> 回落**内置统一库** translations.db(scripts/
+ *      build-translations-db.py 在构建期把 WeiLin 两个库 + local_translations.json
+ *      合成的一个 SQLite, extraResources 随包发) —— 新装机器零配置就有中文标签
+ *   ④ 连内置库都读不到           -> 不启用翻译, 并把 dirMissing 标成 true
  * 实际用了哪个目录、配置里的路径是不是失效了, 都通过 translateInfo() 如实报出去。
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { dataFile, getWorkspace } from './workspace.js'
-import { BUNDLED_KNOWLEDGE_DIR, KNOWLEDGE_DIR_PREFIXES } from './paths.js'
+import { BUNDLED_TRANSLATIONS_DB, BUNDLED_KNOWLEDGE_DIR, KNOWLEDGE_DIR_PREFIXES } from './paths.js'
 
 const state = {
   map: new Map(),        // 小写标签 -> 中文
@@ -104,6 +105,32 @@ function loadLocal() {
 }
 
 /**
+ * 内置统一翻译库(assets/translations.db, 构建期由 scripts/build-translations-db.py
+ * 把 WeiLin 两个库 + local_translations.json 合成一张表)。作为最底层的兜底:
+ * 用户没配也没放任何 weilin_data* 时, 新装机器开箱就有中文。
+ * 真实文件(打包后经 extraResources 落在 resources/ 下), 不在 asar 里 ——
+ * node:sqlite 的原生 sqlite3 打不开 asar 虚拟路径, 2.2.0 首发就是踩的这个坑。
+ */
+function loadBundledDb(fp = BUNDLED_TRANSLATIONS_DB) {
+  if (!fp || !fs.existsSync(fp)) return null
+  let db
+  try {
+    db = new DatabaseSync(fp, { readOnly: true })
+    const rows = db.prepare('SELECT en, zh FROM translations').all()
+    const m = new Map()
+    for (const r of rows) {
+      if (r.en && r.zh) m.set(String(r.en).toLowerCase(), String(r.zh))
+    }
+    return m
+  } catch (e) {
+    state.error = `${fp}: ${e.message}`
+    return null
+  } finally {
+    try { db?.close() } catch { /* 忽略 */ }
+  }
+}
+
+/**
  * 在某个目录下找 weilin_data* 子目录(paths.js 的 KNOWLEDGE_DIR_PREFIXES 约定)。
  * 排序后返回, 保证多台机器/多次启动的结果稳定。找到几个就返回几个 ——
  * 允许用户把翻译库拆成多个 weilin_data(...) 目录放进来。
@@ -160,20 +187,32 @@ export function resolveWeiLinDirs(translateDir, { autoDetect = true, bundledDir 
 export function loadTranslations(translateDir, opts = {}) {
   const r = resolveWeiLinDirs(translateDir, opts)
   state.error = ''                       // 每次加载都是一次全新解析, 不留上一轮的错
+  // 合并优先级: 内置统一库(兜底) < 用户 weilin 目录(覆盖) < local_translations.json(活补译)
+  const bundled = r.dirs.length ? null : loadBundledDb(opts.bundledDb)
   const weilin = loadWeiLin(r.dirs)
   const local = loadLocal()
-  const map = new Map(weilin)
+  const map = new Map(bundled || [])
   let added = 0
-  for (const [k, v] of local) {
+  for (const [k, v] of weilin) {
     if (!map.has(k)) { map.set(k, v); added++ }
+  }
+  let localAdded = 0
+  for (const [k, v] of local) {
+    if (!map.has(k)) { map.set(k, v); localAdded++ }
   }
   state.map = map
   state.zhIndex = null
-  state.sources = { weilin: weilin.size, local: local.size, localAdded: added }
-  state.dirs = r.dirs
+  state.sources = {
+    weilin: weilin.size,
+    bundled: bundled ? bundled.size : 0,
+    local: local.size,
+    localAdded,
+  }
+  // 内置库兜底生效时, dirs 报库文件路径, 来源仍标 'bundled'(界面显示"仓库内置")
+  state.dirs = r.dirs.length ? r.dirs : (bundled ? [opts.bundledDb || BUNDLED_TRANSLATIONS_DB] : [])
+  state.dirSource = r.dirs.length ? r.source : (bundled ? 'bundled' : 'none')
   state.dirWanted = r.wanted
-  state.dirSource = r.source
-  state.dirMissing = r.missing
+  state.dirMissing = r.missing && !bundled
   // 配置里写了路径但不存在 —— 这是最容易被忽略的一种坏法(不说话就少一半翻译),
   // 所以即使自动发现救回来了, 也要留下 error 文案让人知道该去改配置。
   if (r.missing) {

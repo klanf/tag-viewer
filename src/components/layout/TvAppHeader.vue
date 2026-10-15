@@ -20,6 +20,7 @@ import { useUiStore } from '@/stores/useUiStore.js'
 import { useRoute } from 'vue-router'
 import { nfmt } from '@/utils/format.js'
 import { api } from '@/utils/api.js'
+import { openAppSettings } from '@/composables/useAppSettings.js'
 
 const app = useAppStore()
 const cart = useCartStore()
@@ -112,6 +113,8 @@ async function openDataDir() {
     </div>
 
     <TvButton size="sm" variant="secondary" title="打开数据目录" @click="openDataDir">📁</TvButton>
+    <!-- 设置弹窗(2026-10-15): 反推后端 / CUDA 加速提示 / 检查更新 / 阈值自定义 -->
+    <TvButton size="sm" variant="secondary" title="设置" data-test="hdr-settings" @click="openAppSettings">⚙️</TvButton>
     <!-- 主题色板: 点 🎨 弹出主题圆点列表, 点选即换; 当前项打勾 -->
     <div ref="themeWrap" class="theme-wrap">
       <TvButton

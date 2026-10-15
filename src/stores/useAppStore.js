@@ -237,7 +237,7 @@ export const useAppStore = defineStore('app', () => {
     onPush('cart:auto', (payload) => notifyCartAuto(payload))
     // 主进程主动要说的短句（目前只有右键「复制图片到剪贴板」动手前的那句进度：
     // toPNG 是同步的，一进同步段主进程就发不出任何消息，所以必须**先说后干**）。
-    onPush('app:toast', (p) => ui.toast(p?.text || '', p?.tone || 'info', p?.dur ?? 1800))
+    onPush('app:toast', (p) => useUiStore().toast(p?.text || '', p?.tone || 'info', p?.dur ?? 1800))
 
     applyStatus(await api.status())
     // 主进程是页面 did-finish-load 之后才开始加载数据, 有可能这里已经 ready 了

@@ -14,21 +14,203 @@
 import { app, BrowserWindow, Menu, shell, dialog } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import { registerScheme, registerHandler } from './imageproto.js'
 import { registerIpc } from './ipc.js'
-import { initWorkspace, getWorkspace } from './core/workspace.js'
+import { initWorkspace, getWorkspace, getSettings, applyTaggerEnv } from './core/workspace.js'
 import { resolveLogDir, setLogDir, logFile, readyFlag } from './core/paths.js'
 import { bootstrap, status } from './core/app-state.js'
 import { runIngest, queueStats, backfillMetaQueue } from './core/ingest.js'
-import { runTagger, stopTagger, taggerState } from './core/tagger.js'
+import { runTagger, stopTagger, taggerState, taggerConfig } from './core/tagger.js'
 import { ds } from './core/dataset.js'
 import { flushPendingNow, hasPendingAuto } from './core/exportPresets.js'
 import { flushCartPendingNow, hasPendingCart } from './core/cartPreset.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const require = createRequire(import.meta.url)
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || ''
 const isDev = !!DEV_URL
+
+/* ---- 检查更新(Gitee Release 分片) ----
+ * updater.cjs 是从 electron-wallpaper 项目原样移植的已验证实现(逐行同源,
+ * 只改了仓库常量): 切片下载 + SHA256 校验 + 合并 + 跑安装包, 断点续传。
+ * 清单由 tools/prepare-update.cjs 生成、随 Release 附件上传。
+ * 仅打包态启用: 开发态/绿色包不检查(绿色包用户看 README 自己换新包)。
+ * 进度走现有 app:toast 通道, 不动渲染层。
+ */
+let updater = null
+let lastProgressToast = 0
+
+function toast(text, tone = 'info', dur = 3000) {
+  if (win && !win.isDestroyed()) win.webContents.send('app:toast', { text, tone, dur })
+}
+
+function setupUpdater() {
+  if (!app.isPackaged || isDev) return
+  // 反推服务脚本: asar 里的路径 python 进程读不了, extraResources 里那份才是真的。
+  // tagger.js 的脚本候选里 TV_TAGGER_SCRIPT 排第一, 这里注入即可, 不动 core。
+  const serveScript = path.join(process.resourcesPath, 'tools', 'tagger_serve.py')
+  if (fs.existsSync(serveScript)) process.env.TV_TAGGER_SCRIPT = serveScript
+  const { UpdateService } = require('./updater.cjs')
+  updater = new UpdateService({
+    currentVersion: app.getVersion(),
+    updatesDir: path.join(app.getPath('userData'), 'updates'),
+    spawnInstaller: (installerPath, args) => {
+      const child = spawn(installerPath, args, { detached: true, stdio: 'ignore' })
+      child.unref()
+    },
+    onState: (snap) => {
+      // 下载进度按 20% 节流提示, 避免刷屏; 完成由手动流程的弹窗负责
+      if (snap.status === 'downloading' && snap.percent - lastProgressToast >= 20) {
+        lastProgressToast = snap.percent
+        toast(`正在下载更新… ${snap.percent}%`, 'info', 2500)
+      }
+    },
+  })
+  updater.cleanupOld().catch(() => {})
+  // 启动静默检查一次, 有更新只弹一条 toast, 不打断看图
+  updater.check().then((snap) => {
+    if (snap.status === 'available') {
+      toast(`发现新版本 v${snap.latestVersion}，菜单「帮助 → 检查更新…」可升级`, 'info', 6000)
+    }
+  }).catch(() => {})
+}
+
+/* ---- 反推环境按需引导（Python / WD14 模型, 打包版首次安装） ----
+ * 安装包刻意精简: 两样都不进包。应用启动后探测(taggerConfig 静态判定 + runtime-setup
+ * 真跑 --version), 缺什么引导下什么 —— 更新/重装时环境都在, 弹窗都不会出现, 天然区分。
+ * python 装好后: TV_PYTHON 注入本次会话 + settings.json 落 pythonPath 供以后会话。
+ * 模型从 hf-mirror 直拉(断点续传+SHA256 锚点), 落数据目录 models/(tagger 候选认原名)。
+ * 支持安装器或快捷方式带 --download-model 直进下载(跳过确认弹窗)。
+ */
+let runtimeOfferSkipped = false
+let runtimeBusy = false
+
+function patchSettings(patch) {
+  const p = path.join(app.getPath('userData'), 'settings.json')
+  let cur = {}
+  try { cur = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { /* 首次没有 */ }
+  if (!cur || typeof cur !== 'object') cur = {}
+  try { fs.writeFileSync(p, `${JSON.stringify({ ...cur, ...patch }, null, 2)}\n`, 'utf8') } catch { /* 只读等异常场景忽略 */ }
+}
+
+async function ensureRuntimeFlow({ force = false } = {}) {
+  if (!app.isPackaged || isDev || runtimeBusy) return
+  if (!force && runtimeOfferSkipped) return
+  const cfg = taggerConfig()
+  const needPython = !cfg.pythonOnDisk
+  // "存在"≠"有效": 旧构建可能把上游变列序的 597KB csv 下到了固定文件名。
+  // 这里用 modelIntegrityIssue(csv 体积+SHA / onnx 体积)兜住, 坏文件进下载分支被挪走重下。
+  let needModel = !(cfg.modelExists && cfg.csvExists)
+  if (!needModel) {
+    const why = await require('./runtime-setup.cjs').modelIntegrityIssue(cfg.model, cfg.csv)
+    if (why) { log('warn', `模型文件校验不通过: ${why}, 进入重新下载分支`); needModel = true }
+  }
+  if (!needPython && !needModel) return
+
+  if (!force) {
+    const missing = [
+      needPython ? 'Python 运行时（嵌入式版 + 反推依赖包，约 150MB）' : '',
+      needModel ? `WD14 反推模型（${(1271365854 / 1048576 / 1024).toFixed(2)}GB，从 hf-mirror 下载，支持断点续传）` : '',
+    ].filter(Boolean)
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'question', title: '反推环境', buttons: ['现在下载', '暂不'], defaultId: 0, cancelId: 1,
+      message: 'WD14 反推环境未就绪',
+      detail: `还差:\n  · ${missing.join('\n  · ')}\n\n现在下载吗? 也可以以后在扫描页看「看看怎么装」手动配置。`,
+    })
+    if (response !== 0) { runtimeOfferSkipped = true; return }
+  }
+
+  runtimeBusy = true
+  try {
+    const { ensurePythonRuntime, ensureModel } = require('./runtime-setup.cjs')
+    if (needPython) {
+      const res = await ensurePythonRuntime({
+        destDir: path.join(app.getPath('userData'), 'runtime'),
+        candidates: cfg.pythons,
+        onStage: (s) => toast(s, 'info', 5000),
+      })
+      process.env.TV_PYTHON = res.exe
+      patchSettings({ pythonPath: res.exe })
+      toast(`Python 就绪: ${res.exe}`, 'info', 4000)
+    }
+    if (needModel) {
+      const ws = getWorkspace()
+      let lastPct = 0
+      const res = await ensureModel({
+        destDir: path.join(ws.dataDir, 'models'),
+        existsCheck: () => ({ modelPath: cfg.modelExists ? cfg.model : null, csvPath: cfg.csvExists ? cfg.csv : null }),
+        onStage: (s) => toast(s, 'info', 5000),
+        onProgress: (name, bytes) => {
+          const size = name.endsWith('.csv') ? 401399 : 1271365854
+          const pct = Math.min(100, Math.floor((bytes * 100) / size))
+          if (pct >= lastPct + 10) { lastPct = pct; toast(`正在下载 ${name}… ${pct}%`, 'info', 2500) }
+        },
+      })
+      toast(`WD14 模型就绪: ${res.modelPath}`, 'info', 5000)
+    }
+    dialog.showMessageBox(win, {
+      type: 'info', title: '反推环境',
+      message: '反推环境配置完成。',
+      detail: '新下载的模型/解释器从下次反推起生效; 正在跑的扫描页刷新一下即可看到状态更新。',
+    })
+  } catch (e) {
+    log('warn', `反推环境引导失败: ${e?.stack || e}`)
+    dialog.showMessageBox(win, {
+      type: 'warning', title: '反推环境', message: '环境下载未完成',
+      detail: `${e?.message || e}\n\n可稍后重试(重新打开应用会再次询问), 或按 docs/新手上手.md 手动配置。`,
+    })
+  } finally {
+    runtimeBusy = false
+  }
+}
+
+/** 手动「检查更新…」: 检查 → 确认下载 → 确认安装, 全程主进程弹窗 */async function checkForUpdateManually() {
+  if (!updater) {
+    dialog.showMessageBox(win, {
+      type: 'info', title: '检查更新',
+      message: '当前是开发模式或绿色包，不支持应用内更新。',
+      detail: '绿色包更新：下载新版精简包后替换旧目录（数据目录不受影响）。',
+    })
+    return
+  }
+  const snap = await updater.check({ manual: true })
+  if (snap.status === 'error') {
+    dialog.showMessageBox(win, { type: 'warning', title: '检查更新', message: '检查更新失败', detail: snap.error })
+    return
+  }
+  if (snap.status !== 'available') {
+    dialog.showMessageBox(win, { type: 'info', title: '检查更新', message: `已是最新版本（v${snap.latestVersion}）` })
+    return
+  }
+  const sizeMb = (snap.totalBytes / 1048576).toFixed(0)
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question', title: '检查更新', buttons: ['下载更新', '以后再说'], defaultId: 0, cancelId: 1,
+    message: `发现新版本 v${snap.latestVersion}（当前 v${app.getVersion()}）`,
+    detail: `安装包约 ${sizeMb} MB，下载完成后会提示重启安装。${snap.releaseNotes ? `\n\n${snap.releaseNotes.slice(0, 500)}` : ''}`,
+  })
+  if (response !== 0) return
+  lastProgressToast = 0
+  const done = await updater.download()
+  if (done.status !== 'ready') {
+    dialog.showMessageBox(win, { type: 'warning', title: '检查更新', message: '下载更新失败', detail: done.error })
+    return
+  }
+  const { response: doInstall } = await dialog.showMessageBox(win, {
+    type: 'question', title: '检查更新', buttons: ['重启并安装', '稍后'], defaultId: 0, cancelId: 1,
+    message: '更新包下载完成，校验通过。',
+    detail: '点击「重启并安装」将退出应用并运行安装程序。',
+  })
+  if (doInstall !== 0) return
+  const installed = await updater.install()
+  if (installed.status !== 'installing') {
+    dialog.showMessageBox(win, { type: 'warning', title: '检查更新', message: '启动安装程序失败', detail: installed.error })
+    return
+  }
+  app.quit()
+}
 
 /**
  * 开发期先注入本机专属配置(local.config.json, 不进仓库)。
@@ -465,6 +647,12 @@ app.whenReady().then(() => {
     const ws = getWorkspace()
     log('ok', `dataDir=${ws.dataDir}`)
     log('ok', `configPath=${ws.configPath} (存在=${ws.configExists})`)
+    // 内置翻译库不再首启复制(2026-10-15 起): 三个源在构建期合成 assets/translations.db,
+    // 经 extraResources 落在 resources/ 下, app-state 加载时由 translate.js 直接读
+    // 真实文件 —— 不复制、不进 asar(node:sqlite 打不开 asar 虚拟路径, 2.2.0 踩过)。
+    // 反推偏好(provider 覆盖 / 阈值)同步进环境变量, tagger_serve 每次 spawn 都会读到
+    const env = applyTaggerEnv()
+    log('ok', `反推偏好: provider=${env.provider} threshold=${env.threshold} char=${env.charThreshold}`)
   } catch (e) {
     log('fatal', `initWorkspace 失败: ${e?.stack || e}`)
     try { dialog.showErrorBox('TagViewer 启动失败', `初始化工作区失败:\n\n${e?.stack || e}`) } catch { /* ignore */ }
@@ -476,6 +664,8 @@ app.whenReady().then(() => {
     registerHandler()
     registerIpc({
       onReload: () => { /* 数据集重载后由渲染进程自己重取 */ },
+      // 设置弹窗「检查更新」按钮 —— 复用菜单 Help → 检查更新… 的完整流程(主进程弹窗)
+      onCheckUpdate: () => { checkForUpdateManually() },
       // 同步跑完: 内存里的数据集已经过期, 必须重载一次, 否则看板数字和搜索
       // 索引还停在同步前(库是新的、界面是旧的)。quiet(2026-10-03): 移动一张图
       // 就会走这条链路, 全屏遮罩会打断浏览 —— 后台双缓冲重载, 完成后原地刷新。
@@ -497,6 +687,14 @@ app.whenReady().then(() => {
   }
 
   createWindow()
+  setupUpdater()
+  // 反推环境引导: 错开启动高峰(数据加载在跑), 4 秒后再探测;
+  // 触发直进下载: 环境变量 TV_DOWNLOAD_MODEL=1(安装器/启动器注入 —— 打包版会把
+  // 命令行里的自定义 --开关 当成未知 Electron 选项拒掉, 实测 bad option, 所以用环境变量)。
+  const wantModelNow = process.argv.includes('--download-model') || process.env.TV_DOWNLOAD_MODEL === '1'
+  setTimeout(() => {
+    ensureRuntimeFlow({ force: wantModelNow }).catch((e) => log('warn', `runtime flow 异常: ${e?.stack || e}`))
+  }, wantModelNow ? 1500 : 4000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

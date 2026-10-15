@@ -34,6 +34,19 @@ export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.
  */
 export const BUNDLED_KNOWLEDGE_DIR = path.join(PROJECT_ROOT, 'knowledge')
 
+/**
+ * 内置统一翻译库(scripts/build-translations-db.py 把 WeiLin 两个库 +
+ * local_translations.json 合成的一个 SQLite)。打包后经 extraResources 落在
+ * resources/ 下 —— **必须读这个真实文件**, asar 里的虚拟路径 node:sqlite 的
+ * 原生 sqlite3 打不开(2.2.0 首发翻译整体消失的根因)。开发态回落仓库 assets/。
+ */
+export function bundledTranslationsDb() {
+  const packed = process.resourcesPath ? path.join(process.resourcesPath, 'translations.db') : ''
+  if (packed && fs.existsSync(packed)) return packed
+  return path.join(PROJECT_ROOT, 'assets', 'translations.db')
+}
+export const BUNDLED_TRANSLATIONS_DB = bundledTranslationsDb()
+
 /** 数据目录的默认名 —— 挂 <userData>/data 或 <仓库>/data */
 export const DATA_DIR_NAME = 'data'
 

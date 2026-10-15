@@ -191,6 +191,11 @@ export const api = {
   taggerConfig: () => call('tagger:config'),
   taggerRun: (opts) => call('tagger:run', opts),
   taggerPause: () => call('tagger:pause'),
+  // 设置弹窗(2026-10-15): 加速探测 / 偏好写入 / 检查更新 / 版本号
+  taggerAccel: () => call('tagger:accel'),
+  settingsSet: (patch) => call('app:settings:set', patch),
+  checkUpdate: () => call('app:checkUpdate'),
+  appVersion: () => call('app:version'),
 
   // 图片删除(移入系统回收站)
   trashImages: (paths) => call('image:trash', { paths }),

@@ -168,12 +168,12 @@ ok('数据目录没有但内置有 -> 端到端查得到中文(零配置新装�
   }
 })
 
-ok('连内置都没有(注入空 bundledDir) -> 不崩, 只是没有翻译(而不是抛异常)', () => {
+ok('连内置都没有(注入空 bundledDir 且禁用统一库) -> 不崩, 只是没有翻译(而不是抛异常)', () => {
   // 换一个**空**数据目录重新初始化 workspace —— 自动发现也该一无所获;
-  // 再注入一个不存在的 bundledDir, 把"仓库内置"这条路也堵上, 才是真·两头都没有
+  // 再注入一个不存在的 bundledDir + 禁用 bundledDb, 把两条"内置"路都堵上, 才是真·两头都没有
   initWorkspace(USER_DATA, { defaultDataDir: EMPTY_DATA })
   try {
-    loadTranslations('', { bundledDir: path.join(WORK, '内置也没有') })
+    loadTranslations('', { bundledDir: path.join(WORK, '内置也没有'), bundledDb: '' })
     const ti = translateInfo()
     assert.equal(ti.weilin, 0)
     assert.equal(ti.dirSource, 'none')
@@ -181,6 +181,22 @@ ok('连内置都没有(注入空 bundledDir) -> 不崩, 只是没有翻译(而�
     assert.equal(ti.loaded, true, '没翻译也算"加载完毕", 不能卡在 loading')
   } finally {
     initWorkspace(USER_DATA, { defaultDataDir: DATA })   // 还原, 免得影响后续断言
+  }
+})
+
+ok('用户目录全没有 -> 内置统一库 translations.db 兜底(bundled>=0, 真实文件不走 asar)', () => {
+  initWorkspace(USER_DATA, { defaultDataDir: EMPTY_DATA })
+  try {
+    loadTranslations('', { bundledDir: path.join(WORK, '内置也没有') })
+    const ti = translateInfo()
+    assert.equal(ti.dirSource, 'bundled')
+    // 开发机上 assets/translations.db 存在 -> 应有词条; CI 没跑构建脚本则跳过条数断言
+    if (fs.existsSync(path.join(ROOT, 'assets', 'translations.db'))) {
+      assert.ok(ti.bundled > 0, `统一库应有词条, 实际 ${ti.bundled}`)
+    }
+    assert.equal(ti.loaded, true)
+  } finally {
+    initWorkspace(USER_DATA, { defaultDataDir: DATA })
   }
 })
 
