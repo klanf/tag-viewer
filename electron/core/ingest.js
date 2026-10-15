@@ -142,6 +142,36 @@ export function backfillMetaQueue(db = openDb()) {
   return { queued: r.changes }
 }
 
+/**
+ * 把**某个来源**里还没有标签的图补进 tag_queue(来源管理页「⚡ 反推」用)。
+ *
+ * 只挑「库里无标签」的行: 已经有标签的图不重复送进模型(白花推理时间)。
+ * 已经在队列里的(含 done/failed)靠 ON CONFLICT DO NOTHING 跳过 —— 不把
+ * failed 重置成 pending, 免得一张坏图被反复重试。
+ *
+ * @returns {{queued:number, reason?:string}}
+ */
+export function enqueueFolderUntagged(folderId, db = openDb()) {
+  if (!folderId) return { queued: 0, reason: 'no-folder' }
+  if (process.env.TV_INGEST === '0') return { queued: 0, reason: 'ingest-gate' }
+  ensureQueueTable(db)
+  const r = db.prepare(`
+    INSERT INTO tag_queue (path, folder_id, src_id, size, mtime_ms, state, added_at)
+    SELECT path, COALESCE(folder_id, 0), COALESCE(src_id, 0),
+           COALESCE(size, 0), COALESCE(mtime_ms, 0), 'pending', ?
+    FROM images
+    WHERE gone = 0 AND folder_id = ?
+      AND (tags IS NULL OR TRIM(tags) = '')
+      AND NOT EXISTS (SELECT 1 FROM tag_queue q WHERE q.path = images.path)
+  `).run(Date.now(), folderId)
+  // 入队之后这个来源还剩多少待处理: 调用方靠它判断"这张来源到底有没有活干"
+  const pending = Number(
+    db.prepare("SELECT COUNT(*) AS n FROM tag_queue WHERE state='pending' AND folder_id = ?").get(folderId)?.n || 0,
+  )
+  flog('tagger', `按来源入队 folder=${folderId}: 新入 ${r.changes} 张, 待处理 ${pending} 张`)
+  return { queued: r.changes, pending }
+}
+
 export function queueStats(db = openDb()) {
   try {
     ensureQueueTable(db)

@@ -22,11 +22,13 @@ import TvCheckbox from '@/components/base/TvCheckbox.vue'
 import TvState from '@/components/base/TvState.vue'
 import TvModal from '@/components/base/TvModal.vue'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { useAppStore } from '@/stores/useAppStore.js'
 import { useSourceStore } from '@/stores/useSourceStore.js'
 import { api } from '@/utils/api.js'
 import { nfmt } from '@/utils/format.js'
 
 const ui = useUiStore()
+const app = useAppStore()
 const srcStore = useSourceStore()
 
 const list = ref([])
@@ -191,6 +193,26 @@ async function syncOne(f) {
       : `「${f.name}」已是最新, 没有变化`)
   } catch (e) {
     ui.err('同步失败: ' + e.message)
+  } finally { busy.value = '' }
+}
+
+/**
+ * 立即反推这一个来源(2026-10-16)。
+ * 以前这个页面只有「⟳ 同步」—— 同步只负责把图挪进库/入队, 反推得等**下次重启**
+ * 的启动链路才跑(用户原话"只能等重启")。现在两件事分开:
+ *   · 同步: 磁盘 -> 标签库(顺便入队)
+ *   · 反推: 消费队列 -> 出标签(本按钮, 只跑这一个 folder_id)
+ * 后端会先把这个来源里"库里还没标签"的图补进队列, 再只跑它 —— 别的来源压着
+ * 几千张也不影响这里出结果。已在跑的反推会被后端挡回(已有反推在跑)。
+ */
+async function tagOne(f) {
+  busy.value = f.path
+  try {
+    const r = await app.taggerRun({ folderId: f.id })
+    if (r?.error) { ui.warn(r.error); return }
+    ui.toast(`⚡ 已开始反推「${f.name}」${r.queued ? `(补入队 ${r.queued} 张)` : ''}`, 'info', 2600)
+  } catch (e) {
+    ui.err('反推失败: ' + e.message)
   } finally { busy.value = '' }
 }
 
@@ -368,6 +390,14 @@ onMounted(load)
               title="只同步这一个目录(磁盘 -> 标签库)"
               @click="syncOne(f)"
             >⟳ 同步</TvButton>
+            <TvButton
+              v-if="f.as_source"
+              size="xs"
+              variant="primary"
+              :disabled="busy === f.path"
+              title="只反推这一个来源: 把这个来源里还没标签的图补进队列并立刻跑(别的来源不参与)"
+              @click="tagOne(f)"
+            >⚡ 反推</TvButton>
             <TvButton
               size="xs"
               variant="secondary"

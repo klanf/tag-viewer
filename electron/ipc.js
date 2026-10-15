@@ -43,7 +43,9 @@ import {
 import { scanFolder, scanCacheStats, purgeScanCachePaths } from './core/scan.js'
 import { previewTagEdit, applyTagEdit } from './core/tagedit.js'
 import { copyImageWithNotice, openWithDialog } from './core/clipboardImage.js'
-import { runIngest, ingestStatus, pauseIngest, ingestState, queueStats } from './core/ingest.js'
+import {
+  runIngest, ingestStatus, pauseIngest, ingestState, queueStats, enqueueFolderUntagged,
+} from './core/ingest.js'
 import {
   runTagger, taggerStatus, pauseTagger, taggerConfig, taggerState,
 } from './core/tagger.js'
@@ -745,12 +747,34 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'tagger:run': safe(async (raw = {}) => {
       if (taggerState.running) return { ok: false, error: '已有反推在跑' }
       const limit = Math.max(0, parseInt(raw.limit, 10) || 0)
-      runTagger({ onProgress: pushTaggerProgress, limit })
+      /* 按来源反推(来源管理页「⚡ 反推」, 2026-10-16):
+       * 先补入队 —— 这个来源里**库里还没标签**的图(已有标签的不重复送模型),
+       * 再只跑这一个 folder_id。队列里压着别的来源时, 不让用户等全库跑完。 */
+      let onlyFolderId = 0
+      let queued = 0
+      if (raw.folderId) {
+        const fid = Number(raw.folderId)
+        if (Number.isFinite(fid) && fid > 0) {
+          onlyFolderId = fid
+          try {
+            const r = enqueueFolderUntagged(fid)
+            queued = r.queued || 0
+            // 一张都没补进去、队列里也没有这个来源的待处理行 -> 确实没活干,
+            // 拉起服务也只是白加载 1.27GB 模型, 直接告诉用户。
+            if (!r.pending) {
+              return { ok: false, error: '这个来源没有待反推的图片(都已打过标签, 或还没同步入库)' }
+            }
+          } catch (e) {
+            flog('tagger-err', `按来源入队失败: ${e?.stack || e}`)
+          }
+        }
+      }
+      runTagger({ onProgress: pushTaggerProgress, limit, onlyFolderId })
         .then((r) => {
           if (r && !r.skipped) onTaggerDone?.(r)
         })
         .catch((e) => flog('tagger-err', `${e?.stack || e}`))
-      return { ok: true, started: true }
+      return { ok: true, started: true, queued, onlyFolderId }
     }),
     'tagger:pause': safe(() => pauseTagger()),
 

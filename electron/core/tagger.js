@@ -584,7 +584,7 @@ function setQueueState(db, p, state, attempts, note) {
  *          model?:string, csv?:string, provider?:string}} opts
  * @returns {Promise<object>} stats
  */
-export async function runTagger({ onProgress, limit = 0, ...svcOpts } = {}) {
+export async function runTagger({ onProgress, limit = 0, onlyFolderId = 0, ...svcOpts } = {}) {
   if (taggerState.running) return { skipped: true, reason: 'busy' }
   taggerState.running = true
   taggerState.paused = false
@@ -631,9 +631,14 @@ export async function runTagger({ onProgress, limit = 0, ...svcOpts } = {}) {
       note: `开始反推(provider=${probe.provider})`, done: 0, total: 0, stats,
     })
 
-    const sql = `SELECT path, folder_id, src_id, size, mtime_ms, attempts FROM tag_queue
+    /* 只跑某个来源(来源管理页「⚡ 反推」): 加 folder_id 过滤。
+     * 队列里压着别的来源的图时, 用户只想先看到这一个来源出标签 —— 不能让他等全库。 */
+    const sql = onlyFolderId
+      ? `SELECT path, folder_id, src_id, size, mtime_ms, attempts FROM tag_queue
+                 WHERE state = 'pending' AND folder_id = ? ORDER BY added_at, path`
+      : `SELECT path, folder_id, src_id, size, mtime_ms, attempts FROM tag_queue
                  WHERE state = 'pending' ORDER BY added_at, path`
-    const all = db.prepare(sql).all()
+    const all = onlyFolderId ? db.prepare(sql).all(onlyFolderId) : db.prepare(sql).all()
     const rows = limit > 0 ? all.slice(0, limit) : all
     stats.picked = rows.length
     emit(onProgress, { phase: 'infer', total: rows.length, done: 0, note: `反推 ${rows.length} 张` })

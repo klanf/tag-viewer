@@ -699,7 +699,19 @@ app.whenReady().then(() => {
       // 1 张裸图加载 1.27GB 模型, 还弹进度胶囊打扰看图 —— 本次会话新入队的
       // 裸图攒着, 下次启动由启动链路(runIngestOnce -> scheduleTagging)统一推。
       // 主动入口保留: 顶栏胶囊「再反推一次」/ 扫描页手动反推 / 新装机引导流程。
-      onIngestDone: () => { startLoad({ quiet: true }) },
+      /**
+       * 同步跑完: 除了静默重载数据集, **必须顺手把反推接上** —— 2026-10-16 修。
+       * 以前这里只 startLoad, 而 scheduleTagging 只在启动链路里调过一次,
+       * 于是「点同步按钮 / 新登记一个来源 / 打开自动反推开关」之后, 图进了队列
+       * 却不反推, 标签只能等**下次重启**才出来(用户原话: "只能等重启")。
+       * 之所以敢无条件调: runTagOnce 自己会先看队列 —— 空队列直接返回,
+       * 不拉子进程、不加载 1.27GB 模型; 而走到这里的都是用户**主动**触发的
+       * 同步(搬移图片那种静默路径不走 onIngestDone, 见 ipc.js 的注释)。
+       */
+      onIngestDone: () => {
+        startLoad({ quiet: true })
+        scheduleTagging()
+      },
       // 手动「反推」跑完: 新标签要进内存才看得见
       onTaggerDone: () => { startLoad({ quiet: true }) },
     })

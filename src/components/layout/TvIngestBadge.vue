@@ -17,6 +17,7 @@
  */
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useAppStore } from '@/stores/useAppStore.js'
+import { useUiStore } from '@/stores/useUiStore.js'
 import { nfmt } from '@/utils/format.js'
 import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 
@@ -136,6 +137,24 @@ async function runNow() {
   } catch { /* 失败时主进程会推 error 状态 */ }
 }
 
+/**
+ * 停止本次任务(2026-10-16): 后端早就有了 pauseTagger / pauseIngest —— 循环每处理
+ * 一张就检查标志位, 置位后处理完当前这张就收工, **剩余留在队列里**, 下次点
+ * 「再反推一次」接着跑(不是丢弃、不是清空队列表)。以前这个能力没有任何界面
+ * 入口, 用户只能干等或者重启 —— 现在进行中的胶囊上直接给按钮。
+ */
+const stopping = ref(false)
+async function stopNow() {
+  if (stopping.value) return
+  stopping.value = true
+  try {
+    const r = isTag.value ? await app.taggerPause() : await app.ingestPause()
+    if (r && r.ok === false) useUiStore().warn(r.error || '没有正在跑的任务')
+  } catch { /* 主进程会推状态 */ } finally {
+    stopping.value = false
+  }
+}
+
 onBeforeUnmount(clearTimer)
 </script>
 
@@ -149,6 +168,13 @@ onBeforeUnmount(clearTimer)
           <b>{{ title }}</b>
           <span v-if="s.folderTotal" class="fld">{{ s.folderIndex }}/{{ s.folderTotal }}</span>
           <span v-else-if="s.total" class="fld">{{ nfmt(s.done) }}/{{ nfmt(s.total) }}</span>
+          <button
+            v-if="running"
+            class="x stop"
+            :disabled="stopping"
+            :title="`停止本次${isTag ? '反推' : '同步'}(已处理的会保留, 剩下的留在队列里下次接着跑)`"
+            @click="stopNow"
+          >⏹</button>
           <button class="x" title="收起(任务会继续)" @click="close">✕</button>
         </div>
         <div class="bar"><i :style="{ width: pct + '%' }" /></div>
@@ -234,6 +260,10 @@ onBeforeUnmount(clearTimer)
 }
 .fld + .x { margin-left: 6px; }
 .x:hover { color: var(--text); }
+/* 停止按钮: 与「收起」并排, 用 danger 色区分(收起只是隐藏, 停止是真中断) */
+.x.stop { margin-left: 6px; color: var(--danger); font-size: 11px; }
+.x.stop:hover { color: var(--danger); filter: brightness(1.2); }
+.x.stop:disabled { opacity: .5; cursor: default; }
 
 .bar {
   margin: 7px 0 5px; height: 4px; border-radius: 2px;
