@@ -192,7 +192,7 @@ function onFav(e) {
     <span v-if="showCornerFav" class="corner fav" :title="favTitle" @click="onFav">
       <svg viewBox="0 0 24 24"><path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.5 1.1 6.4L12 17.1l-5.8 3.1 1.1-6.4L2.6 9.3l6.5-.9z"/></svg>
     </span>
-    <span v-if="showCornerCart" class="corner cart" :title="cartTitle" @click="onCart">
+    <span v-if="showCornerCart" :class="['corner', 'cart', { shifted: showCornerFav }]" :title="cartTitle" @click="onCart">
       <svg viewBox="0 0 24 24"><path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.5 1.1 6.4L12 17.1l-5.8 3.1 1.1-6.4L2.6 9.3l6.5-.9z"/></svg>
     </span>
   </span>
@@ -322,6 +322,8 @@ function onFav(e) {
   cursor: pointer; z-index: 2;
 }
 .corner.fav { background: var(--fav, #f59e0b); }
-.corner.cart { right: 9px; background: var(--fav, #f59e0b); }
+/* 入车角标默认也贴右上角; 仅当收藏角标同时存在时才往左让一格, 避免两颗★重叠 */
+.corner.cart { background: var(--fav, #f59e0b); }
+.corner.cart.shifted { right: 9px; }
 .corner svg { width: 8px; height: 8px; fill: #fff; stroke: none; }
 </style>
