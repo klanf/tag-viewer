@@ -17,8 +17,9 @@
  * "char" | "general:服饰"), 按 SEG_ORDER 段位上色 —— 人数蓝/角色绿/系列紫/画师红,
  * 通用/meta/other 维持中性灰。不传 cat 时退回旧的 isCharTag 判定(向后兼容)。
  * 图标从 emoji 换成单色 SVG(13px, currentColor 着色)。状态标识(2026-10-17 定稿):
- * 内联图标点亮(已入车绿实心🛒/已收藏金实心★) + 右上角金色★圆徽外挂角标
- * (fav 右上/cart 偏左一格, 不悬停也可见; 几何与 mock html 一致)。
+ * 收藏/入车点亮态 = 右上角金色★圆徽外挂角标(唯一常驻层, fav 右上/cart 偏左一格,
+ * 可点击快速取消); 内联静态图标只留给已 ban(取消 ban 的非悬停入口)。
+ * 内联图标与角标双层同显会叠在一起(2026-10-17 用户截图实测), 已删除。
  */
 import { computed } from 'vue'
 import { hasSeriesSuffix, isCharTag, subHueNo } from '@/utils/format.js'
@@ -159,18 +160,12 @@ function onFav(e) {
     <span class="en">{{ shownTag }}</span>
     <span v-if="showZh && zh" class="zh" :title="zh">{{ zh }}</span>
     <b v-if="showCount && count !== null" class="cnt">{{ count }}</b>
-    <!-- 常驻状态徽章: 已 ban / 已入车 / 已收藏。**内联**参与 pill 的 flex 排版
-         (2026-10-17 定稿)—— 角标/绝对定位方案在 flex-wrap 里必然飘进 pill 缝隙
-         与相邻标签撞车, 已废弃。状态点亮 = 金色圆徽: 收藏白★ / 入车白购物车,
-         图案区分状态; 静态宽度不随悬停变化, 不会触发重排抽搐 -->
+    <!-- 常驻状态徽章: 只有已 ban 走内联(角标方案不覆盖它, 且它是取消 ban 的
+         唯一非悬停入口)。收藏/入车的点亮态**只走右上角角标**(mock 原始设计) ——
+         内联静态图标 + 角标双层同显会叠在一起: 角标压在图标正上方、或两颗★
+         隔两像素重复(2026-10-17 用户截图实测), 悬停浮层里仍有全套可点图标 -->
     <i v-if="showBan && banned" class="st ic" :title="banTitle" @click="onBan">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6.2 6.2l11.6 11.6"/></svg>
-    </i>
-    <i v-if="cartable && kind === 'char' && inCart" class="st ic ct on" :title="cartTitle" @click="onCart">
-      <svg viewBox="0 0 24 24"><path d="M3 4h2l2.4 12.2a1.5 1.5 0 0 0 1.5 1.2h8.6a1.5 1.5 0 0 0 1.5-1.2L20.5 8H6"/><circle cx="10" cy="20.5" r="1.4"/><circle cx="17" cy="20.5" r="1.4"/></svg>
-    </i>
-    <i v-if="favable && inFav" class="st ic fv on" :title="favTitle" @click="onFav">
-      <svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6-5.4-3-5.4 3 1.1-6L3.2 9.4l6.1-.8z"/></svg>
     </i>
     <!-- 悬停动作浮层: 绝对定位盖在 pill 自身右段上方, 完全不占布局宽度。
          pill 几何永不变化 -> flex-wrap 永不因悬停重排 -> 不再"掉行又弹回"抽搐。
@@ -191,12 +186,13 @@ function onFav(e) {
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6.2 6.2l11.6 11.6"/></svg>
       </i>
     </span>
-    <!-- 右上角常驻角标(mock 定稿样式): 悬停浮层会盖住内联状态图标, 角标浮在
-         pill 外沿(fav 右上角/cart 偏左一格), 不悬停也一眼可见, 绝对定位不占布局 -->
-    <span v-if="showCornerFav" class="corner fav" :title="favTitle">
+    <!-- 右上角常驻角标(mock 定稿样式): 收藏/入车点亮态的唯一常驻标识, 浮在
+         pill 外沿(fav 右上角/cart 偏左一格), 不悬停也一眼可见。可点击 =
+         不悬停也能快速取消(补回被删的内联图标的入口), 点击不冒泡到 pill -->
+    <span v-if="showCornerFav" class="corner fav" :title="favTitle" @click="onFav">
       <svg viewBox="0 0 24 24"><path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.5 1.1 6.4L12 17.1l-5.8 3.1 1.1-6.4L2.6 9.3l6.5-.9z"/></svg>
     </span>
-    <span v-if="showCornerCart" class="corner cart" :title="cartTitle">
+    <span v-if="showCornerCart" class="corner cart" :title="cartTitle" @click="onCart">
       <svg viewBox="0 0 24 24"><path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.5 1.1 6.4L12 17.1l-5.8 3.1 1.1-6.4L2.6 9.3l6.5-.9z"/></svg>
     </span>
   </span>
@@ -298,7 +294,7 @@ function onFav(e) {
   stroke-linecap: round; stroke-linejoin: round;
 }
 
-/* 常驻状态图标(已 ban / 已入车 / 已收藏): 内联静态, 不参与悬停动画 */
+/* 常驻状态图标(已 ban): 内联静态, 不参与悬停动画; 收藏/入车不走内联(只走角标) */
 .st { cursor: pointer; }
 
 /* 图标配色: 中性动作半透明, 状态点亮用颜色说话 */
@@ -315,22 +311,15 @@ function onFav(e) {
 .fv.on svg { fill: currentColor; }
 .fv:hover { opacity: 1 !important; }
 
-/* 状态点亮(mock 定稿): 内联图标用颜色说话 —— 已入车绿实心 / 已收藏金实心 */
-.ct.on, .fv.on { opacity: 1; }
-.ct.on { color: var(--accent2, #2f9e63); }
-.ct.on svg { fill: currentColor; }
-.fv.on { color: var(--fav, #f59e0b); }
-.fv.on svg { fill: currentColor; }
-
-/* ── 右上角常驻角标(mock 定稿样式): 不悬停也可见的收藏/入车状态 ──
- * 绝对定位浮在 pill 外沿, 不占布局、不会被悬停浮层盖掉。
+/* ── 右上角常驻角标(mock 定稿样式): 收藏/入车点亮态的唯一常驻标识 ──
+ * 绝对定位浮在 pill 外沿, 不占布局、不会被悬停浮层盖掉; 可点击快速取消。
  * 收藏/入车都是金色★圆徽: fav 右上角, cart 偏左一格, 同时存在时并排。 */
 .corner {
   position: absolute; top: -5px; right: -5px; width: 13px; height: 13px;
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
-  pointer-events: none; z-index: 2;
+  cursor: pointer; z-index: 2;
 }
 .corner.fav { background: var(--fav, #f59e0b); }
 .corner.cart { right: 9px; background: var(--fav, #f59e0b); }
