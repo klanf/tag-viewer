@@ -83,6 +83,8 @@ const PUSH = new Set([
   'app:toast',
   // 反推环境下载进度（Python 运行时 / WD14 模型, TvSetupProgress 卡片消费）
   'tagger:setup-progress',
+  // 流式扫描（2026-10-16）: 大文件夹扫到首批就能进, 后台每批推进度、扫完全量修正
+  'scan:partial', 'scan:final',
 ])
 
 /** 自定义协议的 URL 构造 —— 与 imageproto.js 的解析必须成对 */

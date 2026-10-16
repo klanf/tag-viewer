@@ -52,6 +52,7 @@
     "test:layout": "node scripts/test-data-layout.mjs",
     "test:nodata": "node scripts/test-nodata-boot.mjs",
     "test:paths": "node scripts/check-paths.mjs",
+    "test:scan-stream": "node scripts/test-scan-stream.mjs",
     "test:presets": "node scripts/test-export-presets.mjs",
     "test:cart-preset": "node scripts/test-cart-preset.mjs",
     "test:tagedit": "node --experimental-sqlite scripts/test-tagedit.mjs",

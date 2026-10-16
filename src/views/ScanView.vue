@@ -148,14 +148,17 @@ const scanHits = computed(() => safety.countHits(rawItems.value))
  * 而且筛选条件本身也得来自这一批图 —— 搜索框的补全用当前文件夹的标签池,
  * **不查标签库**(扫描夹特有的标签在库里可能根本不存在, 查了也补不出来)。
  *
- * 匹配规则: 空格分隔多个词 = AND(每个词都得命中)。
+ * 匹配规则: 空格**或逗号**分隔多个词 = AND(每个词都得命中)。
+ * 逗号是 TvTagSuggestInput 胶囊多词模式(multi)的定格键 —— 敲一下逗号,
+ * 当前词变胶囊、继续输入时补全针对**下一个**词(2026-10-16 用户要求, 与看板同款);
+ * 空格保留是因为老用户已经习惯了"空格分隔"(两种都认, 互不排斥)。
  * 单个词**两个地方都试**: 标签 或 文件名(含扩展名, 大小写不敏感), 命中其一即算。
  * 用**子串**匹配而非精确 —— 扫描出的角色标签带括号后缀,
  * 输入 hoshino 要能命中 hoshino_(blue_archive); 文件名同理(输入 a3 命中 a3.png)。
  * 文件名这一路是库外图的地盘: 扫描夹里常有一批**裸图**(PNG 里没提示词, 标签也
  * 反推不出来), 想在其中定位某一张, 唯一抓手就是文件名。 */
 const filterKw = ref('')
-const filterTokens = computed(() => filterKw.value.trim().toLowerCase().split(/\s+/).filter(Boolean))
+const filterTokens = computed(() => filterKw.value.trim().toLowerCase().split(/[\s,，]+/).filter(Boolean))
 
 /** 当前文件夹出现过的标签: 计数降序 + 中文(给补全用), 只在打开文件夹后才有内容 */
 const scanTagPool = computed(() => {
@@ -327,12 +330,14 @@ function fillScanZh(d) {
     .catch(() => { /* 没有翻译库也能用 */ })
 }
 
-/** 打开文件夹(有缓存就是秒开) */
+/** 打开文件夹: 缓存命中秒开; 大文件夹走**流式**(扫到首批就进, 后台续扫边扫边涨) */
 async function openFolder(f, { refresh = false } = {}) {  if (!f.exists) { ui.warn('这个文件夹已经不在了(可能被移动或改名)'); return }
   cur.value = f
   level.value = 'folder'
   opening.value = true
   scanProg.value = null
+  streaming.value = false            // 上一轮的后台扫描状态作废(晚到的推送会被 path 匹配挡掉)
+  streamInfo.value = null
   if (refresh) rescanning.value = true
   error.value = ''
   if (refresh) result.value = null
@@ -345,6 +350,11 @@ async function openFolder(f, { refresh = false } = {}) {  if (!f.exists) { ui.wa
     if (d?.error) { error.value = d.error; result.value = null; return }
     result.value = d
     fillScanZh(d)
+    // 流式: 首批已经能看了(opening 立刻收工), 后台续扫由 scan:partial/scan:final 接力
+    if (d?.streaming) {
+      streaming.value = true
+      streamInfo.value = { done: d.items?.length || 0, total: d.total || 0 }
+    }
     // 高亮框持久化的场景: 重启后第一次打开这个文件夹, 高亮那张可能落在第 2+ 页,
     // 不补页的话它根本不会被渲染, TvImageCard 里的"自动滚过去"就永远等不到。
     if (lb.scrollPending && lb.lastPath) expandPageForPath(lb.lastPath)
@@ -367,6 +377,8 @@ function backToList() {
   result.value = null
   error.value = ''
   selectMode.value = false
+  streaming.value = false            // 回列表后后台扫描的推送不再有落点(path 匹配挡住)
+  streamInfo.value = null
   clearSel()
 }
 
@@ -503,6 +515,9 @@ async function doCopy(target) {
     const done = (r.moved || []).length
     if (r.failed?.length) ui.err(`${r.failed.length} 张复制失败(${r.failed[0]?.error || '未知原因'})`, 3600)
     if (done) ui.ok(`📋 已复制 ${done} 张到「${r.destName}」`, 'ok', 2600)
+    // 复制完就取消选中(2026-10-16 用户反馈: 复制后还挂着一片勾选, 不知道有没有生效)。
+    // 副本落盘成功不代表这批要继续操作 —— 与批量移动同款语义: 失败的留着可重试。
+    selected.value = new Set((r.failed || []).map((f) => f.path))
     copyOpen.value = false
   } catch (e) {
     ui.err('复制失败: ' + e.message)
@@ -533,6 +548,47 @@ function onScanKey(e) {
 function gotoPage(p) {
   page.value = Math.max(1, Math.min(p, totalPages.value))
   document.querySelector('.scan-body .result-scroll')?.scrollTo({ top: 0 })
+}
+
+/* ---------------- 分页按钮 = 滚动定位(2026-10-16) ----------------
+ * 网格是**累加式显示**(slice(0, page*pageSize), 滚到底自动追加), 旧版按钮只改
+ * page 数字, 于是 ▶ 只是"多出一页可看"、◀ 把已显示的截掉一页(体感没反应),
+ * ⏭ 最危险 —— 会把两万多张一次性全渲染, 直接假死。改成纯滚动语义:
+ * 数据不动, 视口滚到"那一页开头"所在的行 —— 按钮说的和做的终于是一回事。 */
+/** 每行第一张在 pagedItems 里的下标(与 scanRows 一一对应), 用来定位"第 n 张在哪一行" */
+const rowStarts = computed(() => {
+  const arr = []
+  let acc = 0
+  for (const row of scanRows.value) { arr.push(acc); acc += row.cells.length }
+  return arr
+})
+
+function scrollToItemIndex(idx) {
+  const grid = rowsEl.value
+  if (!grid || idx < 0) return
+  const starts = rowStarts.value
+  let lo = 0, hi = starts.length - 1, row = 0
+  while (lo <= hi) {                    // 二分: 最后一个 starts[row] <= idx 的行
+    const mid = (lo + hi) >> 1
+    if (starts[mid] <= idx) { row = mid; lo = mid + 1 } else hi = mid - 1
+  }
+  const el = grid.children[row]
+  const scroller = el?.closest('.result-scroll')
+  if (!el || !scroller) return
+  const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 6
+  scroller.scrollTo({ top: Math.max(0, top) })
+}
+
+/** 翻到第 p 页的开头: 内容还没加载就先补页(累加式只增不减), 再滚过去 */
+function turnToPage(p) {
+  const t = Math.max(1, Math.min(p, totalPages.value))
+  if (t > page.value) page.value = t
+  nextTick(() => scrollToItemIndex((t - 1) * pageSize.value))
+}
+
+/** ⏭: 滚到**已加载内容**的末尾 —— 绝不做"全量渲染到底", 两万张会假死 */
+function scrollToLoadedEnd() {
+  document.querySelector('.scan-body .result-scroll')?.scrollTo({ top: 1e9 })
 }
 
 const pageOptions = [60, 120, 240, 600]
@@ -620,6 +676,40 @@ const offScanProg = onPush('scan:progress', (p) => {
   if (level.value === 'folder') scanProg.value = p
 })
 
+/* ---------------- 流式扫描合并(2026-10-16) ----------------
+ * 大文件夹"扫到首批就能进": openFolder 先返回前 ~100 张(out.streaming=true),
+ * 后台每解析完一批推 scan:partial(增量 items), 全部扫完推 scan:final(全量快照,
+ * 统计/共享标签/尺寸都修正过)。合并按 path 去重 —— 重扫/重复推送是幂等的;
+ * final 直接整体替换 result。换文件夹/返回列表后晚到的推送按 path 匹配挡掉。 */
+const streaming = ref(false)
+const streamInfo = ref(null)          // { done, total }
+const streamPct = computed(() => {
+  const s = streamInfo.value
+  return s?.total ? Math.min(100, Math.round((s.done * 100) / s.total)) : 0
+})
+
+function sameFolder(a, b) {
+  return !!a && !!b && a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase()
+}
+
+const offScanPartial = onPush('scan:partial', (p) => {
+  if (!p?.folder || level.value !== 'folder' || !result.value) return
+  if (!sameFolder(p.folder, cur.value?.path)) return
+  const have = new Set(result.value.items.map((it) => it.path))
+  const fresh = (p.items || []).filter((it) => !have.has(it.path))
+  if (fresh.length) result.value.items.push(...fresh)
+  streamInfo.value = { done: p.done, total: p.total }
+})
+
+const offScanFinal = onPush('scan:final', (out) => {
+  if (!out?.folder || level.value !== 'folder' || !result.value) return
+  if (!sameFolder(out.folder, cur.value?.path)) return
+  result.value = out                  // 全量快照: 统计/共享标签/key_tags/尺寸全部修正
+  streaming.value = false
+  streamInfo.value = null
+  fillScanZh(out)                     // 流式期间新出现的标签补中文映射
+})
+
 onMounted(() => {
   loadFolders()
   window.addEventListener('tv:trashed', onGone)
@@ -633,6 +723,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('tv:lb-closed', onLbClosed)
   window.removeEventListener('keydown', onScanKey)
   offScanProg()
+  offScanPartial()
+  offScanFinal()
   gridOb?.disconnect()
 })
 
@@ -815,6 +907,12 @@ onActivated(() => {
 
         <div class="path-line" :title="cur?.path">{{ cur?.path }}</div>
 
+        <!-- 流式扫描的后台进度(2026-10-16): 不挡网格, 一行小字 + 细条, 扫完自动消失 -->
+        <div v-if="streaming" class="stream-line" data-test="scan-stream-line">
+          <span class="sp-mini"><span class="sp-fill" :style="{ width: streamPct + '%' }" /></span>
+          <span>后台扫描中 <b>{{ nfmt(streamInfo?.done ?? rawItems.length) }}</b> / {{ nfmt(streamInfo?.total || 0) }} 张 · 完成前标签筛选只覆盖已扫描的部分</span>
+        </div>
+
         <div v-if="error" class="err">{{ error }}</div>
       </div>
 
@@ -862,30 +960,34 @@ onActivated(() => {
             >🗑 删除</TvButton>
           </div>
 
-          <!-- 滚动只发生在这一层: 工具条在滚动区外, 天生常驻顶上(无缝, 不用 sticky) -->
-          <div class="result-scroll">
+          <!-- 工具条挪到滚动区**外**(2026-10-16 用户反馈: 往下拉图片, 搜索框那排就看不见了)
+               与批量条同款结构性常驻 —— 滚动只发生在 .result-scroll 里, 工具条天生钉在顶上 -->
           <div class="pager-bar">
             <!-- 按标签 / 文件名筛选: 复用首页/标签页那个带补全的搜索框, 但补全走**本夹的标签池**
                  (扫描图是库外的, 它们的标签在标签库里可能根本不存在; 文件名压根不在标签库里)。
+                 multi 胶囊模式(2026-10-16): 敲逗号定格成胶囊、继续输入时补全针对下一个词 ——
+                 与看板搜索框同款; 空格分隔的 AND 老用法照旧(两种都认)。
                  历史也走**自己那份键**: 这里是"筛过的词", 首页那边是"敲过的查询",
                  混着存两边都会变脏(见 utils/lskey.js 的 searchHistoryScan)。 -->
             <div class="tag-filter">
               <TvTagSuggestInput
                 v-model="filterKw"
                 size="sm"
+                multi
                 :local-tags="scanTagPool"
                 :limit="14"
                 history
                 remember
                 :history-key="SCAN_HIST_KEY"
                 history-label="扫描页筛选历史"
-                placeholder="🔍 按标签 / 文件名筛选(空格分隔多个)"
+                placeholder="🔍 按标签 / 文件名筛选(空格或逗号分隔多个)"
                 empty-text="没有匹配的标签(文件名仍会匹配)"
               />
             </div>
             <TvButton v-if="filterKw" size="sm" variant="ghost" title="清除筛选" @click="filterKw = ''">✕ 清除</TvButton>
             <span class="hint">
               <template v-if="filterTokens.length">筛选出 <b class="hit">{{ nfmt(sortedItems.length) }}</b> / 共 {{ nfmt(rawItems.length) }} 张</template>
+              <template v-else-if="streaming">已加载 {{ nfmt(pagedItems.length) }} / {{ nfmt(streamInfo?.total || rawItems.length) }} 张 · 后台扫描 {{ streamPct }}%</template>
               <template v-else>已加载 {{ nfmt(pagedItems.length) }} / 共 {{ nfmt(sortedItems.length) }} 张 · 滚到底自动加载</template>
             </span>
             <span class="spacer" />
@@ -904,12 +1006,17 @@ onActivated(() => {
               label="每页"
               :options="pageOptions.map((n) => ({ value: n, label: String(n) }))"
             />
-            <TvButton size="sm" variant="ghost" :disabled="page <= 1" @click="gotoPage(1)">⏮</TvButton>
-            <TvButton size="sm" variant="ghost" :disabled="page <= 1" @click="gotoPage(page - 1)">◀</TvButton>
-            <TvButton size="sm" variant="ghost" :disabled="page >= totalPages" @click="gotoPage(page + 1)">▶</TvButton>
-            <TvButton size="sm" variant="ghost" :disabled="page >= totalPages" @click="gotoPage(totalPages)">⏭</TvButton>
+            <!-- 分页按钮 = 滚动定位(2026-10-16): 网格是累加式显示, 旧版改页码数字
+                 的做法让 ▶ 看起来"只是变多"、◀ 像没反应、⏭ 更会全量渲染假死。
+                 现在按钮只管把视口滚到对应位置, 数据(累加)不动。 -->
+            <TvButton size="sm" variant="ghost" title="回到第一页(从头开始看)" @click="gotoPage(1)">⏮</TvButton>
+            <TvButton size="sm" variant="ghost" :disabled="page <= 1" title="滚到上一页的开头" @click="turnToPage(page - 1)">◀</TvButton>
+            <TvButton size="sm" variant="ghost" :disabled="page >= totalPages" title="翻到下一页的开头(自动加载那一页)" @click="turnToPage(page + 1)">▶</TvButton>
+            <TvButton size="sm" variant="ghost" title="滚到已加载内容的末尾(不会一次性渲染全部)" @click="scrollToLoadedEnd">⏭</TvButton>
           </div>
 
+          <!-- 滚动只发生在这一层: 上面两排工具条都在滚动区外, 常驻顶上 -->
+          <div class="result-scroll">
 
           <TvState
             v-if="!sortedItems.length"
@@ -1067,6 +1174,18 @@ onActivated(() => {
   background: var(--accent);
   transition: width .2s ease;
 }
+
+/* 流式扫描的后台进度行(head 里, 不挡网格; 扫完 v-if 收掉) */
+.stream-line {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 6px; color: var(--muted); font-size: 11px;
+}
+.stream-line b { color: var(--accent); }
+.sp-mini {
+  display: inline-block; width: 120px; height: 4px; flex: none;
+  border-radius: 999px; background: var(--panel3); overflow: hidden;
+}
+.sp-mini .sp-fill { display: block; height: 100%; background: var(--accent); transition: width .2s ease; }
 
 /* 只给**文件夹卡**用 —— 图片网格已经换成自适应行高(`.grid.imgs.jrows`, 见 tokens.css)。
  * 原来这里有一条裸 `.grid` 规则, 与 tokens.css 的 `.grid.jrows` 撞车: 两条选择器权重

@@ -407,8 +407,12 @@ export async function rescanFolder(raw = {}, onProgress = null) {
 /**
  * 打开一个文件夹(取图片清单)。
  * 默认走 scan.js 的内存缓存 —— 点过第二次就是秒开; raw.refresh=true 强制重扫。
+ *
+ * 流式(2026-10-16): opts 透传 {firstBatch, onPartial, onFinal, onError} 给 scanFolder
+ * 时, 大文件夹扫到首批就返回部分结果(out.streaming=true) —— 此时**统计先不写库**
+ * (文件夹卡片上的张数/提示词种类不能停在半截), 等后台扫完在 onFinal 里补写。
  */
-export async function openFolder(raw = {}, onProgress = null) {
+export async function openFolder(raw = {}, onProgress = null, opts = {}) {
   const p = normFolderPath(raw.path)
   if (!p) return { error: 'empty path' }
   if (!isDir(p)) return { error: `文件夹不存在: ${p}` }
@@ -419,24 +423,39 @@ export async function openFolder(raw = {}, onProgress = null) {
     ? (raw.recursive !== false && raw.recursive !== '0')
     : (rec ? !!rec.recursive : true)
 
+  const writeStats = (result) => {
+    if (!rec) return
+    const cov = rec.cover ? null : pickCover(result, dimsMapFor(db, rec.id))
+    upsertFolder(db, {
+      path: p,
+      last_scan_ms: Date.now(),
+      stats: statsOf(result),
+      ...(cov ? { cover: cov.path || '', cover_tags: coverTagsJson(cov) } : {}),
+    })
+  }
+  const onFinal = opts.onFinal
+    ? (out) => { try { writeStats(out) } catch { /* 统计写库失败不影响前端 */ } opts.onFinal(out) }
+    : null
+
   const r = await scanFolder({
     path: p,
     recursive,
     limit: raw.limit,
     force: !!raw.refresh,
-  }, onProgress)
+  }, onProgress, onFinal ? { ...opts, onFinal } : opts)
   if (r?.error) return { error: r.error }
 
-  // 顺手更新统计与"上次打开时间"(封面只在还没有时补)
-  if (rec) {
-    const cov = rec.cover ? null : pickCover(r, dimsMapFor(db, rec.id))
-    upsertFolder(db, {
-      path: p,
-      last_scan_ms: Date.now(),
-      stats: statsOf(r),
-      ...(cov ? { cover: cov.path || '', cover_tags: coverTagsJson(cov) } : {}),
-    })
+  // 流式的部分结果: 统计**先不写**(等 onFinal), 直接把半成品交给前端渲染
+  if (r.streaming) {
+    return {
+      ...r,
+      folder_record: rec ? decorate({ ...rowByPath(db, p), images: imagesOf(db, rec.id) }) : null,
+      cached: false,
+    }
   }
+
+  // 顺手更新统计与"上次打开时间"(封面只在还没有时补)
+  writeStats(r)
 
   return {
     ...r,

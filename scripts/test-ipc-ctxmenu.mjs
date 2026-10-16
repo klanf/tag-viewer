@@ -202,12 +202,27 @@ const pickLabel = (label) => (tpl) => {
   it.click()
 }
 
-await ta('菜单里有「🗂️ 用其他程序打开…」且紧跟「用系统查看器打开」', () => {
-  let labels = []
-  ctl.pick = (tpl) => { labels = tpl.map((i) => i.label || i.type) }
+/** 深两层按标签点菜单项 —— 二级菜单(2026-10-16「用其他程序打开」改版)的子项在 submenu 里 */
+const pickDeep = (label) => (tpl) => {
+  for (const it of tpl) {
+    if (it.label === label) { it.click(); return }
+    if (Array.isArray(it.submenu)) {
+      const hit = it.submenu.find((s) => s.label === label)
+      if (hit) { hit.click(); return }
+    }
+  }
+  assert.ok(false, `菜单(含二级)里没有「${label}」`)
+}
+
+await ta('「🗂️ 用其他程序打开」是二级菜单: 含「Windows 打开方式…」, 旧的系统查看器已移除(2026-10-16 改版)', () => {
+  let tpl0 = []
+  ctl.pick = (tpl) => { tpl0 = tpl }
   handler(fakeEvent(), { path: copySrc, name: 'copy-me.png' })
-  assert.ok(labels.includes('🗂️ 用其他程序打开…'), `菜单缺少该项: ${JSON.stringify(labels)}`)
-  assert.equal(labels[labels.indexOf('🗂️ 用其他程序打开…') - 1], '🖥️ 用系统查看器打开', '位置不对')
+  const openWith = tpl0.find((i) => i.label === '🗂️ 用其他程序打开')
+  assert.ok(openWith, `菜单缺少该项: ${JSON.stringify(tpl0.map((i) => i.label || i.type))}`)
+  assert.ok(Array.isArray(openWith.submenu), '「用其他程序打开」不是二级菜单')
+  assert.ok(openWith.submenu.some((i) => i.label === 'Windows 打开方式…'), '二级菜单里没有「Windows 打开方式…」')
+  assert.ok(!tpl0.some((i) => i.label === '🖥️ 用系统查看器打开'), '「用系统查看器打开」应该已经移除了')
 })
 
 await ta('点「复制图片到剪贴板」→ 真的 write([ClipboardItem(image/png)])，不再调不存在的 writeImage', async () => {
@@ -295,12 +310,12 @@ await ta('openWithCommand: shell32.dll,OpenAs_RunDLL + 盘符绝对路径的 run
   }
 })
 
-await ta('点「用其他程序打开…」→ detached 子进程 + 参数对（用假 spawn，单测绝不真弹对话框）', async () => {
+await ta('点二级菜单「Windows 打开方式…」→ detached 子进程 + 参数对（用假 spawn，单测绝不真弹对话框）', async () => {
   const seen = []
   const orig = openWithDeps.spawn
   openWithDeps.spawn = (exe, args, opts) => { seen.push({ exe, args, opts }); return { on() {}, unref() {} } }
   try {
-    ctl.pick = pickLabel('🗂️ 用其他程序打开…')
+    ctl.pick = pickDeep('Windows 打开方式…')
     const r = await handler(fakeEvent(), { path: copySrc, name: 'copy-me.png' })
     assert.equal(r.action, 'open-with', `意外 action: ${r.action}`)
     assert.equal(r.result?.ok, true, `失败: ${r.result?.error}`)
@@ -364,20 +379,20 @@ await ta('小写盘符 + 反斜杠 -> 盘符统一成大写后照样删', async 
   assert.equal(call[1][0], img[0], `盘符大小写被改动: ${call[1]}`)
 })
 
-await ta('右键菜单「打开」/「在资源管理器中显示」也走反斜杠', async () => {
+await ta('右键菜单「📁 打开图片所在位置」也走反斜杠(系统查看器已移除, showItemInFolder 是菜单里仅剩的 shell 打开)', async () => {
   const img = path.join(srcDir, 'ctx-shell.png')
   fs.writeFileSync(img, 'shell-me')
   const fwd = img.split('\\').join('/')
   ctl.calls = []
-  // 不设 ctl.pick -> 菜单构建后没人选, 但 open/reveal 是构建时记录、click 时触发的,
+  // 不设 ctl.pick -> 菜单构建后没人选, 但 reveal 是构建时记录、click 时触发的,
   // 所以这里手动找到对应项点掉
   ctl.pick = (tpl) => {
-    tpl.find((i) => i.label === '🖥️ 用系统查看器打开').click()
+    tpl.find((i) => i.label === '📁 打开图片所在位置').click()
   }
   await handler(fakeEvent(), { path: fwd, name: 'ctx-shell.png' })
-  const op = ctl.calls.find((c) => c[0] === 'shell.openPath')
-  assert.ok(op, 'shell.openPath 没被调用')
-  assert.ok(!op[1].includes('/'), `openPath 收到的仍是正斜杠: ${op[1]}`)
+  const op = ctl.calls.find((c) => c[0] === 'shell.showItemInFolder')
+  assert.ok(op, 'shell.showItemInFolder 没被调用')
+  assert.ok(!String(op[1]).includes('/'), `收到的仍是正斜杠: ${op[1]}`)
 })
 
 /* ---------------- 汇总 ---------------- */

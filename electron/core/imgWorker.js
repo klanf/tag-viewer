@@ -20,11 +20,15 @@ import { Worker } from 'node:worker_threads'
  * @param {string[]} files 文件路径（保持下标一一对应）
  * @param {(p:{done:number,total:number})=>void} [onProgress]
  * @param {'meta'|'size'} [kind]
+ * @param {(c:{from:number,count:number,results:Array})=>void} [onChunk]
+ *   meta 模式流式回传: 每解析完一批(scanWorker 里的 STREAM_CHUNK 张)就回调一次,
+ *   from/count 对应 files 的下标区间, results 与该区间一一对应。
+ *   scanFolder 的流式扫描靠它把"后台每解析完一批"的增量结果交回主进程。
  * @returns {Promise<Array<{tags:string[],source:string,dim:object|null}|{w:number,h:number}|null>>}
  *   meta 模式: { tags, source, dim }
  *   size 模式: { w, h } 或 null（读不到 / 格式认不出 —— 调用方保留旧值，别写 0 冒充）
  */
-export function parseInWorker(files, onProgress, kind = 'meta') {
+export function parseInWorker(files, onProgress, kind = 'meta', onChunk = null) {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL('./scanWorker.js', import.meta.url), {
       workerData: { files, kind },
@@ -32,6 +36,8 @@ export function parseInWorker(files, onProgress, kind = 'meta') {
     w.on('message', (m) => {
       if (m?.type === 'progress') {
         try { onProgress(m) } catch { /* 进度回调出错不影响扫描 */ }
+      } else if (m?.type === 'chunk') {
+        try { onChunk?.(m) } catch { /* 增量回调出错不影响整批 */ }
       } else if (m?.type === 'done') {
         w.unref()
         resolve(m.results || [])

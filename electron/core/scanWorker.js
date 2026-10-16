@@ -32,6 +32,12 @@ const results = new Array(files.length)
 let done = 0
 let lastTick = Date.now()
 
+/** 流式回传的批大小: 每解析这么多张就 postMessage 一批已完成的解析结果,
+ *  主进程据此组装增量 items 推给前端(大文件夹"扫到 100 张就能进"的后半程)。
+ *  done 全量快照仍照旧发 —— chunk 只是给前端"边扫边看"用的, 不是数据源。 */
+const STREAM_CHUNK = 128
+let chunkFrom = 0
+
 /** 进度上报节流: 每 120ms 一条, 避免消息风暴 */
 function tick(i) {
   const now = Date.now()
@@ -39,6 +45,17 @@ function tick(i) {
     lastTick = now
     parentPort.postMessage({ type: 'progress', done, total: files.length })
   }
+}
+
+/** meta 模式专用的流式回传: 凑满 STREAM_CHUNK 张就发一段 */
+function flushChunk(i) {
+  if (i + 1 - chunkFrom < STREAM_CHUNK && i !== files.length - 1) return
+  // postMessage 会 structured-clone 这段数组, 与 results 主数组此后互不影响
+  parentPort.postMessage({
+    type: 'chunk', from: chunkFrom, count: i + 1 - chunkFrom,
+    results: results.slice(chunkFrom, i + 1),
+  })
+  chunkFrom = i + 1
 }
 
 if (kind === 'size') {
@@ -67,6 +84,7 @@ if (kind === 'size') {
     results[i] = { tags, source: src, dim }
     done++
     tick(i)
+    flushChunk(i)
   }
 }
 

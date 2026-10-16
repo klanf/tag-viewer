@@ -29,6 +29,7 @@ import { promptToTags, dedupeTags } from './prompt.js'
 import { isCharacterTag, seriesName } from './dataset.js'
 import { dataFile } from './workspace.js'
 import { dimsForPaths } from './dims.js'
+import { readImageSize } from './imgsize.js'
 
 const CONCURRENCY = 8
 /** 新增/变化文件超过这个数就走 worker 线程解析(小批次原地跑, 起线程的固定开销不值得) */
@@ -210,8 +211,15 @@ export { parseInWorker, sizeInWorker } from './imgWorker.js'
  * @param {object} raw  {path, recursive, limit, force, rebuild}
  * @param {(p:{done:number,total:number})=>void} [onProgress]
  *   解析阶段进度回调(仅当走 worker 时触发); ipc 层用它把进度推给渲染端。
+ * @param {object} [opts] 流式扫描选项(2026-10-16): 大文件夹"扫到首批就能进"——
+ *   - `firstBatch`: number, 首批原地解析的张数(默认 0 = 关闭流式, 行为与旧版完全一致)
+ *   - `onPartial`: ({folder,done,total,items})=>void, 后台每解析完一批推一次增量
+ *   - `onFinal`: (out)=>void, 全部扫完后的**全量快照**(统计/共享标签/尺寸都修正过)
+ *   - `onError`: (err)=>void, 后台续扫失败时的兜底通知
+ *   流式模式下本函数 resolve 的是**部分结果**(out.streaming=true), 此时统计、
+ *   shared_tags 等都是"到目前为止"的宽松版, 以 onFinal 的那份为准。
  */
-export async function scanFolder(raw = {}, onProgress = null) {
+export async function scanFolder(raw = {}, onProgress = null, opts = {}) {
   const folder = String(raw.path || '').trim().replace(/^"|"$/g, '')
   const recursive = raw.recursive !== '0' && raw.recursive !== false
   const limit = Math.min(Math.max(parseInt(raw.limit, 10) || 50000, 1), 200000)
@@ -252,8 +260,265 @@ export async function scanFolder(raw = {}, onProgress = null) {
     }
   }
 
-  // ---- 只解析新增/变化的文件 ----
-  const parsed = new Map()        // fp -> { tags, source }
+  // ---- 解析调度 + item 组装(流式/非流式共用) ----
+  const parsed = new Map()        // fp -> { tags, source, dim? }
+  const items = []                // 已组装的 item(枚举顺序; 流式下逐步补齐)
+  const itemSeen = new Set()      // 已进 items 的 fp —— finalizeAll 只补没进的
+  let withPrompt = 0
+
+  /** 从 statMap/reuse/parsed 组装单张的 item; 数据未就绪(流式下还没解析到)返回 null */
+  const makeItem = (fp) => {
+    const st = statMap.get(fp)
+    if (!st) return null
+    const r = reuse.get(fp) || parsed.get(fp)
+    if (!r) return null
+    if (r.tags.length) withPrompt++
+    itemSeen.add(fp)
+    return {
+      path: fp,
+      name: path.basename(fp),
+      tags: r.tags,
+      source: r.source,
+      folder: path.basename(path.dirname(fp)),
+      /* 排序要用(2026-09-23): 扫描页的排序全在前端做, 而前端只有 name/folder 可排,
+         想按时间或大小排就必须把 stat 里的这两项带过来。`statMap` 本来就为每个文件
+         存了 m/s(见上面的 statSync), 所以这是纯白捡的, 不用额外读盘。 */
+      mtime: st.m,
+      size: st.s,
+      /* 像素尺寸: worker(meta 模式)和首批原地解析都顺手带了 dim —— 网格按真实比例
+         排版的必须项(漏了横图显示为竖图, 见 scan.js 历史注释)。没有的走 dimsForPaths 兜底。 */
+      ...(r.dim && r.dim.w > 0 ? { px_w: r.dim.w, px_h: r.dim.h } : {}),
+    }
+  }
+
+  /** 卡片展示字段: 角色标签最前 + 非共享的排后面。流式中途 sharedSet 还是空的
+   *  (全量统计要等扫完), 此时 key_tags 偏宽松(共享的也算"独有"), finalizeAll 会重跑修正。 */
+  const decorate = (list, sharedSet) => {
+    for (const it of list) {
+      const chars = it.tags.filter(isCharacterTag)
+      it.chars = chars
+      it.series = [...new Set(chars.map(seriesName).filter(Boolean))]
+      it.shared = it.tags.filter((t) => sharedSet.has(t))
+      it.key_tags = [...chars, ...it.tags.filter((t) => !sharedSet.has(t) && !chars.includes(t))]
+    }
+  }
+
+  /**
+   * 全量收尾: 写持久缓存 -> 补齐 items -> 全量统计(共享标签/decorate/提示词种类)
+   * -> 尺寸兜底 -> 内存缓存。流式/非流式共用这一份, 两条路出去的数据形状完全一致。
+   * 流式下 items/withPrompt 已在首批与各 chunk 期间累积, 这里只补漏, 不重复计数。
+   */
+  const finalizeAll = async () => {
+    // ---- 写回持久缓存(剔除已删除的文件) ----
+    let changed = rebuild
+    for (const fp of files) {
+      const s = statMap.get(fp)
+      if (!s) continue
+      const r = parsed.get(fp)
+      if (!r) continue
+      const k = normFilePath(fp)
+      const c = entries[k]
+      if (!c || c.m !== s.m || c.s !== s.s || c.t !== r.tags) {
+        entries[k] = { m: s.m, s: s.s, t: r.tags, src: r.source }
+        changed = true
+      }
+    }
+    for (const k of Object.keys(entries)) {
+      if (!keep.has(k)) { delete entries[k]; changed = true }
+    }
+    bucket.at = Date.now()
+    if (changed) schedulePersistSave()
+
+    // ---- 补齐 items(非流式: 全量组装; 流式: 只补 chunk 万一漏掉的下标) ----
+    for (const fp of files) {
+      if (itemSeen.has(fp)) continue
+      const it = makeItem(fp)
+      if (it) items.push(it)
+    }
+
+    // 整批共用标签(出现在 ≥2/3 含提示词的图里) —— 基于全量统计, 不受 limit 截断影响
+    const nTagged = items.reduce((acc, it) => acc + (it.tags.length ? 1 : 0), 0)
+    const sharedSet = new Set()
+    const sharedTags = []
+    if (nTagged >= 2) {
+      const cnt = new Map()
+      for (const it of items) {
+        for (const t of it.tags) cnt.set(t, (cnt.get(t) || 0) + 1)
+      }
+      const thr = Math.max(2, Math.round(nTagged * 2 / 3))
+      for (const [t, c] of cnt) if (c >= thr) sharedSet.add(t)
+      for (const it of items) {
+        for (const t of it.tags) {
+          if (sharedSet.has(t) && !sharedTags.includes(t)) sharedTags.push(t)
+        }
+      }
+    }
+    // 重跑 decorate: 流式阶段给的是宽松版(共享的也算"独有"), 这里按全量统计修正
+    decorate(items, sharedSet)
+
+    // 整批到底有几种不同提示词 —— 很多目录是「同一提示词 + 换种子」刷出来的,
+    // 那种情况下所有标签必然一致, 得让用户一眼分辨「读取失败」还是「本来就这样」
+    const groups = new Map()
+    for (const it of items) {
+      if (!it.tags.length) continue
+      const k = it.tags.join('\u0001')
+      groups.set(k, (groups.get(k) || 0) + 1)
+    }
+
+    const truncated = items.length > limit
+    const out = {
+      folder,
+      total: items.length,          // 全量文件数(未截断的)
+      truncated,
+      with_prompt: withPrompt,
+      items: truncated ? items.slice(0, limit) : items,
+      shared_tags: sharedTags,
+      distinct_prompts: groups.size,
+      recursive,
+      limit,
+      scanned_at: Date.now(),
+    }
+
+    /* ---- 像素尺寸: 网格按真实比例排版的**必须项**(2026-09-23 下午补) ----
+     *
+     * 漏了它就是这个 bug: **横图显示为竖图**。前端拿不到 px_w/px_h 会回落 9/16,
+     * 于是每个格子都按竖图算宽, 横图被 `object-fit: cover` 裁成竖条 —— 而且
+     * **一个错都不报**(尺寸是"有就用、没有就回落", 静默的)。
+     *
+     * 尺寸从哪来（见 core/dims.js）: 先查内存数据集(库里已登记的图, 零 I/O),
+     * 再批量读文件头。这里额外做两件事:
+     *   · **已有的从持久缓存白捡** —— w/h 和 mtime/size 一起失效, 所以"同一个文件
+     *     只读一次头", 重开/重扫目录不再读盘;
+     *   · worker(meta 模式)/首批原地解析顺手带的 dim 直接用 —— 这批不用再读头;
+     *   · 读到的写回 entries + 标 changed, 让下一轮扫描变纯内存。
+     *
+     * 实测口径（用户真库 8,599 张的目录）: 首扫读一遍, 之后重扫是 0 次读盘。
+     */
+    const needDims = []
+    for (const it of out.items) {
+      if (it.px_w > 0 && it.px_h > 0) continue    // 解析阶段已带尺寸, 免读
+      const c = entries[normFilePath(it.path)]
+      if (c && c.w > 0 && c.h > 0) {
+        it.px_w = c.w
+        it.px_h = c.h
+      } else {
+        needDims.push(it)
+      }
+    }
+    if (needDims.length) {
+      const dims = await dimsForPaths(needDims.map((it) => it.path), {
+        // 带 phase —— 前端据此把进度条文案从"正在扫描元数据"切成"正在读取图片尺寸",
+        // 否则读尺寸那几秒会顶着"元数据"的字样, 看着像卡住了。
+        onProgress: onProgress
+          ? ({ done, total }) => onProgress({ done, total, phase: 'dims' })
+          : undefined,
+      })
+      for (let i = 0; i < needDims.length; i++) {
+        const d = dims[i]
+        if (!d) continue                   // 读不到 -> 保持无尺寸, 前端回落 9/16
+        const it = needDims[i]
+        it.px_w = d.w
+        it.px_h = d.h
+        const c = entries[normFilePath(it.path)]
+        if (c) { c.w = d.w; c.h = d.h; changed = true }
+      }
+    }
+
+    if (changed) schedulePersistSave()
+    if (items.length <= CACHE_MAX_ITEMS) SCAN_CACHE.set(key, { at: Date.now(), result: out })
+    return out
+  }
+
+  /**
+   * 流式扫描(2026-10-16): 大文件夹"扫到首批就能进, 后台续扫边扫边涨"。
+   * 首批在主进程原地解析(带尺寸, 8 并发, 约一两秒) -> 立刻 resolve 部分结果;
+   * 剩余的进 worker, 每完成 STREAM_CHUNK 张回传一批 -> onPartial 推给前端 append。
+   * 全部完成后 finalizeAll 出全量快照(统计/共享标签/尺寸修正) -> onFinal。
+   * 内存/持久缓存照旧只在**完成时**写 —— 中途关页面再进来会重新流式扫一遍, 幂等。
+   */
+  const wantStream = (parseInt(opts.firstBatch, 10) || 0) > 0
+    && typeof opts.onPartial === 'function'
+  if (wantStream && fresh.length >= WORKER_THRESHOLD) {
+    const firstN = Math.min(parseInt(opts.firstBatch, 10) || 0, fresh.length)
+    const firstFiles = fresh.slice(0, firstN)
+    let cursor = 0
+    const workers = new Array(Math.min(CONCURRENCY, firstFiles.length || 1)).fill(0).map(async () => {
+      while (true) {
+        const i = cursor++
+        if (i >= firstFiles.length) return
+        const fp = firstFiles[i]
+        let tags = []
+        let src = ''
+        let dim = null
+        try {
+          const r = extractImagePrompt(fp)
+          src = r.source
+          tags = r.text ? dedupeTags(promptToTags(r.text)) : []
+        } catch { /* 单张读失败不影响整批 */ }
+        try {
+          const s = readImageSize(fp)      // 首屏就要按真实比例排版, 尺寸必须当场读
+          if (s) dim = { w: s[0], h: s[1] }
+        } catch { /* 拿不到尺寸 -> 前端回落 9/16, finalizeAll 会兜底 */ }
+        parsed.set(fp, { tags, source: src, dim })
+      }
+    })
+    await Promise.all(workers)
+
+    // 首屏 items: 枚举顺序里 reuse 的 + 首批解析完的(其余 fresh 还没数据, 跳过)
+    for (const fp of files) {
+      const it = makeItem(fp)
+      if (it) items.push(it)
+    }
+    decorate(items, new Set())
+
+    const outPartial = {
+      folder,
+      total: statMap.size,          // 全量文件数(部分阶段 items 还没齐, total 先给满)
+      truncated: false,
+      with_prompt: withPrompt,      // 到目前为止的计数, onFinal 修正
+      items,
+      shared_tags: [],
+      distinct_prompts: null,       // 全量统计, 部分阶段给不出
+      recursive,
+      limit,
+      scanned_at: Date.now(),
+      streaming: true,
+    }
+
+    // 后台续扫: 本函数 resolve 之后继续跑, 结果经 onPartial/onFinal 送出
+    const rest = fresh.slice(firstN)
+    ;(async () => {
+      try {
+        let covered = 0             // chunk 已覆盖到 rest 的下标(done 后从这补漏)
+        const results = await parseInWorker(rest, onProgress, 'meta', (c) => {
+          for (let k = 0; k < c.count; k++) {
+            const fp = rest[c.from + k]
+            parsed.set(fp, c.results[k] || { tags: [], source: '', dim: null })
+          }
+          const batch = []
+          for (let k = 0; k < c.count; k++) {
+            const it = makeItem(rest[c.from + k])
+            if (it) { items.push(it); batch.push(it) }
+          }
+          decorate(batch, new Set())
+          covered = Math.max(covered, c.from + c.count)
+          try { opts.onPartial({ folder, done: items.length, total: statMap.size, items: batch }) } catch { /* 推送失败不影响扫描 */ }
+        })
+        // done 的全量 results 是权威数据源 —— 把 chunk 万一漏掉的下标补上
+        for (let i = covered; i < rest.length; i++) {
+          parsed.set(rest[i], results[i] || { tags: [], source: '', dim: null })
+          const it = makeItem(rest[i])
+          if (it) items.push(it)
+        }
+        const out = await finalizeAll()
+        try { opts.onFinal?.(out) } catch { /* 通知失败不影响结果 */ }
+      } catch (e) {
+        try { opts.onError?.(e) } catch { /* 已经尽力通知了 */ }
+      }
+    })()
+    return outPartial
+  }
+
   if (fresh.length >= WORKER_THRESHOLD && typeof onProgress === 'function') {
     // 大批次: worker 线程解析, 主进程事件循环不被占死 + 进度实时上报
     const results = await parseInWorker(fresh, onProgress)
@@ -279,144 +544,6 @@ export async function scanFolder(raw = {}, onProgress = null) {
     await Promise.all(workers)
   }
 
-  // ---- 写回持久缓存(剔除已删除的文件) ----
-  let changed = rebuild
-  for (const fp of files) {
-    const s = statMap.get(fp)
-    if (!s) continue
-    const r = parsed.get(fp)
-    if (!r) continue
-    const k = normFilePath(fp)
-    const c = entries[k]
-    if (!c || c.m !== s.m || c.s !== s.s || c.t !== r.tags) {
-      entries[k] = { m: s.m, s: s.s, t: r.tags, src: r.source }
-      changed = true
-    }
-  }
-  for (const k of Object.keys(entries)) {
-    if (!keep.has(k)) { delete entries[k]; changed = true }
-  }
-  bucket.at = Date.now()
-  if (changed) schedulePersistSave()
-
-  // ---- 组装 items(枚举顺序) ----
-  const items = []
-  let withPrompt = 0
-  for (const fp of files) {
-    const st = statMap.get(fp)
-    if (!st) continue
-    const r = reuse.get(fp) || parsed.get(fp)
-    if (!r) continue
-    if (r.tags.length) withPrompt++
-    items.push({
-      path: fp,
-      name: path.basename(fp),
-      tags: r.tags,
-      source: r.source,
-      folder: path.basename(path.dirname(fp)),
-      /* 排序要用(2026-09-23): 扫描页的排序全在前端做, 而前端只有 name/folder 可排,
-         想按时间或大小排就必须把 stat 里的这两项带过去。`statMap` 本来就为每个文件
-         存了 m/s(见上面的 statSync), 所以这是纯白捡的, 不用额外读盘。 */
-      mtime: st.m,
-      size: st.s,
-    })
-  }
-
-  // 整批共用标签(出现在 ≥2/3 含提示词的图里) —— 基于全量统计, 不受 limit 截断影响
-  const nTagged = items.reduce((a, it) => a + (it.tags.length ? 1 : 0), 0)
-  const sharedSet = new Set()
-  const sharedTags = []
-  if (nTagged >= 2) {
-    const cnt = new Map()
-    for (const it of items) {
-      for (const t of it.tags) cnt.set(t, (cnt.get(t) || 0) + 1)
-    }
-    const thr = Math.max(2, Math.round(nTagged * 2 / 3))
-    for (const [t, c] of cnt) if (c >= thr) sharedSet.add(t)
-    for (const it of items) {
-      for (const t of it.tags) {
-        if (sharedSet.has(t) && !sharedTags.includes(t)) sharedTags.push(t)
-      }
-    }
-  }
-
-  for (const it of items) {
-    const chars = it.tags.filter(isCharacterTag)
-    it.chars = chars
-    it.series = [...new Set(chars.map(seriesName).filter(Boolean))]
-    it.shared = it.tags.filter((t) => sharedSet.has(t))
-    it.key_tags = [...chars, ...it.tags.filter((t) => !sharedSet.has(t) && !chars.includes(t))]
-  }
-
-  // 整批到底有几种不同提示词 —— 很多目录是「同一提示词 + 换种子」刷出来的,
-  // 那种情况下所有标签必然一致, 得让用户一眼分辨「读取失败」还是「本来就这样」
-  const groups = new Map()
-  for (const it of items) {
-    if (!it.tags.length) continue
-    const k = it.tags.join('\u0001')
-    groups.set(k, (groups.get(k) || 0) + 1)
-  }
-
-  const truncated = items.length > limit
-  const out = {
-    folder,
-    total: items.length,          // 全量文件数(未截断的)
-    truncated,
-    with_prompt: withPrompt,
-    items: truncated ? items.slice(0, limit) : items,
-    shared_tags: sharedTags,
-    distinct_prompts: groups.size,
-    recursive,
-    limit,
-    scanned_at: Date.now(),
-  }
-
-  /* ---- 像素尺寸: 网格按真实比例排版的**必须项**(2026-09-23 下午补) ----
-   *
-   * 漏了它就是这个 bug: **横图显示为竖图**。前端拿不到 px_w/px_h 会回落 9/16,
-   * 于是每个格子都按竖图算宽, 横图被 `object-fit: cover` 裁成竖条 —— 而且
-   * **一个错都不报**(尺寸是"有就用、没有就回落", 静默的)。上一版这里只带了
-   * path/name/tags/source/folder/mtime/size, 正好把尺寸漏了。
-   *
-   * 尺寸从哪来（见 core/dims.js）: 先查内存数据集(库里已登记的图, 零 I/O),
-   * 再批量读文件头。这里额外做两件事:
-   *   · **已有的从持久缓存白捡** —— w/h 和 mtime/size 一起失效, 所以"同一个文件
-   *     只读一次头", 重开/重扫目录不再读盘;
-   *   · 读到的写回 entries + 标 changed, 让下一轮扫描变纯内存。
-   *
-   * 只对**将要返回的那批**做: 超过 limit 被截掉的图前端根本看不到, 不白读。
-   * 实测口径（用户真库 8,599 张的目录）: 首扫读一遍, 之后重扫是 0 次读盘。
-   */
-  const needDims = []
-  for (const it of out.items) {
-    const c = entries[normFilePath(it.path)]
-    if (c && c.w > 0 && c.h > 0) {
-      it.px_w = c.w
-      it.px_h = c.h
-    } else {
-      needDims.push(it)
-    }
-  }
-  if (needDims.length) {
-    const dims = await dimsForPaths(needDims.map((it) => it.path), {
-      // 带 phase —— 前端据此把进度条文案从"正在扫描元数据"切成"正在读取图片尺寸",
-      // 否则读尺寸那几秒会顶着"元数据"的字样, 看着像卡住了。
-      onProgress: onProgress
-        ? ({ done, total }) => onProgress({ done, total, phase: 'dims' })
-        : undefined,
-    })
-    for (let i = 0; i < needDims.length; i++) {
-      const d = dims[i]
-      if (!d) continue                   // 读不到 -> 保持无尺寸, 前端回落 9/16
-      const it = needDims[i]
-      it.px_w = d.w
-      it.px_h = d.h
-      const c = entries[normFilePath(it.path)]
-      if (c) { c.w = d.w; c.h = d.h; changed = true }
-    }
-  }
-
-  if (changed) schedulePersistSave()
-  if (items.length <= CACHE_MAX_ITEMS) SCAN_CACHE.set(key, { at: Date.now(), result: out })
-  return out
+  return await finalizeAll()
 }
+

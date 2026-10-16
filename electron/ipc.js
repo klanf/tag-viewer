@@ -207,6 +207,20 @@ function pushScanProgress(p) {
   mainWindow()?.webContents.send('scan:progress', p)
 }
 
+/** 流式扫描(2026-10-16): 后台每解析完一批 / 全部扫完 -> 渲染端增量合并(ScanView 订阅) */
+function pushScanPartial(p) {
+  mainWindow()?.webContents.send('scan:partial', p)
+}
+function pushScanFinal(out) {
+  mainWindow()?.webContents.send('scan:final', out)
+}
+/** 大文件夹流式扫描的参数包: 首批 100 张先返回, 后台续扫走增量推送 */
+const SCAN_STREAM_OPTS = {
+  firstBatch: 100,
+  onPartial: pushScanPartial,
+  onFinal: pushScanFinal,
+}
+
 /** 后台增量同步进度 -> 渲染端顶栏 */
 function pushIngestProgress(p) {
   mainWindow()?.webContents.send('ingest:progress', p)
@@ -838,7 +852,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       return r
     }),
     'folders:rescan': safe((raw) => rescanFolder(raw, pushScanProgress)),
-    'folders:open': safe((raw) => openFolder(raw, pushScanProgress)),
+    'folders:open': safe((raw) => openFolder(raw, pushScanProgress, SCAN_STREAM_OPTS)),
     'folders:prune': safe(() => pruneMissing()),
     'folders:export': safe(() => exportFoldersJson()),
     // 单个来源"立即同步": 只跑登记表里的这一个目录(不传 only 时是全量)
