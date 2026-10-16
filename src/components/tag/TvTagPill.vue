@@ -20,7 +20,7 @@
  * 已入车=绿色实心购物车, 已收藏=金色实心星; 另有右上角标(不占布局)常驻提示。
  */
 import { computed } from 'vue'
-import { hasSeriesSuffix, isCharTag } from '@/utils/format.js'
+import { hasSeriesSuffix, isCharTag, subHueNo } from '@/utils/format.js'
 
 const props = defineProps({
   tag: { type: String, required: true },
@@ -74,12 +74,17 @@ const kind = computed(() => {
   return 'plain'
 })
 
-/** 段位配色类(2026-10-16): cat 优先, 没传 cat 退回旧 isCharTag/variant 判定 */
+/** 段位配色类(2026-10-16): cat 优先, 没传 cat 退回旧 isCharTag/variant 判定。
+ *  通用段按韦林大类上左边条(k-subN, 2026-10-17), 不整块上色避免满屏彩虹。 */
 const colorCls = computed(() => {
   if (props.variant === 'char') return 'k-char'
   if (props.variant === 'series') return 'k-series'
-  const seg = props.cat ? props.cat.split(':')[0] : ''
+  const [seg, sub] = String(props.cat || '').split(':')
   if (seg === 'count' || seg === 'char' || seg === 'series' || seg === 'artist') return `k-${seg}`
+  if (seg === 'general') {
+    const n = subHueNo(sub)
+    return n ? `k-sub${n}` : 'k-plain'
+  }
   if (kind.value === 'char') return 'k-char'
   if (kind.value === 'series') return 'k-series'
   return 'k-plain'
@@ -230,6 +235,22 @@ function onFav(e) {
 .pill.k-series .en { color: var(--seg-series); font-weight: 600; }
 .pill.k-artist { border-color: color-mix(in srgb, var(--seg-artist) 50%, transparent); background: var(--seg-artist-bg); }
 .pill.k-artist .en { color: var(--seg-artist); font-weight: 600; }
+
+/* ── 通用大类左边条(2026-10-17) ──────────────────────────────
+ * 人物/服饰/汉服… 各占一个色相(tokens.css --sub-h1..11)。只染 3px 左边条,
+ * pill 底色和文字保持中性 —— 通用段一屏几十个, 整块上色会满屏彩虹,
+ * 盖过人数/角色/系列/画师那四个"有色即信息"的段位。 */
+.pill[class*="k-sub"] { border-left-width: 3px; }
+.pill.k-sub1  { border-left-color: hsl(var(--sub-h1)  var(--sub-s) var(--sub-l) / .8); }
+.pill.k-sub2  { border-left-color: hsl(var(--sub-h2)  var(--sub-s) var(--sub-l) / .8); }
+.pill.k-sub3  { border-left-color: hsl(var(--sub-h3)  var(--sub-s) var(--sub-l) / .8); }
+.pill.k-sub4  { border-left-color: hsl(var(--sub-h4)  var(--sub-s) var(--sub-l) / .8); }
+.pill.k-sub5  { border-left-color: hsl(var(--sub-h5)  var(--sub-s) var(--sub-l) / .8); }
+.pill.k-sub6  { border-left-color: hsl(var(--sub-h6)  var(--sub-s) var(--sub-l) / .8); }
+.pill.k-sub7  { border-left-color: hsl(var(--sub-h7)  var(--sub-s) var(--sub-l) / .8); }
+.pill.k-sub8  { border-left-color: hsl(var(--sub-h8)  var(--sub-s) var(--sub-l) / .8); }
+.pill.k-sub9  { border-left-color: hsl(var(--sub-h9)  var(--sub-s) var(--sub-l) / .8); }
+.pill.k-sub10 { border-left-color: hsl(var(--sub-h10) var(--sub-s) var(--sub-l) / .8); }
 
 .pill.active { border-color: var(--accent); background: var(--accent-soft); }
 

@@ -85,12 +85,15 @@ export const useAppStore = defineStore('app', () => {
     } catch { /* 读不到就用默认值 */ }
   }
   /** 写单个展示偏好并同步本地缓存(groupedTags / showBannedTags 这类即时开关用),
-   *  免得每个开关各抄一遍 settingsSet + 回填。失败时本地缓存维持原状。 */
+   *  免得每个开关各抄一遍 settingsSet + 回填。
+   *  乐观更新: 先改本地缓存让开关**立即生效**, 再落盘对账 —— 不等 IPC 回包,
+   *  否则主进程旧版(白名单没这个键)静默丢 patch 时开关看起来就是"点了没反应"。 */
   async function setSetting(key, value) {
+    settings.value = { ...settings.value, [key]: value }
     try {
       const r = await api.settingsSet({ [key]: value })
       if (r?.settings) settings.value = r.settings
-    } catch { /* 静默: 下次 pullSettings 会校正 */ }
+    } catch { /* 落盘失败先维持乐观值, 下次 pullSettings 校正 */ }
   }
   /**
    * 反推环境搭建进度(Python 运行时 / WD14 模型下载)。主进程在「现在下载」确认后

@@ -136,3 +136,16 @@ export function charShortName(t) {
 export function stripZhSeries(zh) {
   return String(zh || '').replace(/\s*\([^()]*\)$/, '')
 }
+
+/* ---------------- 通用大类配色(2026-10-17) ----------------
+ * 通用段的韦林大类各占一个专属色相, 用于分组小节标题着色 + pill 左边条。
+ * 序号对应 tokens.css 的 --sub-h1..--sub-h11, 三处(这里/标题/边条)必须同源。
+ * 没进表的大类(含"其他")不着色, 维持中性灰。 */
+export const GENERAL_SUB_HUE = {
+  '人物': 1, '服饰': 2, '汉服': 3, '表情动作': 4, '物品': 5,
+  '场景': 6, '环境': 7, '画面': 8, '镜头': 9, '魔法系': 10,
+}
+/** 取大类色相序号(0 = 不着色) */
+export function subHueNo(sub) {
+  return GENERAL_SUB_HUE[String(sub || '')] || 0
+}

@@ -14,7 +14,7 @@
  */
 import { computed } from 'vue'
 import TvTagPill from './TvTagPill.vue'
-import { isCharTag } from '@/utils/format.js'
+import { isCharTag, subHueNo } from '@/utils/format.js'
 import { useAppStore } from '@/stores/useAppStore.js'
 
 const app = useAppStore()
@@ -116,7 +116,9 @@ const groups = computed(() => {
     const [seg, sub] = String(cat).split(':')
     const key = cat.startsWith('general:') ? cat : seg
     const title = seg === 'general' ? (sub || '通用') : (SEG_LABEL[seg] || seg)
-    if (!buckets.has(key)) buckets.set(key, { title, key, items: [] })
+    // 通用大类标题按色相着色(与 pill 左边条同一组 --sub-hN 令牌)
+    const subCls = seg === 'general' && subHueNo(sub) ? `g-sub${subHueNo(sub)}` : ''
+    if (!buckets.has(key)) buckets.set(key, { title, key, subCls, items: [] })
     buckets.get(key).items.push(it)
   }
   const order = [...buckets.values()].map((b) => ({ ...b, rank: rankOf(b.key) }))
@@ -139,7 +141,7 @@ const groups = computed(() => {
     <!-- 分组形态: 段位小节, 每节一个标题行 + 该节的 pills -->
     <template v-if="grouped && groups">
       <template v-for="g in groups" :key="g.key">
-        <div class="seg-head" :class="'seg-' + g.key.split(':')[0]">{{ g.title }}<i>{{ g.items.length }}</i></div>
+        <div class="seg-head" :class="['seg-' + g.key.split(':')[0], g.subCls]">{{ g.title }}<i>{{ g.items.length }}</i></div>
         <TvTagPill
           v-for="it in g.items"
           :key="it.tag"
@@ -228,4 +230,25 @@ const groups = computed(() => {
 .seg-head.seg-artist { color: var(--seg-artist); font-weight: 600; }
 .seg-head.seg-count { color: var(--seg-count); font-weight: 600; }
 .seg-head.seg-meta { opacity: .75; }
+/* 通用大类标题: 与 pill 左边条同一组色相(--sub-hN), 分隔线同色淡化 */
+.seg-head.g-sub1  { color: hsl(var(--sub-h1)  var(--sub-s) var(--sub-l)); }
+.seg-head.g-sub2  { color: hsl(var(--sub-h2)  var(--sub-s) var(--sub-l)); }
+.seg-head.g-sub3  { color: hsl(var(--sub-h3)  var(--sub-s) var(--sub-l)); }
+.seg-head.g-sub4  { color: hsl(var(--sub-h4)  var(--sub-s) var(--sub-l)); }
+.seg-head.g-sub5  { color: hsl(var(--sub-h5)  var(--sub-s) var(--sub-l)); }
+.seg-head.g-sub6  { color: hsl(var(--sub-h6)  var(--sub-s) var(--sub-l)); }
+.seg-head.g-sub7  { color: hsl(var(--sub-h7)  var(--sub-s) var(--sub-l)); }
+.seg-head.g-sub8  { color: hsl(var(--sub-h8)  var(--sub-s) var(--sub-l)); }
+.seg-head.g-sub9  { color: hsl(var(--sub-h9)  var(--sub-s) var(--sub-l)); }
+.seg-head.g-sub10 { color: hsl(var(--sub-h10) var(--sub-s) var(--sub-l)); }
+.seg-head.g-sub1::after  { background: hsl(var(--sub-h1)  var(--sub-s) var(--sub-l) / .35); }
+.seg-head.g-sub2::after  { background: hsl(var(--sub-h2)  var(--sub-s) var(--sub-l) / .35); }
+.seg-head.g-sub3::after  { background: hsl(var(--sub-h3)  var(--sub-s) var(--sub-l) / .35); }
+.seg-head.g-sub4::after  { background: hsl(var(--sub-h4)  var(--sub-s) var(--sub-l) / .35); }
+.seg-head.g-sub5::after  { background: hsl(var(--sub-h5)  var(--sub-s) var(--sub-l) / .35); }
+.seg-head.g-sub6::after  { background: hsl(var(--sub-h6)  var(--sub-s) var(--sub-l) / .35); }
+.seg-head.g-sub7::after  { background: hsl(var(--sub-h7)  var(--sub-s) var(--sub-l) / .35); }
+.seg-head.g-sub8::after  { background: hsl(var(--sub-h8)  var(--sub-s) var(--sub-l) / .35); }
+.seg-head.g-sub9::after  { background: hsl(var(--sub-h9)  var(--sub-s) var(--sub-l) / .35); }
+.seg-head.g-sub10::after { background: hsl(var(--sub-h10) var(--sub-s) var(--sub-l) / .35); }
 </style>
