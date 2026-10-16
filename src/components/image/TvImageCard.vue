@@ -293,7 +293,7 @@ function onCtx(e) {
   white-space: nowrap; text-overflow: ellipsis;
 }
 .tags.keys { white-space: normal; max-height: 42px; line-height: 1.35; }
-.tags .ch { color: var(--char); font-weight: 700; }
+.tags .ch { color: var(--seg-char); font-weight: 700; }
 .tags .none { color: var(--faint); font-style: italic; }
 
 .foot {

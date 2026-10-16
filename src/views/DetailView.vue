@@ -36,6 +36,12 @@ const app = useAppStore()
 const safety = useSafetyStore()
 const charCart = useCharCart()
 
+/* 被 ban 标签的 显示/隐藏(2026-10-16): 与光箱共用设置里的 showBannedTags(默认开) */
+const showBanned = computed({
+  get: () => app.settings.showBannedTags !== false,
+  set: (v) => app.setSetting('showBannedTags', v),
+})
+
 const path = computed(() => String(route.query.path || ''))
 const data = ref(null)
 const zhMap = ref({})
@@ -176,6 +182,7 @@ function runCopy(key) {
 
           <div class="checks">
             <TvCheckbox v-model="prefs.bgAuto" label="🌄 缺背景时补背景标签(复制)" />
+            <TvCheckbox v-model="showBanned" label="显示被 ban 标签" />
             <span v-if="needBg" class="badge">该图缺背景 · 补 {{ bgAppend.join('/') }}</span>
           </div>
 
@@ -190,6 +197,7 @@ function runCopy(key) {
               :zh-map="zhMap"
               :ban-map="data?.ban_map || {}"
               show-ban
+              :hide-banned="!showBanned"
               copyable
               cartable
               :cart-tags="charCart.cart.keys"
@@ -205,7 +213,7 @@ function runCopy(key) {
               @leave="ui.hideTip"
             />
             <div class="hint">
-              🟡 黄色 = 角色标签(含系列名) · 点标签跳去它的图片列表 · 悬停标签点 📋 可只复制这一个 · 灰色删除线 = 已 ban
+              🟢 绿 = 角色 · 🟣 紫 = 系列 · 🔴 红 = 画师 · 🔵 蓝 = 人数 · 点标签跳去它的图片列表 · 悬停标签点 📋 可只复制这一个 · 灰色删除线 = 已 ban
             </div>
           </template>
         </div>

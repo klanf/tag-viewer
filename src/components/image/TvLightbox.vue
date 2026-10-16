@@ -49,6 +49,11 @@ const router = useRouter()
 const charCart = useCharCart()
 const tagFav = useTagFavStore()
 
+/* 被 ban 标签的 显示/隐藏(2026-10-16): 选择记忆到设置(showBannedTags, 默认开),
+ * 与详情页共用同一个偏好。徽章上的命中数不管藏不藏都显示, 不丢信息。 */
+const showBanned = computed(() => app.settings.showBannedTags !== false)
+function toggleShowBanned() { app.setSetting('showBannedTags', !showBanned.value) }
+
 /* tag 详情页(大图)同样支持右键菜单(复制/收藏/删除等);
    Del 键删除当前图: 走 useTrash 确认流程(可关提示)。
    删完**不在这里**推进光箱 —— 推进统一由 store 订阅 'tv:trashed' 负责
@@ -294,7 +299,8 @@ function preheat() {
             <span v-if="lb.needBg" class="badge warn" title="该图缺背景/场景标签, 复制时会自动追加背景标签">
               🌄 缺背景 · 复制时补 {{ lb.bgAppend.join('/') }}
             </span>
-            <!-- ban 命中数: 明确区分「没适配」和「这张图确实没有黑名单词」 -->
+            <!-- ban 命中数: 明确区分「没适配」和「这张图确实没有黑名单词」;
+                 旁边挂 显示/隐藏 开关(只在本图有命中时出现) -->
             <span
               v-if="!lb.loading && lb.bannedTags.length"
               class="badge ban"
@@ -302,6 +308,14 @@ function preheat() {
             >
               🚫 命中黑名单 {{ lb.bannedTags.length }} 个 · 点标签上的 🚫 可单条取消
             </span>
+            <label
+              v-if="!lb.loading && lb.bannedTags.length"
+              class="ban-vis"
+              :title="showBanned ? '隐藏被 ban 的标签' : '显示被 ban 的标签'"
+            >
+              <input type="checkbox" :checked="showBanned" @change="toggleShowBanned" />
+              <span class="sw"></span>显示被 ban 标签
+            </label>
             <span
               v-else-if="!lb.loading && lb.sortedTags.length"
               class="badge dim"
@@ -367,6 +381,7 @@ function preheat() {
               :zh-map="lb.zhMap"
               :ban-map="lb.data?.ban_map || {}"
               show-ban
+              :hide-banned="!showBanned"
               copyable
               favable
               :fav-tags="tagFav.list"
@@ -493,6 +508,24 @@ function preheat() {
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.ban { background: var(--danger-soft, rgba(239, 68, 68, .14)); color: var(--danger); }
 .badge.dim { background: var(--panel3); color: var(--muted); }
+/* 被 ban 标签 显示/隐藏 开关(2026-10-16): 迷你 switch, 与徽章同排 */
+.ban-vis {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; color: var(--muted);
+  cursor: pointer; user-select: none; flex: 0 0 auto;
+}
+.ban-vis input { display: none; }
+.ban-vis .sw {
+  width: 22px; height: 12px; border-radius: 6px; background: var(--border);
+  position: relative; transition: background var(--t-fast); flex: 0 0 auto;
+}
+.ban-vis .sw::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 8px; height: 8px; border-radius: 50%; background: #fff;
+  transition: left var(--t-fast);
+}
+.ban-vis:has(input:checked) .sw { background: var(--accent2, #2f9e63); }
+.ban-vis:has(input:checked) .sw::after { left: 12px; }
 
 .lb-meta { display: flex; flex-direction: column; gap: 6px; }
 .lb-meta-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }

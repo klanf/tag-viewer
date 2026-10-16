@@ -24,6 +24,8 @@ const props = defineProps({
   zhMap: { type: Object, default: () => ({}) },
   banMap: { type: Object, default: () => ({}) },
   showBan: { type: Boolean, default: false },
+  /** 隐藏被 ban 的标签(2026-10-16): 开关在光箱/详情页, 选择记忆到设置 */
+  hideBanned: { type: Boolean, default: false },
   /** 按分类分组展示(2026-10-16): 段位小节 + 韦林大类归堆, 顺序即导出段位顺序 */
   grouped: { type: Boolean, default: false },
   /** 每个 pill 上挂一个悬停显形的 📋 复制图标(点 pill 本体干别的时用) */
@@ -54,10 +56,10 @@ const props = defineProps({
 })
 const emit = defineEmits(['click', 'ban', 'copy', 'cart', 'fav', 'hover', 'leave'])
 
-/** 归一化成统一对象 */
+/** 归一化成统一对象; 顺带带上分类快照 cat(pill 按段位着色用) */
 const items = computed(() => {
   const arr = props.tags || []
-  const out = arr.map((t) => {
+  let out = arr.map((t) => {
     if (t && typeof t === 'object') {
       return {
         tag: t.tag,
@@ -65,6 +67,7 @@ const items = computed(() => {
         count: t.count ?? null,
         banned: !!t.banned,
         banRule: t.ban_rule || t.banRule || '',
+        cat: t.cat || app.catOf(t.tag),
       }
     }
     const b = props.banMap[t] || {}
@@ -74,8 +77,10 @@ const items = computed(() => {
       count: null,
       banned: !!b.banned,
       banRule: b.rule || '',
+      cat: app.catOf(t),
     }
   })
+  if (props.hideBanned) out = out.filter((it) => !it.banned)
   if (props.charsFirst && !props.grouped) {
     out.sort((a, b) => (isCharTag(b.tag) ? 1 : 0) - (isCharTag(a.tag) ? 1 : 0))
   }
@@ -143,6 +148,7 @@ const groups = computed(() => {
           :count="it.count"
           :banned="it.banned"
           :ban-rule="it.banRule"
+          :cat="it.cat"
           :show-ban="showBan"
           :copyable="copyable"
           :cartable="cartable"
@@ -203,7 +209,8 @@ const groups = computed(() => {
   padding: 2px 0;
 }
 .empty-inline { color: var(--muted); font-size: 11px; padding: 6px 0; flex: 0 0 100%; }
-/* 分组小节标题: 占满一整行, 按段位着色(与 danbooru 惯例一致: 角色绿/系列紫/画师红) */
+/* 分组小节标题: 占满一整行, 按段位着色(与 pill 本体同一组 --seg-* 令牌;
+ * 2026-10-16 之前用的 --ok/--violet/--err 根本没定义过, 全靠 fallback 兜底) */
 .seg-head {
   flex: 0 0 100%;
   font-size: 11px;
@@ -216,9 +223,9 @@ const groups = computed(() => {
 }
 .seg-head::after { content: ''; flex: 1; height: 1px; background: var(--border, rgba(128,128,128,.25)); }
 .seg-head i { font-style: normal; opacity: .7; }
-.seg-head.seg-char { color: var(--ok, #3f9d63); }
-.seg-head.seg-series { color: var(--violet, #8b6fc9); }
-.seg-head.seg-artist { color: var(--err, #c9564f); }
-.seg-head.seg-count { color: var(--accent); }
+.seg-head.seg-char { color: var(--seg-char); font-weight: 600; }
+.seg-head.seg-series { color: var(--seg-series); font-weight: 600; }
+.seg-head.seg-artist { color: var(--seg-artist); font-weight: 600; }
+.seg-head.seg-count { color: var(--seg-count); font-weight: 600; }
 .seg-head.seg-meta { opacity: .75; }
 </style>

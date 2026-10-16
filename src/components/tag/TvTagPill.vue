@@ -12,6 +12,12 @@
  *   未 ban           -> 常态, 点 🚫 加入黑名单精确规则
  *   被精确规则 ban   -> 灰化 + 删除线, 点 🚫 移除那条规则
  *   被通配规则命中   -> 灰化 + 删除线, 点 🚫 提示"需手动改规则"(不能单条取消)
+ *
+ * 2026-10-16 段位配色: 新增 cat prop(由 TvTagList 用 app.catOf 传入, 形如
+ * "char" | "general:服饰"), 按 SEG_ORDER 段位上色 —— 人数蓝/角色绿/系列紫/画师红,
+ * 通用/meta/other 维持中性灰。不传 cat 时退回旧的 isCharTag 判定(向后兼容)。
+ * 图标从 emoji 换成单色 SVG(13px, currentColor 着色), 状态用颜色说话:
+ * 已入车=绿色实心购物车, 已收藏=金色实心星; 另有右上角标(不占布局)常驻提示。
  */
 import { computed } from 'vue'
 import { hasSeriesSuffix, isCharTag } from '@/utils/format.js'
@@ -22,6 +28,8 @@ const props = defineProps({
   count: { type: [Number, String], default: null },
   banned: { type: Boolean, default: false },
   banRule: { type: String, default: '' },
+  /** 分类快照(TvTagList 从 app.catOf 传入): "char" / "series" / "count" / "artist" / "general:服饰" / "meta" ... */
+  cat: { type: String, default: '' },
   /** 显示 🚫 切换按钮 */
   showBan: { type: Boolean, default: false },
   /** 显示计数 */
@@ -66,6 +74,17 @@ const kind = computed(() => {
   return 'plain'
 })
 
+/** 段位配色类(2026-10-16): cat 优先, 没传 cat 退回旧 isCharTag/variant 判定 */
+const colorCls = computed(() => {
+  if (props.variant === 'char') return 'k-char'
+  if (props.variant === 'series') return 'k-series'
+  const seg = props.cat ? props.cat.split(':')[0] : ''
+  if (seg === 'count' || seg === 'char' || seg === 'series' || seg === 'artist') return `k-${seg}`
+  if (kind.value === 'char') return 'k-char'
+  if (kind.value === 'series') return 'k-series'
+  return 'k-plain'
+})
+
 /** 悬停浮层里是否真有图标(决定浮层 DOM 是否渲染) */
 const hasHoverActs = computed(() =>
   props.copyable ||
@@ -73,6 +92,10 @@ const hasHoverActs = computed(() =>
   (props.cartable && kind.value === 'char') ||
   props.showBan
 )
+
+/** 右上角常驻角标(2026-10-16): 已收藏=金色★圆徽, 已入车=绿色圆点。绝对定位不占布局 */
+const showCornerFav = computed(() => props.favable && props.inFav)
+const showCornerCart = computed(() => props.cartable && kind.value === 'char' && props.inCart)
 
 /** 角色/系列标签常常太长, 显示时去掉 _(系列) 尾巴让 pill 短一点; 悬停看完整 */
 const shownTag = computed(() => {
@@ -122,7 +145,7 @@ function onFav(e) {
 
 <template>
   <span
-    :class="['pill', `k-${kind}`, `s-${size}`, { banned, active, clip }]"
+    :class="['pill', colorCls, `s-${size}`, { banned, active, clip }]"
     :title="pillTitle"
     :data-tag="tag"
     @click="onClick"
@@ -130,22 +153,43 @@ function onFav(e) {
     <span class="en">{{ shownTag }}</span>
     <span v-if="showZh && zh" class="zh" :title="zh">{{ zh }}</span>
     <b v-if="showCount && count !== null" class="cnt">{{ count }}</b>
-    <!-- 常驻状态图标: 已 ban / 已入车。内联占位但**静态**(不随悬停伸缩),
-         静态宽度不会触发重排循环 —— 抽搐的根源是"悬停改变宽度"而非占位本身 -->
-    <i v-if="showBan && banned" class="st" :title="banTitle" @click="onBan">🚫</i>
-    <i v-if="cartable && kind === 'char' && inCart" class="st ct on" :title="cartTitle" @click="onCart">🛒</i>
-    <i v-if="favable && inFav" class="st fv on" :title="favTitle" @click="onFav">★</i>
+    <!-- 常驻状态图标: 已 ban / 已入车 / 已收藏。内联占位但**静态**(不随悬停伸缩),
+         静态宽度不会触发重排循环 —— 抽搐的根源是"悬停改变宽度"而非占位本身。
+         2026-10-16: emoji -> SVG, 状态用颜色(入车绿实心/收藏金实心) -->
+    <i v-if="showBan && banned" class="st ic" :title="banTitle" @click="onBan">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6.2 6.2l11.6 11.6"/></svg>
+    </i>
+    <i v-if="cartable && kind === 'char' && inCart" class="st ic ct on" :title="cartTitle" @click="onCart">
+      <svg viewBox="0 0 24 24"><path d="M3 4h2l2.4 12.2a1.5 1.5 0 0 0 1.5 1.2h8.6a1.5 1.5 0 0 0 1.5-1.2L20.5 8H6"/><circle cx="10" cy="20.5" r="1.4"/><circle cx="17" cy="20.5" r="1.4"/></svg>
+    </i>
+    <i v-if="favable && inFav" class="st ic fv on" :title="favTitle" @click="onFav">
+      <svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6-5.4-3-5.4 3 1.1-6L3.2 9.4l6.1-.8z"/></svg>
+    </i>
     <!-- 悬停动作浮层: 绝对定位盖在 pill 自身右段上方, 完全不占布局宽度。
          pill 几何永不变化 -> flex-wrap 永不因悬停重排 -> 不再"掉行又弹回"抽搐。
          ⚠️ 浮层必须带全套动作(含 🚫/🛒, 不论 banned/inCart): 浮层会盖住内联
          状态图标, 若把状态图标从浮层排除, 悬停时就只剩 📋、"取消 ban"入口
          被自己盖掉(2026-09-20 用户实测踩中) -->
     <span v-if="hasHoverActs" class="acts">
-      <i v-if="copyable" class="cp" :title="copyTitle" @click="onCopy">📋</i>
-      <i v-if="favable" :class="['fv', { on: inFav }]" :title="favTitle" @click="onFav">★</i>
-      <i v-if="cartable && kind === 'char'" :class="['ct', { on: inCart }]" :title="cartTitle" @click="onCart">🛒</i>
-      <i v-if="showBan" class="ban" :title="banTitle" @click="onBan">🚫</i>
+      <i v-if="copyable" class="ic cp" :title="copyTitle" @click="onCopy">
+        <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+      </i>
+      <i v-if="favable" :class="['ic', 'fv', { on: inFav }]" :title="favTitle" @click="onFav">
+        <svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6-5.4-3-5.4 3 1.1-6L3.2 9.4l6.1-.8z"/></svg>
+      </i>
+      <i v-if="cartable && kind === 'char'" :class="['ic', 'ct', { on: inCart }]" :title="cartTitle" @click="onCart">
+        <svg viewBox="0 0 24 24"><path d="M3 4h2l2.4 12.2a1.5 1.5 0 0 0 1.5 1.2h8.6a1.5 1.5 0 0 0 1.5-1.2L20.5 8H6"/><circle cx="10" cy="20.5" r="1.4"/><circle cx="17" cy="20.5" r="1.4"/></svg>
+      </i>
+      <i v-if="showBan" class="ic ban" :title="banTitle" @click="onBan">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6.2 6.2l11.6 11.6"/></svg>
+      </i>
     </span>
+    <!-- 右上角常驻角标(2026-10-16): 悬停浮层会盖住内联状态图标, 角标浮在 pill
+         外沿(fav 右上/cart 再偏左一格), 不悬停也一眼可见, 绝对定位不参与布局 -->
+    <span v-if="showCornerFav" class="corner fav" :title="favTitle">
+      <svg viewBox="0 0 24 24"><path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.5 1.1 6.4L12 17.1l-5.8 3.1 1.1-6.4L2.6 9.3l6.5-.9z"/></svg>
+    </span>
+    <span v-else-if="showCornerCart" class="corner cart" :title="cartTitle"></span>
   </span>
 </template>
 
@@ -174,18 +218,22 @@ function onFav(e) {
 }
 .cnt { color: var(--accent); font-size: 10px; font-weight: 700; }
 
-/* 角色标签(黄) —— 最有辨识度, 要一眼看出来 */
-.pill.k-char { border-color: var(--char); background: var(--char-bg); }
-.pill.k-char .en { color: var(--char); font-weight: 700; }
-.pill.k-char .zh { color: var(--char); opacity: .85; }
-
-/* 系列标签(蓝) */
-.pill.k-series { border-color: var(--accent); }
-.pill.k-series .en { color: var(--accent); }
+/* ── 段位配色(2026-10-16): 边框+浅底+文字同色相 ──────────────
+ * 人数蓝/角色绿/系列紫/画师红, 通用与 meta 维持中性灰让四类跳出来。
+ * 角色从黄改绿(用户点名), 与金色收藏星/警示黄不再撞色。 */
+.pill.k-count { border-color: color-mix(in srgb, var(--seg-count) 45%, transparent); background: var(--seg-count-bg); }
+.pill.k-count .en { color: var(--seg-count); font-weight: 600; }
+.pill.k-char { border-color: color-mix(in srgb, var(--seg-char) 50%, transparent); background: var(--seg-char-bg); }
+.pill.k-char .en { color: var(--seg-char); font-weight: 700; }
+.pill.k-char .zh { color: var(--seg-char); opacity: .85; }
+.pill.k-series { border-color: color-mix(in srgb, var(--seg-series) 50%, transparent); background: var(--seg-series-bg); }
+.pill.k-series .en { color: var(--seg-series); font-weight: 600; }
+.pill.k-artist { border-color: color-mix(in srgb, var(--seg-artist) 50%, transparent); background: var(--seg-artist-bg); }
+.pill.k-artist .en { color: var(--seg-artist); font-weight: 600; }
 
 .pill.active { border-color: var(--accent); background: var(--accent-soft); }
 
-/* 已 ban: 灰化 + 删除线 */
+/* 已 ban: 灰化 + 删除线(优先级最高, 盖过段位色) */
 .pill.banned { opacity: .5; }
 .pill.banned .en, .pill.banned .zh, .pill.banned .cnt {
   color: var(--muted) !important;
@@ -197,10 +245,10 @@ function onFav(e) {
  * flex-wrap 挤到下一行 -> hover 丢失 -> 收拢弹回 -> 又悬停, 画面抽搐死循环。
  * 根治: 浮层绝对定位盖在 pill 自身右段上方, 完全不占布局宽度, pill 几何永不
  * 变化。视觉上图标从右侧滑入"替换"文字尾部; 已 ban/已入车的常驻图标改走
- * 内联静态 .st(静态宽度不随悬停变化, 同样不会抽搐)。 */
+ * 内联静态(静态宽度不随悬停变化, 同样不会抽搐)。 */
 .acts {
   position: absolute; top: 0; bottom: 0; right: 0;
-  display: inline-flex; align-items: center; gap: 3px;
+  display: inline-flex; align-items: center; gap: 4px;
   padding: 0 6px 0 8px;
   background: inherit;          /* 与 pill 同底色, 盖住文字尾部无接缝 */
   border-radius: inherit;
@@ -212,41 +260,46 @@ function onFav(e) {
   opacity: 1; visibility: visible; pointer-events: auto;
   transform: translateX(0);
 }
-.pill.s-sm .acts { padding: 0 4px 0 6px; gap: 2px; }
+.pill.s-sm .acts { padding: 0 4px 0 6px; gap: 3px; }
 
-/* 常驻状态图标(已 ban / 已入车): 内联静态, 不参与悬停动画 */
-.st {
-  font-style: normal; font-size: 10px;
-  cursor: pointer; transition: opacity var(--t-fast);
+/* ── SVG 图标(2026-10-16): emoji 全部换掉, 13px 单色, currentColor 着色 ── */
+.ic {
+  display: inline-flex; width: 13px; height: 13px; flex: 0 0 auto;
+  font-style: normal;
+}
+.ic svg {
+  width: 100%; height: 100%;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
 }
 
-/* 📋 复制按钮: 与 🚫 同一套交互(悬停展开), 只有"点 pill 本体是跳转"的地方才挂 */
-.cp {
-  font-style: normal; font-size: 10px;
-  opacity: .5; cursor: pointer; transition: opacity var(--t-fast);
-}
-.cp:hover { opacity: 1 !important; }
+/* 常驻状态图标(已 ban / 已入车 / 已收藏): 内联静态, 不参与悬停动画 */
+.st { cursor: pointer; }
 
-/* 🛒 购物车(角色 pill): 已入车时常驻高亮, 和 banned 的常驻 🚫 同一套逻辑 */
-.ct {
-  font-style: normal; font-size: 10px;
-  opacity: .5; cursor: pointer; transition: opacity var(--t-fast);
-}
-.ct.on { opacity: 1; }
+/* 图标配色: 中性动作半透明, 状态点亮用颜色说话 */
+.cp, .ban { color: var(--muted); opacity: .65; transition: opacity var(--t-fast); }
+.cp:hover, .ban:hover { opacity: 1 !important; }
+
+.ct { color: var(--muted); opacity: .55; cursor: pointer; transition: opacity var(--t-fast), color var(--t-fast); }
+.ct.on { color: var(--accent2, #2f9e63); opacity: 1; }
+.ct.on svg { fill: currentColor; }
 .ct:hover { opacity: 1 !important; }
 
-/* ★ 标签收藏: 与 🛒 同一套双层模式(悬停浮层常显 / 已收藏内联常驻) */
-.fv {
-  font-style: normal; font-size: 10px;
-  opacity: .5; cursor: pointer; transition: opacity var(--t-fast);
-}
-.fv.on { opacity: 1; color: var(--warn, #f59e0b); }
+.fv { color: var(--muted); opacity: .55; cursor: pointer; transition: opacity var(--t-fast), color var(--t-fast); }
+.fv.on { color: var(--fav, #f59e0b); opacity: 1; }
+.fv.on svg { fill: currentColor; }
 .fv:hover { opacity: 1 !important; }
 
-/* 🚫 按钮: 悬停展开才显形, 已 ban 时常驻(整组随 .pill.banned 展开) */
-.ban {
-  font-style: normal; font-size: 10px;
-  opacity: .5; cursor: pointer; transition: opacity var(--t-fast);
+/* ── 右上角常驻角标: 不悬停也可见的收藏/入车状态 ──
+ * 绝对定位浮在 pill 外沿, 不占布局、不会被悬停浮层盖掉。
+ * 收藏=金色★圆徽(右上), 入车=绿色圆点(再偏左一格, 两者同时收藏优先展示★)。 */
+.corner {
+  position: absolute; top: -5px; width: 13px; height: 13px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  pointer-events: none; z-index: 2;
 }
-.ban:hover { opacity: 1 !important; }
+.corner.fav { right: -5px; background: var(--fav, #f59e0b); }
+.corner.fav svg { width: 8px; height: 8px; fill: #fff; stroke: none; }
+.corner.cart { right: 9px; width: 9px; height: 9px; background: var(--accent2, #2f9e63); }
 </style>

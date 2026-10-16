@@ -185,5 +185,5 @@ const hasThumb = computed(() => !!props.thumb)
 .nums {
   display: flex; gap: 8px; font-size: 10px; color: var(--faint); margin-top: 2px;
 }
-.nums .ch { color: var(--char); }
+.nums .ch { color: var(--seg-char); }
 </style>

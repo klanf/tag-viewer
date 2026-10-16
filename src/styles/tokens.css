@@ -49,6 +49,13 @@
   --char: #ffb454;
   --char-bg: rgba(255, 180, 84, .12);
 
+  /* 标签段位色(2026-10-16): 人数蓝/角色绿/系列紫/画师红 —— pill 本体与分组标题共用。
+     通用/meta 维持中性灰不上色, 让这四类跳出来; 已 ban 灰化优先级更高。 */
+  --seg-count: #58a6ff;  --seg-count-bg: rgba(88, 166, 255, .12);
+  --seg-char: #3fb950;   --seg-char-bg: rgba(63, 185, 80, .13);
+  --seg-series: #a371f7; --seg-series-bg: rgba(163, 113, 247, .14);
+  --seg-artist: #ff7b72; --seg-artist-bg: rgba(255, 123, 114, .12);
+
   /* 图片占位与渐变 */
   --img-bg: #0d1015;
   --bar-from: #2f6fbe;
@@ -110,6 +117,12 @@ html[data-theme="light"] {
   --char: #b87514;
   --char-bg: rgba(184, 117, 20, .12);
 
+  /* 标签段位色: 浅色底上压暗一档保证对比(同 --accent 的降饱和思路) */
+  --seg-count: #1c6db4;  --seg-count-bg: rgba(28, 109, 180, .10);
+  --seg-char: #1e7d42;   --seg-char-bg: rgba(30, 125, 66, .10);
+  --seg-series: #7a4fb5; --seg-series-bg: rgba(122, 79, 181, .10);
+  --seg-artist: #bf4340; --seg-artist-bg: rgba(191, 67, 64, .10);
+
   --img-bg: #e8ecf1;
   --bar-from: #3573b9;
   --toast-bg: #3573b9;
@@ -156,6 +169,12 @@ html[data-theme="eye"] {
   --char: #8a5a00;
   --char-bg: rgba(138, 90, 0, .1);
 
+  /* 标签段位色: 米绿底, 各色都压暗; 角色绿比浅色主题深一档, 免得融进底色 */
+  --seg-count: #2b6a8f;  --seg-count-bg: rgba(43, 106, 143, .10);
+  --seg-char: #256b45;   --seg-char-bg: rgba(37, 107, 69, .10);
+  --seg-series: #6d55a8; --seg-series-bg: rgba(109, 85, 168, .10);
+  --seg-artist: #b04a3e; --seg-artist-bg: rgba(176, 74, 62, .10);
+
   --img-bg: #e9ece5;
   --bar-from: #2f6d52;
   --toast-bg: #2f6d52;
@@ -201,6 +220,12 @@ html[data-theme="paper"] {
   --char: #8a5a00;
   --char-bg: rgba(138, 90, 0, .12);
 
+  /* 标签段位色: 暖纸底, 绿偏橄榄、蓝偏靛, 与陶棕主色拉开 */
+  --seg-count: #31708f;  --seg-count-bg: rgba(49, 112, 143, .10);
+  --seg-char: #4e7a3d;   --seg-char-bg: rgba(78, 122, 61, .11);
+  --seg-series: #7a55a5; --seg-series-bg: rgba(122, 85, 165, .10);
+  --seg-artist: #b3503c; --seg-artist-bg: rgba(179, 80, 60, .10);
+
   --img-bg: #ece3cf;
   --bar-from: #b08a45;
   --toast-bg: #9c6a2b;
@@ -244,6 +269,12 @@ html[data-theme="peach"] {
 
   --char: #8a5a00;
   --char-bg: rgba(138, 90, 0, .1);
+
+  /* 标签段位色: 画师红避开柿橙主色(偏正红), 其余同浅色配方 */
+  --seg-count: #2b6fa8;  --seg-count-bg: rgba(43, 111, 168, .10);
+  --seg-char: #2e7d4f;   --seg-char-bg: rgba(46, 125, 79, .10);
+  --seg-series: #7d55ab; --seg-series-bg: rgba(125, 85, 171, .10);
+  --seg-artist: #bf4040; --seg-artist-bg: rgba(191, 64, 64, .10);
 
   --img-bg: #f0e4da;
   --bar-from: #bd5d3a;
@@ -289,6 +320,12 @@ html[data-theme="lavender"] {
   --char: #8a5a00;
   --char-bg: rgba(138, 90, 0, .1);
 
+  /* 标签段位色: 系列紫偏洋红, 避开藤紫主色 --accent */
+  --seg-count: #3b6fae;  --seg-count-bg: rgba(59, 111, 174, .10);
+  --seg-char: #1e7d42;   --seg-char-bg: rgba(30, 125, 66, .10);
+  --seg-series: #a34f9a; --seg-series-bg: rgba(163, 79, 154, .10);
+  --seg-artist: #bf4340; --seg-artist-bg: rgba(191, 67, 64, .10);
+
   --img-bg: #eae6f2;
   --bar-from: #6f5bb5;
   --toast-bg: #6f5bb5;
@@ -333,6 +370,12 @@ html[data-theme="ocean"] {
 
   --char: #ffb454;
   --char-bg: rgba(255, 180, 84, .12);
+
+  /* 标签段位色: 人数偏青蓝避开主色 --accent, 其余比默认暗色再提亮一档 */
+  --seg-count: #63c5ea;  --seg-count-bg: rgba(99, 197, 234, .12);
+  --seg-char: #45c97e;   --seg-char-bg: rgba(69, 201, 126, .12);
+  --seg-series: #b48eff; --seg-series-bg: rgba(180, 142, 255, .13);
+  --seg-artist: #ff8f87; --seg-artist-bg: rgba(255, 143, 135, .13);
 
   --img-bg: #0a0e16;
   --bar-from: #3d6ea8;

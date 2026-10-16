@@ -144,6 +144,8 @@ export function saveSettings(patch) {
   }
   // groupedTags: 标签展示按分类分组(2026-10-16)。纯展示偏好, 默认开。
   if (patch.groupedTags !== undefined) next.groupedTags = !!patch.groupedTags
+  // showBannedTags: 光箱/详情页是否显示被 ban 的标签(2026-10-16)。默认开(与旧行为一致)。
+  if (patch.showBannedTags !== undefined) next.showBannedTags = !!patch.showBannedTags
   state.settings = next
   fs.writeFileSync(path.join(state.appDir, 'settings.json'),
     JSON.stringify(next, null, 2), 'utf8')

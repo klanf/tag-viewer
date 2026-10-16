@@ -84,6 +84,14 @@ export const useAppStore = defineStore('app', () => {
       if (r?.settings) settings.value = r.settings
     } catch { /* 读不到就用默认值 */ }
   }
+  /** 写单个展示偏好并同步本地缓存(groupedTags / showBannedTags 这类即时开关用),
+   *  免得每个开关各抄一遍 settingsSet + 回填。失败时本地缓存维持原状。 */
+  async function setSetting(key, value) {
+    try {
+      const r = await api.settingsSet({ [key]: value })
+      if (r?.settings) settings.value = r.settings
+    } catch { /* 静默: 下次 pullSettings 会校正 */ }
+  }
   /**
    * 反推环境搭建进度(Python 运行时 / WD14 模型下载)。主进程在「现在下载」确认后
    * 通过 tagger:setup-progress 推结构化消息:
@@ -406,6 +414,6 @@ export const useAppStore = defineStore('app', () => {
     pullAutoState, flushAutoNow, clearAutoPending,
     // 标签分类(2026-10-16): tagCats 映射 + 分段查询助手
     tagCats, catsLoaded, loadTagCats, catOf, segOf, subOf, segLabel,
-    settings, pullSettings,
+    settings, pullSettings, setSetting,
   }
 })
