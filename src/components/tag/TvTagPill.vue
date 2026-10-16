@@ -16,8 +16,9 @@
  * 2026-10-16 段位配色: 新增 cat prop(由 TvTagList 用 app.catOf 传入, 形如
  * "char" | "general:服饰"), 按 SEG_ORDER 段位上色 —— 人数蓝/角色绿/系列紫/画师红,
  * 通用/meta/other 维持中性灰。不传 cat 时退回旧的 isCharTag 判定(向后兼容)。
- * 图标从 emoji 换成单色 SVG(13px, currentColor 着色), 状态用颜色说话:
- * 已入车=绿色实心购物车, 已收藏=金色实心星; 另有右上角标(不占布局)常驻提示。
+ * 图标从 emoji 换成单色 SVG(13px, currentColor 着色)。状态点亮(2026-10-17 定稿):
+ * 已收藏/已入车 = 内联金色圆徽(白★ / 白购物车, 图案区分), 内联参与 pill 排版;
+ * 外挂绝对定位角标方案两轮返修后废弃 —— flex-wrap 里必飘进缝隙撞相邻标签。
  */
 import { computed } from 'vue'
 import { hasSeriesSuffix, isCharTag, subHueNo } from '@/utils/format.js'
@@ -98,10 +99,6 @@ const hasHoverActs = computed(() =>
   props.showBan
 )
 
-/** 右边缘常驻角标(2026-10-17): 已收藏/已入车都是金色★圆徽。绝对定位不占布局 */
-const showCornerFav = computed(() => props.favable && props.inFav)
-const showCornerCart = computed(() => props.cartable && kind.value === 'char' && props.inCart)
-
 /** 角色/系列标签常常太长, 显示时去掉 _(系列) 尾巴让 pill 短一点; 悬停看完整 */
 const shownTag = computed(() => {
   if (kind.value === 'char') return props.tag.replace(/_\(.+\)$/, '')
@@ -158,9 +155,10 @@ function onFav(e) {
     <span class="en">{{ shownTag }}</span>
     <span v-if="showZh && zh" class="zh" :title="zh">{{ zh }}</span>
     <b v-if="showCount && count !== null" class="cnt">{{ count }}</b>
-    <!-- 常驻状态图标: 已 ban / 已入车 / 已收藏。内联占位但**静态**(不随悬停伸缩),
-         静态宽度不会触发重排循环 —— 抽搐的根源是"悬停改变宽度"而非占位本身。
-         2026-10-16: emoji -> SVG, 状态用颜色(入车绿实心/收藏金实心) -->
+    <!-- 常驻状态徽章: 已 ban / 已入车 / 已收藏。**内联**参与 pill 的 flex 排版
+         (2026-10-17 定稿)—— 角标/绝对定位方案在 flex-wrap 里必然飘进 pill 缝隙
+         与相邻标签撞车, 已废弃。状态点亮 = 金色圆徽: 收藏白★ / 入车白购物车,
+         图案区分状态; 静态宽度不随悬停变化, 不会触发重排抽搐 -->
     <i v-if="showBan && banned" class="st ic" :title="banTitle" @click="onBan">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6.2 6.2l11.6 11.6"/></svg>
     </i>
@@ -188,15 +186,6 @@ function onFav(e) {
       <i v-if="showBan" class="ic ban" :title="banTitle" @click="onBan">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6.2 6.2l11.6 11.6"/></svg>
       </i>
-    </span>
-    <!-- 右边缘常驻角标(2026-10-17): 悬停浮层会盖住内联状态图标, 角标挂在 pill
-         右边缘垂直居中。收藏与入车都是金色★圆徽(fav 贴边缘/cart 再往右一格),
-         不悬停也一眼可见, 绝对定位不参与布局 -->
-    <span v-if="showCornerFav" class="corner fav" :title="favTitle">
-      <svg viewBox="0 0 24 24"><path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.5 1.1 6.4L12 17.1l-5.8 3.1 1.1-6.4L2.6 9.3l6.5-.9z"/></svg>
-    </span>
-    <span v-if="showCornerCart" class="corner cart" :title="cartTitle">
-      <svg viewBox="0 0 24 24"><path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.5 1.1 6.4L12 17.1l-5.8 3.1 1.1-6.4L2.6 9.3l6.5-.9z"/></svg>
     </span>
   </span>
 </template>
@@ -314,18 +303,15 @@ function onFav(e) {
 .fv.on svg { fill: currentColor; }
 .fv:hover { opacity: 1 !important; }
 
-/* ── 右侧常驻角标: 不悬停也可见的收藏/入车状态 ──
- * 绝对定位浮在 pill 右边缘垂直居中(2026-10-17 用户指定样式), 不占布局、
- * 不会被悬停浮层盖掉。收藏/入车都是金色★圆徽; 同时存在时 fav 贴边缘、
- * cart 再往右挂一格; 具体状态看 pill 内联图标(金★/绿🛒)。 */
-.corner {
-  position: absolute; top: 50%; transform: translateY(-50%);
-  right: -6px; width: 13px; height: 13px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
-  pointer-events: none; z-index: 2;
+/* 状态点亮 = 内联金色圆徽(2026-10-17 定稿): pill 自己的 flex 子元素, 随排版
+ * 走、绝不脱离 pill(外挂绝对定位角标在 flex-wrap 里会飘进缝隙撞相邻标签)。
+ * 收藏=白★ / 入车=白购物车, 同款金底靠图案区分; 悬停浮层里的同名图标同步。 */
+.ct.on, .fv.on {
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--fav, #f59e0b);
+  color: #fff; opacity: 1;
+  padding: 2.5px;
 }
-.corner.fav { background: var(--fav, #f59e0b); }
-.corner.cart { right: -22px; background: var(--fav, #f59e0b); }
-.corner svg { width: 8px; height: 8px; fill: #fff; stroke: none; }
+.ct.on svg { fill: none; stroke: #fff; stroke-width: 2.2; }
+.fv.on svg { fill: #fff; stroke: none; }
 </style>
