@@ -98,7 +98,7 @@ const hasHoverActs = computed(() =>
   props.showBan
 )
 
-/** 右上角常驻角标(2026-10-17): 已收藏/已入车都是金色★圆徽。绝对定位不占布局 */
+/** 右边缘常驻角标(2026-10-17): 已收藏/已入车都是金色★圆徽。绝对定位不占布局 */
 const showCornerFav = computed(() => props.favable && props.inFav)
 const showCornerCart = computed(() => props.cartable && kind.value === 'char' && props.inCart)
 
@@ -189,8 +189,8 @@ function onFav(e) {
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6.2 6.2l11.6 11.6"/></svg>
       </i>
     </span>
-    <!-- 右上角常驻角标(2026-10-17): 悬停浮层会盖住内联状态图标, 角标浮在 pill
-         外沿。收藏与入车都是金色★圆徽(fav 右上/cart 偏左一格, 同时存在并排两个),
+    <!-- 右边缘常驻角标(2026-10-17): 悬停浮层会盖住内联状态图标, 角标挂在 pill
+         右边缘垂直居中。收藏与入车都是金色★圆徽(fav 贴边缘/cart 再往右一格),
          不悬停也一眼可见, 绝对定位不参与布局 -->
     <span v-if="showCornerFav" class="corner fav" :title="favTitle">
       <svg viewBox="0 0 24 24"><path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.5 1.1 6.4L12 17.1l-5.8 3.1 1.1-6.4L2.6 9.3l6.5-.9z"/></svg>
@@ -314,17 +314,18 @@ function onFav(e) {
 .fv.on svg { fill: currentColor; }
 .fv:hover { opacity: 1 !important; }
 
-/* ── 右上角常驻角标: 不悬停也可见的收藏/入车状态 ──
- * 绝对定位浮在 pill 外沿, 不占布局、不会被悬停浮层盖掉。
- * 2026-10-17: 入车的绿色圆点改成金色★圆徽(与收藏同款), 两者同时存在时并排
- * (fav 右上, cart 偏左一格); 具体是收藏还是入车看 pill 内联图标(金★/绿🛒)。 */
+/* ── 右侧常驻角标: 不悬停也可见的收藏/入车状态 ──
+ * 绝对定位浮在 pill 右边缘垂直居中(2026-10-17 用户指定样式), 不占布局、
+ * 不会被悬停浮层盖掉。收藏/入车都是金色★圆徽; 同时存在时 fav 贴边缘、
+ * cart 再往右挂一格; 具体状态看 pill 内联图标(金★/绿🛒)。 */
 .corner {
-  position: absolute; top: -5px; width: 13px; height: 13px; border-radius: 50%;
+  position: absolute; top: 50%; transform: translateY(-50%);
+  right: -6px; width: 13px; height: 13px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
   pointer-events: none; z-index: 2;
 }
-.corner.fav { right: -5px; background: var(--fav, #f59e0b); }
-.corner.cart { right: 11px; background: var(--fav, #f59e0b); }
+.corner.fav { background: var(--fav, #f59e0b); }
+.corner.cart { right: -22px; background: var(--fav, #f59e0b); }
 .corner svg { width: 8px; height: 8px; fill: #fff; stroke: none; }
 </style>
