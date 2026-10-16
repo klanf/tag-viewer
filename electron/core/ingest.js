@@ -40,6 +40,7 @@
  */
 import fs from 'node:fs'
 import { openDb, normalizeImagePath, rebuildTags } from './store.js'
+import { sortTagString } from './tagcats.js'
 import { listImages, statAll, parseInWorker, sizeInWorker } from './scan.js'
 import { flog } from './filelog.js'
 
@@ -430,7 +431,9 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
     const dim = p.dim || null          // worker 顺手读到的像素尺寸, 可能为 null
     const hasMeta = Array.isArray(p.tags) && p.tags.length > 0
     if (hasMeta) {
-      const tags = p.tags.join(',')
+      /* 入库前按段位重排(2026-10-16): 顺序即存储顺序, 展示/导出直接按它走。
+       * 分类器不可用时原样返回, 不挡入库。 */
+      const tags = sortTagString(p.tags.join(','))
       if (item.kind === 'new') plan.inserts.push({ path: item.path, tags, m: item.m, s: item.s, dim })
       else plan.metaUpdates.push({ id: item.id, path: item.path, tags, m: item.m, s: item.s, dim })
     } else if (item.kind === 'changed') {

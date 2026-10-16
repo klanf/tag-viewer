@@ -32,6 +32,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { openDb, rebuildTags } from './store.js'
+import { sortTagString } from './tagcats.js'
 import { dataFile, getSettings, getWorkspace } from './workspace.js'
 import { PROJECT_ROOT } from './paths.js'
 import { ensureQueueTable, queueStats } from './ingest.js'
@@ -558,7 +559,7 @@ function applyTags(db, row, tags, mtimeMs, size, now) {
     const curTags = String(cur.tags || '')
     const hasTags = curTags.trim().length > 0
     if (hasTags && src !== 'wd14' && src !== 'meta' && src !== 'meta+wd14') return 'skipped'
-    const nextTags = hasTags && src !== 'wd14' ? mergeTagStrings(curTags, tags) : tags
+    const nextTags = sortTagString(hasTags && src !== 'wd14' ? mergeTagStrings(curTags, tags) : tags)
     const nextSrc = hasTags && src !== 'wd14' ? 'meta+wd14' : 'wd14'
     db.prepare(`UPDATE images SET tags = ?, tags_src = ?, mtime_ms = ?, size = ?,
                 gone = 0, tagged_at = ? WHERE id = ?`)
@@ -568,7 +569,7 @@ function applyTags(db, row, tags, mtimeMs, size, now) {
   const srcId = Number(row.src_id) || 0
   db.prepare(`INSERT INTO images (path, src_id, tags, folder_id, mtime_ms, size, tags_src, gone, tagged_at)
               VALUES (?, ?, ?, ?, ?, ?, 'wd14', 0, ?)`)
-    .run(p, srcId, tags, Number(row.folder_id) || 0, mtimeMs, size, now)
+    .run(p, srcId, sortTagString(tags), Number(row.folder_id) || 0, mtimeMs, size, now)
   return 'created'
 }
 

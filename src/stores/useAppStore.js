@@ -51,6 +51,39 @@ export const useAppStore = defineStore('app', () => {
    * 缺 python/模型时是 `degraded` 而不是 error —— 队列留着, 看板照用。
    */
   const tagger = ref(null)
+
+  /* ---- 标签分类映射(2026-10-16, 展示分组着色) ----
+   * { tag: cat } —— cat 形如 'count'/'char'/'series'/'artist'/'meta'/'other'/'general:服饰'。
+   * 主进程在 tags:cats 一次给全(字典 1.3 万条, 几百 KB); 数据重载后拉一次即可。
+   * 字典之外的新词查不到 -> catOf 返回 'other' 兜底, 下次重载后自然补上。 */
+  const tagCats = ref({})
+  const catsLoaded = ref(false)
+  async function loadTagCats() {
+    try {
+      const r = await api.tagsCats()
+      if (r?.cats) { tagCats.value = r.cats; catsLoaded.value = true }
+    } catch { /* 分类映射拉不到不致命: 展示端回落 other */ }
+  }
+  const SEG_LABEL = {
+    count: '人数', char: '角色', series: '系列', artist: '画师',
+    meta: 'Meta', other: '其他', general: '通用',
+  }
+  function catOf(tag) { return tagCats.value[tag] || 'other' }
+  function segOf(tag) { return (catOf(tag).split(':')[0]) || 'other' }
+  function subOf(tag) { return (catOf(tag).split(':') || [])[1] || '' }
+  function segLabel(seg) { return SEG_LABEL[seg] || seg }
+
+  /* ---- settings.json 的渲染层缓存 ----
+   * 前端只读展示偏好(groupedTags 等); 写仍走设置弹窗的 api.settingsSet。
+   * 这里用 settingsSet({}) 当只读查询用(它返回当前 settings 且空 patch 不改任何值),
+   * 与 TvSettingsModal 的读法保持同一通道, 免得再加一条只读 IPC。 */
+  const settings = ref({})
+  async function pullSettings() {
+    try {
+      const r = await api.settingsSet({})
+      if (r?.settings) settings.value = r.settings
+    } catch { /* 读不到就用默认值 */ }
+  }
   /**
    * 反推环境搭建进度(Python 运行时 / WD14 模型下载)。主进程在「现在下载」确认后
    * 通过 tagger:setup-progress 推结构化消息:
@@ -266,6 +299,7 @@ export const useAppStore = defineStore('app', () => {
     })
 
     applyStatus(await api.status())
+    void pullSettings()
     // 主进程是页面 did-finish-load 之后才开始加载数据, 有可能这里已经 ready 了
     if (phase.value === 'idle') phase.value = 'loading'
 
@@ -291,6 +325,7 @@ export const useAppStore = defineStore('app', () => {
       if (!wasReady) {
         // 首次就绪 / 手动重载(loading -> ready): 各视图从头初始化
         epoch.value++
+        void loadTagCats()
       } else {
         // ready -> ready: 后台静默重载(同步/反推完成后)推上来的 —— 界面一直
         // 是可用的, 不能像 loading 那样全量重置视图。数据真的变了(记录数/标签数/
@@ -299,6 +334,7 @@ export const useAppStore = defineStore('app', () => {
         const s0 = stats.value, s1 = st.stats
         if (s1 && (!s0 || s0.records !== s1.records || s0.tags !== s1.tags || s0.series !== s1.series)) {
           epoch.value++
+          void loadTagCats()
         }
       }
     }
@@ -368,5 +404,8 @@ export const useAppStore = defineStore('app', () => {
     init, reload, applyStatus, bumpEpoch, toggleTheme, applyTheme,
     ingestRun, ingestPause, taggerRun, taggerPause, taggerRefresh,
     pullAutoState, flushAutoNow, clearAutoPending,
+    // 标签分类(2026-10-16): tagCats 映射 + 分段查询助手
+    tagCats, catsLoaded, loadTagCats, catOf, segOf, subOf, segLabel,
+    settings, pullSettings,
   }
 })

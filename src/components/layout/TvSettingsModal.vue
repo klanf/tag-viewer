@@ -34,6 +34,7 @@ const prefs = reactive({
   provider: 'auto',
   threshold: 0.35,
   charThreshold: 0.85,
+  groupedTags: true,
 })
 
 const PROVIDER_OPTIONS = [
@@ -68,6 +69,7 @@ async function loadAll() {
       prefs.provider = r.settings.taggerProvider || 'auto'
       prefs.threshold = r.settings.taggerThreshold ?? 0.35
       prefs.charThreshold = r.settings.taggerCharThreshold ?? 0.85
+      prefs.groupedTags = r.settings.groupedTags !== false
     }
   } finally {
     probing.value = false
@@ -79,12 +81,14 @@ watch(open, (v) => { if (v) loadAll() })
 async function save() {
   saving.value = true
   try {
-    await api.settingsSet({
+    const r = await api.settingsSet({
       taggerProvider: prefs.provider,
       taggerThreshold: Number(prefs.threshold),
       taggerCharThreshold: Number(prefs.charThreshold),
+      groupedTags: prefs.groupedTags,
     })
-    ui.ok('已保存 —— 下一次反推生效', 'info', 2600)
+    if (r?.settings) app.settings = r.settings   // 展示开关立即生效(光箱/详情页读它)
+    ui.ok('已保存', 'info', 2200)
   } catch (e) {
     ui.err(e.message || String(e))
   } finally {
@@ -173,6 +177,16 @@ const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider'
       <section>
         <h3>通用</h3>
         <div class="row">
+          <span class="k">标签分组</span>
+          <span class="v inline">
+            <label class="chk">
+              <input v-model="prefs.groupedTags" type="checkbox" />
+              标签按分类分组展示（人数 → 角色 → 系列 → 服饰/表情动作…）
+            </label>
+            <span class="dim">关掉即回到纯平铺；保存后立即生效</span>
+          </span>
+        </div>
+        <div class="row">
           <span class="k">当前版本</span>
           <span class="v inline">
             v{{ version || '?' }} <span v-if="!packed" class="dim">（开发模式）</span>
@@ -231,6 +245,8 @@ h3 {
   cursor: pointer; font-size: 12px; padding: 0 4px; text-decoration: underline;
 }
 .dim { color: var(--faint); font-size: 11px; margin-left: 6px; }
+.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.chk input { accent-color: var(--accent); }
 .foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .warn { color: var(--danger, #c0392b); }
 </style>

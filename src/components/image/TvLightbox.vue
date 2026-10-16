@@ -33,6 +33,7 @@ import TvState from '../base/TvState.vue'
 import TvImage from '../base/TvImage.vue'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { useAppStore } from '@/stores/useAppStore.js'
 import { useTagFavStore } from '@/stores/useTagFavStore.js'
 import { useImageCtxMenu } from '@/composables/useImageCtxMenu.js'
 import { useTrash } from '@/composables/useTrash.js'
@@ -43,6 +44,7 @@ import { fileUrl } from '@/utils/api.js'
 
 const lb = useLightboxStore()
 const ui = useUiStore()
+const app = useAppStore()
 const router = useRouter()
 const charCart = useCharCart()
 const tagFav = useTagFavStore()
@@ -358,7 +360,7 @@ function preheat() {
             </div>
             <div v-else class="lb-nometa">(未识别出系列/角色)</div>
 
-            <!-- 全部标签: 角色在前; 点标签=去看该标签的图, 📋=复制, 🚫=切换黑名单 -->
+            <!-- 全部标签: 分组(设置可关)时按段位小节; 点标签=去看该标签的图, 📋=复制, 🚫=切换黑名单 -->
             <TvTagList
               class="lb-tags"
               :tags="lb.sortedTags"
@@ -368,6 +370,7 @@ function preheat() {
               copyable
               favable
               :fav-tags="tagFav.list"
+              :grouped="app.settings.groupedTags !== false"
               chars-first
               action="filter"
               size="sm"

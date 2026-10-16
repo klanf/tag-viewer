@@ -176,7 +176,7 @@ const PARAM_ENUMS = {
 }
 /** 这几个与首页/ buildExport 的默认值对齐: 缺省 = 开 */
 const PARAM_BOOL_TRUE = ['exclude_char', 'spaces', 'blacklist', 'replace', 'bg']
-const PARAM_BOOL_FALSE = ['with_path', 'strip_char', 'strip_view', 'safe_only']
+const PARAM_BOOL_FALSE = ['with_path', 'strip_char', 'strip_view', 'safe_only', 'seg_mode']
 
 /** 导出参数(等价于首页筛选条件)白名单归一化 —— 只留认识的键, 防脏数据进文件 */
 export function normParams(raw = {}) {
@@ -274,6 +274,7 @@ function toExportQuery(params) {
     strip_char: params.strip_char ? '1' : '0',
     strip_view: params.strip_view ? '1' : '0',
     safe_only: params.safe_only ? '1' : '0',
+    seg_mode: params.seg_mode ? '1' : '0',
     exclude_char: params.exclude_char ? '1' : '0',
   }
 }

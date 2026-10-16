@@ -14,6 +14,7 @@ import TvButton from '@/components/base/TvButton.vue'
 import TvCheckbox from '@/components/base/TvCheckbox.vue'
 import TvState from '@/components/base/TvState.vue'
 import TvTagList from '@/components/tag/TvTagList.vue'
+import { useAppStore } from '@/stores/useAppStore.js'
 import TvCopySplit from '@/components/tag/TvCopySplit.vue'
 import TvImage from '@/components/base/TvImage.vue'
 import { usePrefsStore } from '@/stores/usePrefsStore.js'
@@ -30,6 +31,7 @@ const router = useRouter()
 const prefs = usePrefsStore()
 const fav = useFavStore()
 const ui = useUiStore()
+const app = useAppStore()
 /** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
 const safety = useSafetyStore()
 const charCart = useCharCart()
@@ -191,6 +193,7 @@ function runCopy(key) {
               copyable
               cartable
               :cart-tags="charCart.cart.keys"
+              :grouped="app.settings.groupedTags !== false"
               action="filter"
               size="sm"
               max-height="60vh"

@@ -21,6 +21,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { dataFile } from './workspace.js'
 import { streamTagFile } from './tagfile.js'
+import { loadCats, catOf } from './tagcats.js'
 
 const DB_NAME = 'tags.db'
 const SCHEMA_VERSION = 2
@@ -130,6 +131,11 @@ const ADDITIVE_COLS = [
   // 加在这里 = 每次 openDb 都幂等检查一遍, 老库原地补齐。
   ['images', 'px_w', 'INTEGER'],
   ['images', 'px_h', 'INTEGER'],
+  // tags 表: 分类快照(2026-10-16)。值形如 'count' / 'char' / 'series' / 'artist' /
+  //   'meta' / 'other' / 'general:服饰' —— 来自 tagcats.classify(), 只是**缓存**:
+  //   展示端以 IPC 的 tags:cats 实时映射为准, 这列加速 SQL 侧按类查询 + 省重复计算。
+  //   未回填的行是空串, ensureTagCats() 会补(见下)。
+  ['tags', 'cat', "TEXT NOT NULL DEFAULT ''"],
 ]
 
 /** v2 给 images 补的列: [列名, 定义]。缺哪个补哪个, 已有则跳过(幂等)。
@@ -660,6 +666,7 @@ export function openDb() {
   const db = openRaw()
   runMigrations(db)
   applyAdditiveCols(db)
+  ensureTagCats(db)
   return db
 }
 
@@ -832,11 +839,20 @@ export function rebuildTags() {
     if (m && !NON_SERIES.has(m[1].toLowerCase())) chars.set(t, 1)
   }
 
+  // 分类快照(2026-10-16): classify 是纯内存查表(韦林 map + WD14 索引已预载),
+  // 1.3 万个词毫秒级。loadCats 内部幂等且失败不抛 —— 分类挂了 cat 就空着,
+  // ensureTagCats 下次启动再补, 不影响字典重建本身。
+  let cats = null
+  try {
+    loadCats()
+    cats = new Map([...cnt.keys()].map((t) => [t, catOf(t)]))
+  } catch { /* 分类器不可用: cat 留空, 不挡字典重建 */ }
+
   db.exec('BEGIN')
   try {
     db.exec('DELETE FROM tags')
-    const ins = db.prepare('INSERT INTO tags (name, cnt, kind) VALUES (?, ?, ?)')
-    for (const [t, c] of cnt) ins.run(t, c, chars.has(t) ? 'char' : 'other')
+    const ins = db.prepare('INSERT INTO tags (name, cnt, kind, cat) VALUES (?, ?, ?, ?)')
+    for (const [t, c] of cnt) ins.run(t, c, chars.has(t) ? 'char' : 'other', cats?.get(t) || '')
     db.exec('COMMIT')
   } catch (e) {
     try { db.exec('ROLLBACK') } catch { /* 忽略 */ }
@@ -844,6 +860,40 @@ export function rebuildTags() {
   }
   return { tags: cnt.size, chars: chars.size, ms: Date.now() - t0 }
 }
+
+let _catsEnsured = false
+
+/**
+ * 给 tags 字典补分类快照(幂等, 进程内最多整查一次)。
+ * 字典是「导入时重建」的, 日常增量入库不进字典 —— 所以新词的 cat 会是空串,
+ * 这里在每次 openDb 后兜一层: 进程内第一次调用时查一遍 cat='' 的行并补齐
+ * (13k 行的全空补齐实测 <100ms, 且之后 memo 短路, 不拖累高频的 openDb)。
+ */
+export function ensureTagCats(db = null) {
+  if (_catsEnsured) return { filled: 0 }
+  _catsEnsured = true
+  try {
+    const d = db || openDb()
+    const cols = new Set(d.prepare('PRAGMA table_info(tags)').all().map((r) => r.name))
+    if (!cols.has('cat')) return { filled: 0 }
+    const missing = d.prepare("SELECT name FROM tags WHERE cat = ''").all()
+    if (!missing.length) return { filled: 0 }
+    loadCats()
+    const upd = d.prepare('UPDATE tags SET cat = ? WHERE name = ?')
+    d.exec('BEGIN')
+    try {
+      for (const r of missing) upd.run(catOf(r.name), r.name)
+      d.exec('COMMIT')
+    } catch (e) {
+      try { d.exec('ROLLBACK') } catch { /* 忽略 */ }
+      throw e
+    }
+    return { filled: missing.length }
+  } catch { return { filled: 0 } }
+}
+
+/** 测试用: 重置进程级 memo, 让下一次 ensureTagCats 真正执行 */
+export function _resetTagCatsMemo() { _catsEnsured = false }
 
 /**
  * 分块顺序读出所有记录(按 images.id = 插入顺序)。

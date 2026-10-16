@@ -15,12 +15,17 @@
 import { computed } from 'vue'
 import TvTagPill from './TvTagPill.vue'
 import { isCharTag } from '@/utils/format.js'
+import { useAppStore } from '@/stores/useAppStore.js'
+
+const app = useAppStore()
 
 const props = defineProps({
   tags: { type: Array, default: () => [] },
   zhMap: { type: Object, default: () => ({}) },
   banMap: { type: Object, default: () => ({}) },
   showBan: { type: Boolean, default: false },
+  /** 按分类分组展示(2026-10-16): 段位小节 + 韦林大类归堆, 顺序即导出段位顺序 */
+  grouped: { type: Boolean, default: false },
   /** 每个 pill 上挂一个悬停显形的 📋 复制图标(点 pill 本体干别的时用) */
   copyable: { type: Boolean, default: false },
   /**
@@ -71,10 +76,47 @@ const items = computed(() => {
       banRule: b.rule || '',
     }
   })
-  if (props.charsFirst) {
+  if (props.charsFirst && !props.grouped) {
     out.sort((a, b) => (isCharTag(b.tag) ? 1 : 0) - (isCharTag(a.tag) ? 1 : 0))
   }
   return out
+})
+
+/**
+ * 分组展示(2026-10-16): 按 app store 的分类映射把标签归到段位小节。
+ * 段位顺序: 人数 → 角色 → 系列 → 画师 → 通用(按韦林大类: 人物→服饰→汉服→表情动作
+ * →物品→场景→环境→画面→镜头→魔法系, 未归到 sub 的排最后) → Meta → 其他。
+ * grouped 开着时 charsFirst 失效(分组本身已把角色排前面了)。
+ */
+const groups = computed(() => {
+  if (!props.grouped) return null
+  const SUB_ORDER = ['人物', '服饰', '汉服', '表情动作', '物品', '场景', '环境', '画面', '镜头', '魔法系']
+  const SEG_LABEL = { count: '人数', char: '角色', series: '系列', artist: '画师', meta: 'Meta', other: '其他' }
+  const rankOf = (cat) => {
+    const [seg, sub] = String(cat).split(':')
+    if (seg === 'count') return [0, 0]
+    if (seg === 'char') return [1, 0]
+    if (seg === 'series') return [2, 0]
+    if (seg === 'artist') return [3, 0]
+    if (seg === 'general') {
+      const i = SUB_ORDER.indexOf(sub)
+      return [4, i >= 0 ? i : SUB_ORDER.length]
+    }
+    if (seg === 'meta') return [5, 0]
+    return [6, 0]
+  }
+  const buckets = new Map()   // cat -> { title, items }
+  for (const it of items.value) {
+    const cat = app.catOf(it.tag)
+    const [seg, sub] = String(cat).split(':')
+    const key = cat.startsWith('general:') ? cat : seg
+    const title = seg === 'general' ? (sub || '通用') : (SEG_LABEL[seg] || seg)
+    if (!buckets.has(key)) buckets.set(key, { title, key, items: [] })
+    buckets.get(key).items.push(it)
+  }
+  const order = [...buckets.values()].map((b) => ({ ...b, rank: rankOf(b.key) }))
+  order.sort((a, b) => (a.rank[0] - b.rank[0]) || (a.rank[1] - b.rank[1]))
+  return order
 })
 </script>
 
@@ -89,31 +131,65 @@ const items = computed(() => {
     :style="{ gap, maxHeight: maxHeight || undefined }"
     @mouseleave="emit('leave')"
   >
-    <TvTagPill
-      v-for="it in items"
-      :key="it.tag"
-      :tag="it.tag"
-      :zh="it.zh"
-      :count="it.count"
-      :banned="it.banned"
-      :ban-rule="it.banRule"
-      :show-ban="showBan"
-      :copyable="copyable"
-      :cartable="cartable"
-      :in-cart="cartTags.includes(it.tag)"
-      :favable="favable"
-      :in-fav="favTags.includes(it.tag)"
-      :show-count="showCount && it.count !== null"
-      :show-zh="showZh"
-      :action="action"
-      :size="size"
-      @click="(p) => emit('click', p)"
-      @ban="(t) => emit('ban', t)"
-      @copy="(t) => emit('copy', t)"
-      @cart="(t) => emit('cart', t)"
-      @fav="(t) => emit('fav', t)"
-      @mouseenter="emit('hover', { tag: it.tag, zh: it.zh, event: $event })"
-    />
+    <!-- 分组形态: 段位小节, 每节一个标题行 + 该节的 pills -->
+    <template v-if="grouped && groups">
+      <template v-for="g in groups" :key="g.key">
+        <div class="seg-head" :class="'seg-' + g.key.split(':')[0]">{{ g.title }}<i>{{ g.items.length }}</i></div>
+        <TvTagPill
+          v-for="it in g.items"
+          :key="it.tag"
+          :tag="it.tag"
+          :zh="it.zh"
+          :count="it.count"
+          :banned="it.banned"
+          :ban-rule="it.banRule"
+          :show-ban="showBan"
+          :copyable="copyable"
+          :cartable="cartable"
+          :in-cart="cartTags.includes(it.tag)"
+          :favable="favable"
+          :in-fav="favTags.includes(it.tag)"
+          :show-count="showCount && it.count !== null"
+          :show-zh="showZh"
+          :action="action"
+          :size="size"
+          @click="(p) => emit('click', p)"
+          @ban="(t) => emit('ban', t)"
+          @copy="(t) => emit('copy', t)"
+          @cart="(t) => emit('cart', t)"
+          @fav="(t) => emit('fav', t)"
+          @mouseenter="emit('hover', { tag: it.tag, zh: it.zh, event: $event })"
+        />
+      </template>
+    </template>
+    <!-- 平铺形态(原样) -->
+    <template v-else>
+      <TvTagPill
+        v-for="it in items"
+        :key="it.tag"
+        :tag="it.tag"
+        :zh="it.zh"
+        :count="it.count"
+        :banned="it.banned"
+        :ban-rule="it.banRule"
+        :show-ban="showBan"
+        :copyable="copyable"
+        :cartable="cartable"
+        :in-cart="cartTags.includes(it.tag)"
+        :favable="favable"
+        :in-fav="favTags.includes(it.tag)"
+        :show-count="showCount && it.count !== null"
+        :show-zh="showZh"
+        :action="action"
+        :size="size"
+        @click="(p) => emit('click', p)"
+        @ban="(t) => emit('ban', t)"
+        @copy="(t) => emit('copy', t)"
+        @cart="(t) => emit('cart', t)"
+        @fav="(t) => emit('fav', t)"
+        @mouseenter="emit('hover', { tag: it.tag, zh: it.zh, event: $event })"
+      />
+    </template>
     <div v-if="!items.length && emptyText" class="empty-inline">{{ emptyText }}</div>
   </div>
 </template>
@@ -127,4 +203,22 @@ const items = computed(() => {
   padding: 2px 0;
 }
 .empty-inline { color: var(--muted); font-size: 11px; padding: 6px 0; flex: 0 0 100%; }
+/* 分组小节标题: 占满一整行, 按段位着色(与 danbooru 惯例一致: 角色绿/系列紫/画师红) */
+.seg-head {
+  flex: 0 0 100%;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.seg-head::after { content: ''; flex: 1; height: 1px; background: var(--border, rgba(128,128,128,.25)); }
+.seg-head i { font-style: normal; opacity: .7; }
+.seg-head.seg-char { color: var(--ok, #3f9d63); }
+.seg-head.seg-series { color: var(--violet, #8b6fc9); }
+.seg-head.seg-artist { color: var(--err, #c9564f); }
+.seg-head.seg-count { color: var(--accent); }
+.seg-head.seg-meta { opacity: .75; }
 </style>

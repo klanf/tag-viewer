@@ -42,6 +42,8 @@ import {
 } from './core/cartPreset.js'
 import { scanFolder, scanCacheStats, purgeScanCachePaths } from './core/scan.js'
 import { previewTagEdit, applyTagEdit } from './core/tagedit.js'
+import { openDb } from './core/store.js'
+import { loadCats, catOf } from './core/tagcats.js'
 import { copyImageWithNotice, openWithDialog } from './core/clipboardImage.js'
 import {
   runIngest, ingestStatus, pauseIngest, ingestState, queueStats, enqueueFolderUntagged,
@@ -549,6 +551,25 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     // ---------------- 标签 ----------------
     'suggest:get': safe((raw) => getSuggest(raw)),
     'tags:all': safe((raw) => getAllTags(raw)),
+    // 标签分类映射(2026-10-16): 展示端分组着色用。tags 字典的 cat 列是快照,
+    // 空的(新词/分类器当时不可用)现场 classify 补 —— 保证映射永远可用。
+    'tags:cats': safe(() => {
+      const db = openDb()
+      const out = {}
+      for (const r of db.prepare("SELECT name, cat FROM tags WHERE cat != ''").all()) {
+        out[r.name] = r.cat
+      }
+      const missing = db.prepare("SELECT name FROM tags WHERE cat = ''").all().map((r) => r.name)
+      if (missing.length) {
+        loadCats()
+        for (const n of missing) {
+          const c = catOf(n)
+          out[n] = c
+          db.prepare('UPDATE tags SET cat = ? WHERE name = ?').run(c, n)
+        }
+      }
+      return { cats: out }
+    }),
     // ---------------- 标签改名 / 删除(2026-10-01) ----------------
     // 预览只读; apply 走 tagedit.js(备份 -> 事务 -> rebuildTags), 改完顺手重载数据集
     // —— 否则库是新的、内存里是旧的, 界面看不到改完的效果(与反推后的重载同一理由)。

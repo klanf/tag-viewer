@@ -135,6 +135,7 @@ function blankParams() {
     strip_char: !!s.strip_char,
     strip_view: !!s.strip_view,
     safe_only: !!s.safe_only,
+    seg_mode: !!s.seg_mode,
     with_path: !!s.with_path,
     replace_set: typeof s.replace_set === 'string' ? s.replace_set : '',
   }
@@ -461,6 +462,7 @@ function shortDir(d) {
           <TvCheckbox v-model="editing.params.bg" label="缺背景时补背景标签" />
           <TvCheckbox v-model="editing.params.strip_char" label="剔除角色/系列标签" />
           <TvCheckbox v-model="editing.params.strip_view" label="剔除视角/机位标签" title="去掉 from behind / high angle / dutch angle 等视角机位类标签, 词表 data/export_view_tags.txt 可自行增删" />
+          <TvCheckbox v-model="editing.params.seg_mode" label="段位模式（只留内容 tag）" title="过滤画师/角色/系列/meta, 人数排最前, 通用按分类归堆 —— 给绘图管线随机抽注入用; 关掉则保持原始顺序" />
           <TvCheckbox v-model="editing.params.safe_only" label="只导出安全模式的标签" title="每个标签串里剔除敏感tag(口径跟随安全模式档位 core/edge), 行数不变" />
           <TvCheckbox v-model="editing.params.spaces" label="下划线转空格" />
           <TvCheckbox v-model="editing.params.with_path" label="每行带图片路径" />

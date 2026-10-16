@@ -142,6 +142,8 @@ export function saveSettings(patch) {
     const v = Number(patch.taggerCharThreshold)
     if (Number.isFinite(v)) next.taggerCharThreshold = Math.min(0.99, Math.max(0.05, v))
   }
+  // groupedTags: 标签展示按分类分组(2026-10-16)。纯展示偏好, 默认开。
+  if (patch.groupedTags !== undefined) next.groupedTags = !!patch.groupedTags
   state.settings = next
   fs.writeFileSync(path.join(state.appDir, 'settings.json'),
     JSON.stringify(next, null, 2), 'utf8')

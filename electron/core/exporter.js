@@ -12,6 +12,7 @@ import { recordsFor, frozenKey, isCharacterTag, isCopyrightTag } from './dataset
 import { parseQuery, scopeRecords, searchCached } from './search.js'
 import { blacklistMatcher, isBlockedFast, loadReplaceRules, loadReplaceRulesGroup, replaceTag, loadBgConfig, hasBgTagFast, viewTagMatcher, isViewFast } from './rules.js'
 import { safetyExportStripper } from './safety.js'
+import { exportSegSort } from './tagcats.js'
 
 /**
  * 比较两个标签"是不是同一个"用的归一化键: 忽略大小写, 且把下划线/空格视作等价。
@@ -33,6 +34,9 @@ export function buildExport(raw = {}) {
   const stripView = raw.strip_view === '1' || raw.strip_view === true
   // 只导出安全模式的标签 —— 逐行剔除敏感tag(口径跟随 safety.json 的档位); 默认关闭
   const safeOnly = raw.safe_only === '1' || raw.safe_only === true
+  // 段位模式(2026-10-16): 过滤 画师/角色/系列/meta, 人数排最前, 通用按大类归堆。
+  // 做在**替换/补背景/追加之后**(替换后的新词按新文本分类, 天然一致), 空格转换之前。
+  const segMode = raw.seg_mode === '1' || raw.seg_mode === true
   /* 追加标签 —— **UI 已于 2026-10-04 移除**(看板筛选区与预设编辑页的输入框都删了,
    * 用户判断"有替换规则就够了")。这段解析**故意留着**: 老预设文件里可能已经存过
    * append 字段, 直接删解析会让那些预设的追加行为**静默消失**、用户毫无察觉。
@@ -69,6 +73,7 @@ export function buildExport(raw = {}) {
   let viewStripped = 0
   let safeStripped = 0
   let appendAdded = 0
+  let segStripped = 0
 
   for (const r of results) {
     let tags = r.tags
@@ -142,6 +147,12 @@ export function buildExport(raw = {}) {
       if (add.length) { appendAdded += add.length; tags = [...add, ...tags] }
     }
 
+    if (segMode) {
+      const before = tags.length
+      tags = exportSegSort(tags)
+      segStripped += before - tags.length
+    }
+
     if (spaces) tags = tags.map((t) => t.replace(/_/g, ' '))
     const s = tags.join(', ')
     lines.push(withPath ? `${r.path}: ${s}` : s)
@@ -161,6 +172,7 @@ export function buildExport(raw = {}) {
     viewStripped,
     safeStripped,
     appendAdded,
+    segStripped,
     ms: Date.now() - t0,
     suggestedName: `筛选_${nameCore}.txt`,
   }

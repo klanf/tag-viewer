@@ -26,6 +26,8 @@ const CHANNELS = new Set([
   // 标签
   'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'translate:get',
   'tags:edit:preview', 'tags:edit:apply',
+  // 标签分类映射(2026-10-16 展示分组用)
+  'tags:cats',
   // 规则
   'blacklist:get', 'blacklist:save', 'blacklist:toggle',
   'replace:get', 'replace:save', 'bg:get', 'rules:reload',
