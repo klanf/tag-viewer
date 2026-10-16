@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { ipcMain, dialog, clipboard, shell, BrowserWindow, Menu, app } from 'electron'
-import { getWorkspace, getSettings, saveSettings, dataFile } from './core/workspace.js'
+import { getWorkspace, getSettings, saveSettings, dataFile, applyTaggerEnv } from './core/workspace.js'
 import { bootstrap, status, whenReady } from './core/app-state.js'
 import {
   getStats, doSearch, getSeries, getCharacters, getSeriesMeta, postSeriesMeta,
