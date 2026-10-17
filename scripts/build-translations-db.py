@@ -13,6 +13,10 @@
 输出 schema:
   CREATE TABLE translations(en TEXT PRIMARY KEY, zh TEXT NOT NULL, src TEXT)
     -- src: 'weilin_danbooru' | 'weilin_tags' | 'local'
+  CREATE TABLE tag_cats(en TEXT PRIMARY KEY, grp TEXT NOT NULL)
+    -- 韦林人工分类(2026-10-17 并入): userdatas_zh_CN_tags.db 的
+    -- tag_tags -> tag_subgroups -> tag_groups 三表联查(~5583 条)。
+    -- 随包分发后, 没装韦林插件的用户也能拿到完整分类(tagcats.js 回落读这里)。
 
 运行时(electron/core/translate.js)直接读这个真实文件 —— 不走 asar,
 node:sqlite 的原生 sqlite3 打不开 asar 虚拟路径, 这正是 2.2.0 包里翻译
@@ -67,8 +71,31 @@ def collect():
     return merged
 
 
+def collect_cats():
+    """韦林人工分类: {text: 组名}, 来自 tag_tags -> tag_subgroups -> tag_groups。"""
+    fp = WEILIN_DIR / "userdatas_zh_CN_tags.db"
+    if not fp.exists():
+        sys.exit(f"源缺失: {fp}")
+    con = sqlite3.connect(f"file:{fp.as_posix()}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "SELECT t.text AS text, g.name AS grp "
+            "FROM tag_tags t "
+            "JOIN tag_subgroups s ON s.id_index = t.subgroup_id "
+            "JOIN tag_groups g ON g.id_index = s.group_id"
+        ).fetchall()
+    finally:
+        con.close()
+    cats = {}
+    for text, grp in rows:
+        if text and grp:
+            cats[str(text).strip()] = str(grp)
+    return cats
+
+
 def build():
     merged = collect()
+    cats = collect_cats()
     OUT.parent.mkdir(exist_ok=True)
     con = sqlite3.connect(OUT)
     try:
@@ -81,19 +108,27 @@ def build():
             "INSERT OR REPLACE INTO translations(en, zh, src) VALUES (?, ?, ?)",
             [(k, zh, src) for k, (zh, src) in merged.items()],
         )
+        con.execute("DROP TABLE IF EXISTS tag_cats")
+        con.execute("CREATE TABLE tag_cats(en TEXT PRIMARY KEY, grp TEXT NOT NULL)")
+        con.executemany(
+            "INSERT OR REPLACE INTO tag_cats(en, grp) VALUES (?, ?)",
+            list(cats.items()),
+        )
         con.commit()
     finally:
         con.close()
     size = OUT.stat().st_size
-    print(f"写入 {OUT.relative_to(ROOT)}: {len(merged)} 条, {size:,} B")
+    print(f"写入 {OUT.relative_to(ROOT)}: 翻译 {len(merged)} 条 + 分类 {len(cats)} 条, {size:,} B")
 
 
 def check():
     """输出库与重新合并的结果是否一致(条数 + 抽样)。"""
     merged = collect()
+    cats = collect_cats()
     con = sqlite3.connect(f"file:{OUT.as_posix()}?mode=ro", uri=True)
     try:
         rows = con.execute("SELECT en, zh, src FROM translations").fetchall()
+        cats_db = dict(con.execute("SELECT en, grp FROM tag_cats").fetchall())
     finally:
         con.close()
     db = {k: (zh, src) for k, zh, src in rows}
@@ -104,7 +139,11 @@ def check():
     if diff:
         print(f"内容不一致 {len(diff)} 条, 例: {diff[:3]}")
         return 1
-    print(f"一致: {len(db)} 条")
+    if cats_db != cats:
+        diffc = {k for k in set(cats_db) | set(cats) if cats_db.get(k) != cats.get(k)}
+        print(f"分类不一致 {len(diffc)} 条, 例: {list(diffc)[:3]}")
+        return 1
+    print(f"一致: 翻译 {len(db)} 条 + 分类 {len(cats_db)} 条")
     return 0
 
 

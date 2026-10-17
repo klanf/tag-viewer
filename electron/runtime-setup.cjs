@@ -41,6 +41,8 @@ const MODEL_BASE_URL = 'https://hf-mirror.com/deepghs/pixai-tagger-v0.9-onnx/res
 // (id,tag_id,name,category,count,ips), 而 tagger_serve.py 按旧列序(无前置 id)定位,
 // 混用会 153/153 noResult。改为从**我们自己的 Gitee Release** 拉锚定版
 // (v2.2.0 附件, 401399B / sha256 2e44dd16…), 上游再怎么变都不影响。
+// 2026-10-17 起该 csv 已随包内置(extraResources -> resources/models/)，
+// ensureModel 优先复制内置副本，下载只作兜底 —— 安装完只需要下 onnx 模型。
 const CSV_URL = 'https://gitee.com/klanf/tag-viewer/releases/download/v2.2.0/wd-pixai-tagger-v0.9.csv';
 const MODEL_FILES = [
   {
@@ -238,6 +240,31 @@ async function modelIntegrityIssue(modelPath, csvPath) {
 async function ensureModel({ destDir, existsCheck, onStage = () => {}, onProgress = () => {} }) {
   const existing = existsCheck ? existsCheck() : null;
 
+  /** 随包内置副本(2026-10-17): extraResources 把锚定版 csv 打进 resources/models/。
+   *  安装版在 process.resourcesPath/models/ 下能找到; dev 环境没有, 返回 null 走原路。 */
+  const bundledModelPath = (file) => {
+    const resDir = process.resourcesPath;
+    if (!resDir || !file) return null;
+    return path.join(resDir, 'models', file.local);
+  };
+
+  /** 内置副本校验+落位: SHA 全量比对(401KB 瞬时), 匹配则复制进数据目录当已下载。
+   *  不匹配/不存在返回 null, 调用方回落网络下载 —— 内置副本损坏不应堵死安装。 */
+  const tryBundledCopy = async (file) => {
+    const src = bundledModelPath(file);
+    if (!src) return null;
+    try {
+      const st = await fsp.stat(src);
+      if (st.size !== file.size) return null;
+      if ((await sha256File(src)) !== file.sha256) return null;
+      const dest = path.join(destDir, file.local);
+      await fsp.mkdir(destDir, { recursive: true });
+      await fsp.copyFile(src, dest);
+      onStage(`${file.local} 使用安装包内置副本，免下载`);
+      return dest;
+    } catch { return null; }
+  };
+
   // 已存在 ≠ 有效。2026-10-15 实测: 旧构建把上游 597KB 新列序 csv 下到了固定文件名,
   // 新构建只按"存在"跳过就会永远用坏文件 → 153/153 noResult 复现。
   // 经 modelIntegrityIssue 校验(csv 体积+SHA / onnx 体积), 不合格的挪走重下。
@@ -271,6 +298,12 @@ async function ensureModel({ destDir, existsCheck, onStage = () => {}, onProgres
     if (have[file.local]) {
       onStage(`${file.local} 已在位，跳过`);
       results[file.local] = have[file.local];
+      continue;
+    }
+    // 内置副本优先(2026-10-17): csv 已随包, 命中则免网络; 未命中(旧包/dev)回落下载
+    const bundled = await tryBundledCopy(file);
+    if (bundled) {
+      results[file.local] = bundled;
       continue;
     }
     const dest = path.join(destDir, file.local);

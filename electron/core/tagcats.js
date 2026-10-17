@@ -21,7 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { dataFile } from './workspace.js'
-import { PROJECT_ROOT } from './paths.js'
+import { PROJECT_ROOT, BUNDLED_TRANSLATIONS_DB } from './paths.js'
 import { resolveWeiLinDirs } from './translate.js'
 
 /* ------------------------------------------------------------ 段位定义 */
@@ -109,6 +109,7 @@ export function loadCats(opts = {}) {
   if (state.loaded) return state.info
   state.loaded = true   // 先置位防递归/重入; 内部失败信息记进 info
   try { loadWeiLinCats(opts.weilinDirs) } catch (e) { state.info.weilinError = e.message }
+  try { state.info.bundledCats = loadBundledCats() } catch (e) { state.info.csvError = state.info.csvError || e.message }
   try { loadWd14Chars(opts.csvPath) } catch (e) { state.info.csvError = e.message }
   state.info.source = state.info.weilin || state.info.chars ? 'weilin+csv' : 'rules'
   return state.info
@@ -138,6 +139,29 @@ function loadWeiLinCats(dirsOverride) {
     } finally { try { db.close() } catch { /* 只读连接, 关不掉就算了 */ } }
   }
   state.info.weilin = map.size
+}
+
+/** 内置分类兜底(2026-10-17): translations.db 的 tag_cats 表(构建期并入的韦林
+ *  人工分类, 随包分发)。外置韦林目录优先 —— 已有的键不覆盖; 只补空缺。
+ *  这样没装韦林插件的安装版用户也能拿到完整分类。 */
+function loadBundledCats() {
+  const fp = BUNDLED_TRANSLATIONS_DB
+  if (!fp || !fs.existsSync(fp)) return 0
+  let db
+  try { db = new DatabaseSync(fp, { readOnly: true }) } catch { return 0 }
+  let n = 0
+  try {
+    const rows = db.prepare('SELECT en, grp FROM tag_cats').all()
+    const map = state.weilin
+    for (const r of rows) {
+      if (!r.en || !r.grp) continue
+      for (const v of variants(r.en)) {
+        if (!map.has(v)) { map.set(v, r.grp); n += 1 }
+      }
+    }
+  } catch { /* 表不存在(旧库)就走规则兜底 */ }
+  finally { try { db.close() } catch { /* 只读连接, 关不掉就算了 */ } }
+  return n
 }
 
 /**

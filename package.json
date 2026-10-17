@@ -97,6 +97,10 @@
       {
         "from": "assets/translations.db",
         "to": "translations.db"
+      },
+      {
+        "from": "assets/wd-pixai-tagger-v0.9.csv",
+        "to": "models/wd-pixai-tagger-v0.9.csv"
       }
     ],
     "electronLanguages": [
