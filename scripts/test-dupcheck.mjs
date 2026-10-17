@@ -122,6 +122,13 @@ ok('结果里没有 i-hidden', () => assert.ok(!groupOf(r, 'i-hidden.png')))
 db.prepare('UPDATE folders SET as_source = 1 WHERE id = 2').run()
 r = dupcheck.findDuplicateGroups({ threshold: 0.65 })
 ok('开关打开后同一张图恢复参与: scanned=7', () => assert.equal(r.scanned, 7))
+ok('items 带注册文件夹与 tags(优先级/右键收藏用, 2026-10-17)', () => {
+  const g = groupOf(r, 'i-hidden.png')
+  const it = g.items.find((x) => path.basename(x.path) === 'i-hidden.png')
+  assert.equal(it.folder, P('hidden-root'))
+  assert.ok(it.tags.includes(KA))
+  assert.ok(typeof it.unsafe === 'number')
+})
 db.prepare('UPDATE folders SET as_source = 0 WHERE id = 2').run()
 r = dupcheck.findDuplicateGroups({ threshold: 0.65 })
 

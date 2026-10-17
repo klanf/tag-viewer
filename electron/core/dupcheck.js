@@ -59,12 +59,19 @@ export function findDuplicateGroups(opts = {}) {
     } catch { return [] }   // 全新空库可能还没有 folders 表 —— 没有可见性概念, 直接扫
   })()
   const vis = offFolders.length
-    ? ` AND (folder_id IS NULL OR folder_id NOT IN (${offFolders.map(() => '?').join(',')}))`
+    ? ` AND (i.folder_id IS NULL OR i.folder_id NOT IN (${offFolders.map(() => '?').join(',')}))`
     : ''
+  // 注册来源文件夹(优先级排序的单位): 全新空库可能还没有 folders 表 —— 没有就给 NULL
+  const hasFolders = (() => {
+    try {
+      return !!db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'folders'`).get()
+    } catch { return false }
+  })()
   const rows = db
     .prepare(
-      `SELECT id, path, tags${dimSel.length ? ', ' + dimSel.join(', ') : ''} FROM images
-       WHERE ${hasGone ? 'gone = 0 AND ' : ''}tags <> ''${vis}`
+      `SELECT i.id, i.path, i.tags${dimSel.length ? ', i.' + dimSel.join(', i.') : ''}${hasFolders ? ', f.path AS folder' : ', NULL AS folder'}
+       FROM images i${hasFolders ? ' LEFT JOIN folders f ON f.id = i.folder_id' : ''}
+       WHERE ${hasGone ? 'i.gone = 0 AND ' : ''}i.tags <> ''${vis}`
     )
     .all(...offFolders)
 
@@ -223,6 +230,8 @@ export function findDuplicateGroups(opts = {}) {
       .map((k) => ({
         id: rows[k].id,
         path: rows[k].path,
+        tags: rows[k].tags || '',          // 组内图自己的标签(右键收藏要快照用)
+        folder: rows[k].folder || '',      // 注册的来源文件夹(优先级排序以它为单位, 不按子目录)
         px_w: rows[k].px_w || 0,
         px_h: rows[k].px_h || 0,
         size: rows[k].size || 0,

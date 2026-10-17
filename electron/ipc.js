@@ -948,7 +948,26 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
           }
         }
       }
-      if (trashed.length) purgeScanCachePaths(trashed)
+      if (trashed.length) {
+        purgeScanCachePaths(trashed)
+        // 库记录同步标 gone=1(2026-10-17): 以前只删文件+作废扫描缓存, tags.db 里的行
+        // 还停在 gone=0 —— 直接读库的功能(查重/统计)会把已删的图"复活"(重扫又冒出来)。
+        // ingest 规则 6 是「库有 gone=1 + 磁盘又出现 → 清 gone」, 所以这里标了也不影响还原。
+        // 路径按 原文/正斜杠/反斜杠 三种形态兜底匹配, 库里存的分隔符不赌。
+        try {
+          const db = openDb()
+          const goneStmt = db.prepare('UPDATE images SET gone = 1 WHERE path = ?')
+          let nGone = 0
+          for (const p of trashed) {
+            for (const v of new Set([p, p.replaceAll('\\', '/'), p.replaceAll('/', '\\')])) {
+              nGone += goneStmt.run(v).changes
+            }
+          }
+          if (nGone) flog('trash-info', `已把 ${nGone} 条库记录标 gone=1`)
+        } catch (e) {
+          flog('trash-err', '标记 gone 失败(文件已删, 库记录还在): ' + (e?.message || e))
+        }
+      }
       return { ok: trashed.length > 0, trashed, failed }
     }),
 

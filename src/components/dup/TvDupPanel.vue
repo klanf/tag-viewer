@@ -27,6 +27,8 @@ import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useTrash } from '@/composables/useTrash.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import { useFavStore } from '@/stores/useFavStore.js'
+import { useImageCtxMenu } from '@/composables/useImageCtxMenu.js'
 
 const open = defineModel({ type: Boolean, default: false })
 const lightbox = useLightboxStore()
@@ -34,6 +36,9 @@ const trash = useTrash()
 const ui = useUiStore()
 /** 安全模式: 面板结果与看板同一套审查(展示层过滤, 关掉立刻全回来) */
 const safety = useSafetyStore()
+/** 右键菜单(与网格卡片同一套原生菜单) */
+const fav = useFavStore()
+const ctxMenu = useImageCtxMenu()
 
 const loading = ref(false)
 const error = ref('')
@@ -103,6 +108,8 @@ const baseOf = (p) => {
   const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
   return i < 0 ? p : p.slice(i + 1)
 }
+/** 优先级排序的单位 = 注册的来源文件夹(不按子目录拆, 2026-10-17 用户拍板) */
+const regFolderOf = (it) => it.folder || dirOf(it.path)
 /** 目录显示名: 最多两级, 太长的前面省略 */
 function shortDir(d) {
   const seg = String(d).split(/[\\/]/).filter(Boolean)
@@ -117,13 +124,13 @@ function fileScore(name) {
   return 0
 }
 
-/** 当前结果里出现过的文件夹(去重, 按首次出现), 用户排过的按手动顺序提前 */
+/** 当前结果里出现过的来源文件夹(去重, 按首次出现), 用户排过的按手动顺序提前 */
 const folderChips = computed(() => {
   const seen = []
   const seenSet = new Set()
   for (const g of rawGroups.value) {
     for (const it of g.items) {
-      const d = dirOf(it.path)
+      const d = regFolderOf(it)
       const k = d.toLowerCase()
       if (!seenSet.has(k)) { seenSet.add(k); seen.push(d) }
     }
@@ -159,6 +166,8 @@ function onDropAt(i) {
   const moved = arr.splice(from, 1)[0]
   arr.splice(i, 0, moved)
   folderOrder.value = arr
+  // 顺序是自动持久化的(localStorage) —— 明说一句, 免得"没保存"的误会
+  ui.ok('优先级顺序已保存(重扫/重启后仍生效)', 'ok', 2000)
 }
 
 /** 面板真正渲染的组: 安全模式过滤 -> 组内按保留优先级排序(第 1 名 = ★) */
@@ -170,7 +179,7 @@ const decorated = computed(() => {
       const base = baseOf(it.path)
       return {
         ...it, dir, base,
-        fk: rk.get(dir.toLowerCase()) ?? Number.MAX_SAFE_INTEGER,
+        fk: rk.get(regFolderOf(it).toLowerCase()) ?? Number.MAX_SAFE_INTEGER,
         fs: fileScore(base),
         px: (it.px_w || 0) * (it.px_h || 0),
       }
@@ -187,9 +196,19 @@ function keepWhy(items) {
   const a = items[0]
   const b = items[1]
   if (!a || !b) return '建议保留'
-  if (a.fk !== b.fk) return `建议保留: 所在文件夹优先级更高(${shortDir(a.dir)})`
+  if (a.fk !== b.fk) return `建议保留: 所在文件夹优先级更高(${shortDir(regFolderOf(a))})`
   if (a.fs !== b.fs) return a.fs >= 3 ? '建议保留: 文件名带画师信息(名字+uid/pid)' : '建议保留: 文件名更像画师命名'
   return '建议保留: 分辨率最大'
+}
+
+/** 右键菜单: 与网格卡片同一套原生菜单(路径来自查重结果, 收藏快照用组内 tags) */
+function onItemCtx(e, it) {
+  ctxMenu.open(e, {
+    path: it.path,
+    tags: String(it.tags || '').split(',').filter(Boolean),
+    favable: true,
+    favorited: fav.isFav(it.path),
+  })
 }
 
 /* ---------------- 删除(单张 / 组级) ---------------- */
@@ -311,7 +330,7 @@ function fmtSize(n) {
             @drop.prevent="onDropAt(i)"
           ><b>{{ i + 1 }}</b>{{ shortDir(d) }}</span>
         </div>
-        <TvButton size="xs" variant="ghost" title="清除手动排序(回到默认出现顺序)" @click="folderOrder = []">↺</TvButton>
+        <TvButton size="xs" variant="ghost" title="注意: 这不是刷新 —— 会清除手动排序恢复默认顺序; 手动顺序平时已自动保存" @click="folderOrder = []">↺</TvButton>
         <span class="phint">越前越优先保留; 同文件夹内文件名带画师信息(名字+uid/pid)的优先, 再看分辨率</span>
       </div>
       <div v-else class="hintline">
@@ -347,6 +366,7 @@ function fmtSize(n) {
               :key="it.id"
               class="item"
               :title="`${it.path}\n${it.px_w}×${it.px_h}${it.size ? ' · ' + fmtSize(it.size) : ''}`"
+              @contextmenu="onItemCtx($event, it)"
             >
               <div class="thumb">
                 <TvImage :path="it.path" :width="200" ratio="1 / 1" @click="openItem(g, it)" />
