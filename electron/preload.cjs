@@ -28,6 +28,8 @@ const CHANNELS = new Set([
   'tags:edit:preview', 'tags:edit:apply',
   // 标签分类映射(2026-10-16 展示分组用)
   'tags:cats',
+  // tag 查重(2026-10-17)
+  'dup:scan',
   // 规则
   'blacklist:get', 'blacklist:save', 'blacklist:toggle',
   'replace:get', 'replace:save', 'bg:get', 'rules:reload',

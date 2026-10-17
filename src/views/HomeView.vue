@@ -27,6 +27,7 @@ import TvButton from '@/components/base/TvButton.vue'
 import TvImageGrid from '@/components/image/TvImageGrid.vue'
 import TvRulesEditorModal from '@/components/rules/TvRulesEditorModal.vue'
 import TvExportPresetsModal from '@/components/export/TvExportPresetsModal.vue'
+import TvDupPanel from '@/components/dup/TvDupPanel.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
 import { useSearchHistory } from '@/composables/useSearchHistory.js'
 import { LS } from '@/utils/lskey.js'
@@ -70,6 +71,7 @@ const statsLoading = ref(false)
 const showBlacklist = ref(false)
 const showReplace = ref(false)
 const showPresets = ref(false)
+const showDup = ref(false)         // 相似图查重面板(2026-10-17)
 const exportMenu = ref(false)      // 「⬇ 导出标签 ▾」下拉是否展开
 const autoPresetCount = ref(0)     // 开了「黑名单变更后自动导出」的预设数(按钮上显示)
 const exporting = ref(0)      // 0=空闲 1=纯标签 2=带路径
@@ -518,6 +520,12 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
               @click="showReplace = true"
             >🔁 替换规则</TvButton>
             <TvButton variant="ghost" size="sm" :title="presetTitle" @click="showPresets = true">📤 预设导出</TvButton>
+            <TvButton
+              variant="ghost"
+              size="sm"
+              title="按标签相似度找疑似重复的图片组(全库扫描约 2 秒, 只展示不动文件)"
+              @click="showDup = true"
+            >🔎 查重</TvButton>
             <button
               v-if="autoPresetCount"
               class="badge"
@@ -600,6 +608,7 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 
     <TvRulesEditorModal v-model="showBlacklist" kind="blacklist" @saved="doSearch" />
     <TvRulesEditorModal v-model="showReplace" kind="replace" @saved="doSearch" />
+    <TvDupPanel v-model="showDup" />
     <TvExportPresetsModal
       v-model="showPresets"
       :sources="src.list"

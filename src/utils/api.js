@@ -119,6 +119,7 @@ export const api = {
   suggest: (q) => call('suggest:get', q),
   allTags: (q) => call('tags:all', q),
   tagsCats: () => call('tags:cats'),
+  dupScan: (opts) => call('dup:scan', opts),
   tagsEditPreview: (body) => call('tags:edit:preview', body),
   tagsEditApply: (body) => call('tags:edit:apply', body),
   tagsForPath: (path) => call('tags:forPath', { path }),
