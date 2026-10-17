@@ -52,7 +52,7 @@
 
 ### 几个真正好用的细节
 
-- **标签全带中文翻译**：内置 11,000 多条翻译，界面上所有标签都显示成「蓝发」「教室」，选词零门槛。
+- **标签全带中文翻译**：内置 1.3 万条翻译，界面上所有标签都显示成「蓝发」「教室」，选词零门槛。
 - **搜索框会「组词」**：敲逗号（中英文都行）把当前词定格成胶囊，接着联想下一个词；下拉里的「全选」
   把当前词匹配到的标签一次全加入（打「发」→ 全部发色/发型，配「any 任一命中」就是全都要）。
   方向键在联想列表里移动时自动跟随滚动；拼音组词中回车不会误触发搜索。
@@ -90,10 +90,21 @@
 
 ## 快速开始
 
-**方式一：绿色分发包（推荐给使用者）** —— 解压，双击「启动看板.bat」（或 启动看板.vbs，不弹黑框），
+**方式一：安装包（推荐给使用者）** —— 到 [Gitee Releases](https://gitee.com/klanf/tag-viewer/releases)
+下载最新版：
+
+- **引导安装器**（`TagViewer-引导安装器-vX.Y.Z.exe`，<1MB）：双击后自动从 Release
+  拼包安装，不用手动下 110MB 大文件；
+- 或直接下完整安装包 `TagViewer-Setup-x.y.z.exe`。
+
+装完即用。翻译（1.3 万条）与韦林人工分类已内置，WD14 标签词表 CSV 也随包自带 ——
+**首次点「反推」时只剩推理环境要下载**（Python + onnx 模型，约 1.4 GB，支持断点续传，
+右下角有进度卡），之后全程本地推理不联网。
+
+**方式二：绿色分发包（解压即用）** —— 解压，双击「启动看板.bat」（或 启动看板.vbs，不弹黑框），
 什么都不用装。包用 `npm run pack:green` 打出来，见 `scripts/pack-green.mjs` 头部说明。
 
-**方式二：从源码跑** —— 双击启动脚本：
+**方式三：从源码跑** —— 双击启动脚本：
 
 ```bat
 双击「启动看板.bat」          :: 或 启动看板.vbs（不弹黑框）
@@ -129,7 +140,7 @@ npm start          :: 启动（等价于双击启动脚本）
 
 | 类别 | 文件 | 会不会随仓库分发 |
 | --- | --- | --- |
-| **知识** | `local_translations.json`、`character_library.json`；**WeiLin 翻译库已内置**：仓库 `knowledge/weilin_data(...)`（数据目录下的同名目录是本机副本，优先级更高） | 翻译库随仓库分发（来源与授权现状见 `knowledge/README.md`）；另外两份是用户自己的补译/映射，不进仓库 |
+| **知识** | `local_translations.json`、`character_library.json`；**翻译 + 韦林人工分类已内置**：构建期由 `scripts/build-translations-db.py` 从 `knowledge/weilin_data(...)` 合并进 `assets/translations.db`（translations 1.3 万条 + tag_cats 3,457 条分类），随包分发 | 翻译/分类源数据随仓库分发（来源与授权现状见 `knowledge/README.md`）；另外两份是用户自己的补译/映射，不进仓库 |
 | **用户数据** | `export_blacklist.txt`、`user/replace_sets.json`（**替换规则组**）、`export_bg.txt`、`user_meta.json`、`cart_history.json`、`folders.json`、`safety_tags.txt`（安全模式的敏感标签集合，两段）、`safety.json`（开关与档位）、`.thumb_cache/` | **绝不出机器** |
 | **可再生派生物** | `tags.db`、`scan_cache.json` | 不进仓库。都内嵌本机文件路径，将来若要随包分发必须先从里面**提炼**出纯标签/系列/角色子集 |
 
@@ -160,6 +171,6 @@ npm start          :: 启动（等价于双击启动脚本）
 
 | 项 | 现状 |
 | --- | --- |
-| 打包 | 绿色分发包有三种：**点击即用包**（默认，模型+环境全带）、**基础包**（`--variant basic`，不带 1.27GB 模型）、**精简包**（`--variant lite`，模型和 Python 环境都不带，~370MB，适合传 Gitee 分发给会自己配环境的人）；缺的只是「单文件 exe」形态，需要时再加 electron-builder |
+| 打包 | 三种形态齐了：**NSIS 安装包**（`npm run dist`，Gitee Release 主发，配分片 + 引导安装器）、**绿色分发包**三种变体：**点击即用包**（默认，模型+环境全带）、**基础包**（`--variant basic`，不带 1.27GB 模型）、**精简包**（`--variant lite`，模型和 Python 环境都不带，~370MB，适合传 Gitee 分发给会自己配环境的人） |
 | 数据目录切换 | `electron/core/workspace.js` 支持 `TV_DATA_DIR` 环境变量；UI 里还没有入口 |
 | 文件夹库的排序 | 按名字/路径过滤、「显示已移出」开关都已有了；排序目前固定为登记顺序，还没有排序选项 |
