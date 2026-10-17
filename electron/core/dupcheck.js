@@ -11,12 +11,13 @@
  *   双方都有角色 tag 且完全不交集 → score ×0.5(不同角色基本不是重复)。
  * 阶段③ 并查集把连通的对合成组(A≈B,B≈C → {A,B,C})。
  *
+ * 扫描口径与看板数据集一致(gone=0 + 来源未注销, 2026-10-17);
+ * 误报对(dupignore)在达标后、合并前剔除。
  * 纯内存一次算完, 不落库不建索引。局限(诚实): tag 缺失或两图 tag 集差异大
  * 会漏检; 同图不同尺寸/裁剪版可能漏 —— 感知哈希是二期补充。
  */
 import { openDb } from './store.js'
 import { loadCats, catOf } from './tagcats.js'
-
 /** 单例缓存段位判定(catOf 内部有 memo, 这里只省 split 开销) */
 const segCache = new Map()
 function segOf(name) {
@@ -34,6 +35,7 @@ export function findDuplicateGroups(opts = {}) {
     minSharedRare = 3,   // 候选门槛: 共享罕见 tag 数
     threshold = 0.85,    // 加权 Jaccard 阈值
     maxGroups = 2000,    // 返回组数上限(防极端库卡 UI); 真库 0.85 下实测 542 组
+    ignorePairs = null,  // Set<string> "小id|大id" —— 用户标记过的误报对, 命中即跳过
   } = opts
 
   const t0 = Date.now()
@@ -42,12 +44,24 @@ export function findDuplicateGroups(opts = {}) {
   const cols = new Set(db.prepare('PRAGMA table_info(images)').all().map((c) => c.name))
   const dimSel = ['px_w', 'px_h', 'size'].filter((c) => cols.has(c))
   const hasGone = cols.has('gone')
+  // 可见性与 readRecords(看板数据集)保持同一口径(2026-10-17 用户拍板「只扫看板可见图」):
+  //   gone=0 且 (folder_id 为空 或 所在文件夹没把「看板来源」注销)。
+  // 不加这层会出现两类怪象: 来源已注销的图(光箱查不到 tag, 显示"库外图片")和
+  // 文件早已搬走但 gone 没机会被 ingest 标记的幽灵记录(缩略图 404, 0×0)。
+  const offFolders = (() => {
+    try {
+      return db.prepare('SELECT id FROM folders WHERE as_source = 0').all().map((r) => Number(r.id))
+    } catch { return [] }   // 全新空库可能还没有 folders 表 —— 没有可见性概念, 直接扫
+  })()
+  const vis = offFolders.length
+    ? ` AND (folder_id IS NULL OR folder_id NOT IN (${offFolders.map(() => '?').join(',')}))`
+    : ''
   const rows = db
     .prepare(
       `SELECT id, path, tags${dimSel.length ? ', ' + dimSel.join(', ') : ''} FROM images
-       ${hasGone ? 'WHERE gone = 0' : ''} ${hasGone ? 'AND' : 'WHERE'} tags <> ''`
+       WHERE ${hasGone ? 'gone = 0 AND ' : ''}tags <> ''${vis}`
     )
-    .all()
+    .all(...offFolders)
 
   // ── pass 1: tag 内联成数字 id + df 统计(内存从 3.2M 字符串降到 13k×4B) ──
   const idOf = new Map()
@@ -136,6 +150,7 @@ export function findDuplicateGroups(opts = {}) {
 
   // 上面 pass2 用了 u*2^30+v 的乘法键(小行号在前), 与解码保持同一编码
   let nCandidates = 0
+  let nIgnored = 0
   const groups = []
   const bestPairShared = new Map() // root -> { tags:[], score }
 
@@ -165,6 +180,14 @@ export function findDuplicateGroups(opts = {}) {
       if (!charList[b].some((i) => sa.has(i))) score *= 0.5
     }
     if (score < threshold) continue
+    // 误报忽略(2026-10-17): 用户标记过的图片对直接跳过 —— 用 images.id 做键
+    // (id 在「移动=改址」/重启间稳定; 按行号做键重启后就会错位)。
+    if (ignorePairs && ignorePairs.size) {
+      const ia = Number(rows[a].id)
+      const ib = Number(rows[b].id)
+      const pk = ia < ib ? `${ia}|${ib}` : `${ib}|${ia}`
+      if (ignorePairs.has(pk)) { nIgnored++; continue }
+    }
     union(a, b)
     sharedNames.sort((x, y) => wArr[y] - wArr[x])
     const root = find(a)
@@ -206,6 +229,7 @@ export function findDuplicateGroups(opts = {}) {
   return {
     scanned: N,
     candidates: nCandidates,
+    ignoredPairs: nIgnored,
     groups: groups.slice(0, maxGroups),
     truncated,
     elapsedMs: Date.now() - t0,

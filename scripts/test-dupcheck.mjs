@@ -1,8 +1,8 @@
 /**
  * dupcheck 查重测试(2026-10-17) —— 纯 Node, 临时库, 不启 Electron
  * 覆盖: 相同 tag 集合成组 / 链式合并(A≈B,B≈C) / 不同角色惩罚把 D 排除 /
- *       无关图不误报 / gone 与空 tags 排除 / best=最大分辨率 / 阈值敏感性 /
- *       共享 tag 列表按权重排序
+ *       无关图不误报 / gone 与空 tags 排除 / as_source=0 文件夹排除 /
+ *       ignorePairs 误报忽略 / best=最大分辨率 / 阈值敏感性 / 共享 tag 列表按权重排序
  */
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -107,7 +107,38 @@ ok('threshold=0.2 时 d 并入 → {a,b,c,d} 一组(惩罚只在低阈值放开)
   assert.deepEqual(g.items.map((it) => path.basename(it.path)).sort(), ['a.png', 'b.png', 'c.png', 'd.png'])
 })
 
-console.log('④ 空库/无候选安全')
+console.log('④ 可见性: 来源已注销文件夹(as_source=0)的图不参与(2026-10-17)')
+db.prepare(
+  `INSERT INTO folders (id, path, label, as_source, as_scan) VALUES (2, ?, 'hidden', 0, 0)`
+).run(P('hidden-root'))
+db.prepare(
+  `INSERT INTO images (path, src_id, folder_id, tags, tags_src, gone, px_w, px_h, size)
+   VALUES (?, 0, 2, ?, 'test', 0, 900, 900, 900)`
+).run(P('i-hidden.png'), base5)
+r = dupcheck.findDuplicateGroups({ threshold: 0.65 })
+ok('隐藏文件夹里的幽灵图被排除: scanned 仍=6', () => assert.equal(r.scanned, 6))
+ok('结果里没有 i-hidden', () => assert.ok(!groupOf(r, 'i-hidden.png')))
+db.prepare('UPDATE folders SET as_source = 1 WHERE id = 2').run()
+r = dupcheck.findDuplicateGroups({ threshold: 0.65 })
+ok('开关打开后同一张图恢复参与: scanned=7', () => assert.equal(r.scanned, 7))
+db.prepare('UPDATE folders SET as_source = 0 WHERE id = 2').run()
+r = dupcheck.findDuplicateGroups({ threshold: 0.65 })
+
+console.log('⑤ 误报忽略: ignorePairs 命中的图片对跳过')
+const idOfName = {}
+for (const row of db.prepare('SELECT id, path FROM images').all()) {
+  idOfName[path.basename(row.path)] = Number(row.id)
+}
+const efKey = [idOfName['e.png'], idOfName['f.png']].sort((a, b) => a - b).join('|')
+r = dupcheck.findDuplicateGroups({ threshold: 0.65, ignorePairs: new Set([efKey]) })
+ok('忽略 {e,f} 对后该组消失', () => assert.ok(!groupOf(r, 'e.png') && !groupOf(r, 'f.png')))
+ok('其他组不受影响: {a,b,c} 仍在', () => assert.deepEqual(groupIds(r), ['a.png+b.png+c.png']))
+ok('ignoredPairs 计数=1', () => assert.equal(r.ignoredPairs, 1))
+r = dupcheck.findDuplicateGroups({ threshold: 0.65, ignorePairs: new Set(['999999|1000000']) })
+ok('未命中的忽略对不影响结果', () => assert.deepEqual(groupIds(r).sort(), ['a.png+b.png+c.png', 'e.png+f.png']))
+ok('未命中时 ignoredPairs=0', () => assert.equal(r.ignoredPairs, 0))
+
+console.log('⑥ 空库/无候选安全')
 ok('全新空库不炸', () => {
   store.closeDb()   // 库句柄是单例, 先关再换 workspace 才真的指向新目录
   const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'dupcheck-empty-'))

@@ -498,7 +498,9 @@ function preheat() {
 
 .lb-path {
   font-size: 10px; color: var(--faint); word-break: break-all;
-  line-height: 1.5; max-height: 46px; overflow: auto;
+  line-height: 1.5;
+  /* 2026-10-17: 去掉 max-height 截断 —— 长路径之前在 46px 处被拦腰剪断,
+     用户看到"路径被遮盖住一半"。完整换行显示, 高度交给侧栏弹性布局消化。 */
 }
 .lb-badges { display: flex; flex-direction: column; gap: 4px; }
 .badge {

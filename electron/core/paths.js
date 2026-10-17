@@ -175,6 +175,9 @@ export const USER_FILES = [
   'cart_history.json',      // 购物车结算历史
   'export_presets.json',    // 导出预设(自动导出用)
   'scan_folders.json',      // 扫描文件夹收藏夹(含本机路径)
+  'dupcheck_ignore.json',   // 查重误报忽略表(图片对)
+  'cart_preset.json',       // 购物车自动导出预设(DATA_ROUTE 登记过, 分类表此前漏登记)
+  'replace_sets.json',      // 替换规则组(同上)
 ]
 export const USER_DIRS = ['.thumb_cache']
 
@@ -248,6 +251,8 @@ export const DATA_ROUTE = Object.freeze({
   'replace_sets.json': { kind: 'user' },
   // 登记表: 真源是 tags.db 的 folders 表, 这份 json 降级为「导出备份 + 首次导入源」
   'scan_folders.json': { kind: 'user', as: 'folders.json' },
+  // 查重误报忽略表(2026-10-17): 图片对 id 键, 用户个人判断, 归 U 用户数据
+  'dupcheck_ignore.json': { kind: 'user' },
   // U 规则: 导出词表
   'export_bg.txt': { kind: 'rules' },
   'export_blacklist.txt': { kind: 'rules' },

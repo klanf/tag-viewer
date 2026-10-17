@@ -45,6 +45,7 @@ import { previewTagEdit, applyTagEdit } from './core/tagedit.js'
 import { openDb } from './core/store.js'
 import { loadCats, catOf } from './core/tagcats.js'
 import { findDuplicateGroups } from './core/dupcheck.js'
+import { loadIgnorePairs, addIgnorePairs, clearIgnorePairs } from './core/dupignore.js'
 import { copyImageWithNotice, openWithDialog } from './core/clipboardImage.js'
 import {
   runIngest, ingestStatus, pauseIngest, ingestState, queueStats, enqueueFolderUntagged,
@@ -553,14 +554,18 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'suggest:get': safe((raw) => getSuggest(raw)),
     'tags:all': safe((raw) => getAllTags(raw)),
     // tag 查重(2026-10-17): 两阶段相似度分组, 纯内存 2s 左右, 不落库。
-    // 阈值走参数, 结果 { scanned, candidates, groups:[{score,shared,items}], elapsedMs }
+    // 阈值走参数, 结果 { scanned, candidates, ignoredPairs, groups:[{score,shared,items}], elapsedMs }
     'dup:scan': safe((raw) => {
       const o = raw || {}
       return findDuplicateGroups({
         threshold: Number(o.threshold) > 0 ? Number(o.threshold) : 0.85,
         maxGroups: Number(o.maxGroups) > 0 ? Number(o.maxGroups) : 2000,
+        ignorePairs: loadIgnorePairs(),
       })
     }),
+    // 误报忽略(2026-10-17): 渲染层把整组两两 id 对发来, 持久化到 user/dupcheck_ignore.json
+    'dup:ignore:add': safe((raw) => ({ added: addIgnorePairs(raw?.pairs || []) })),
+    'dup:ignore:clear': safe(() => ({ removed: clearIgnorePairs() })),
     // 标签分类映射(2026-10-16): 展示端分组着色用。tags 字典的 cat 列是快照,
     // 空的(新词/分类器当时不可用)现场 classify 补 —— 保证映射永远可用。
     'tags:cats': safe(() => {

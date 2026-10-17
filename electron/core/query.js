@@ -16,6 +16,7 @@ import { translateMap, translateMany, zhIndex } from './translate.js'
 import { parseQuery, scopeRecords, searchCached, applySort, frozenKey } from './search.js'
 import { extractImagePrompt } from './png.js'
 import { promptToTags, dedupeTags } from './prompt.js'
+import { openDb } from './store.js'
 
 // ---------------------------------------------------------------- 统计
 
@@ -566,6 +567,22 @@ export function getTagsForPath(raw = {}) {
   }
 }
 
+/**
+ * 库内但不在内存数据集的图(2026-10-17 兜底): 记录在 tags.db 里好好的, 只是
+ * 所在文件夹把「看板来源」注销了(as_source=0) -> ds.byPath 查不到 -> 光箱把它
+ * 当库外图, 明明有 tag 却显示"库外图片 · 未知来源"。这里按 path 直查一次库
+ * (gone=0), 查到就按正常库内图渲染 —— 与查重「只扫可见图」的决定互补:
+ * 查重不再捞出这类图, 但收藏页/历史入口等路径万一碰到, 标签也不会丢。
+ */
+function dbTagsByPath(p) {
+  try {
+    const row = openDb().prepare('SELECT tags FROM images WHERE path = ? AND gone = 0').get(p)
+    if (!row || !row.tags) return null
+    const tags = String(row.tags).split(',').map((t) => t.trim()).filter(Boolean)
+    return tags.length ? tags : null
+  } catch { return null }
+}
+
 /** lightbox 用的结构化数据: 角色 / 系列 / 全部标签(已滤掉 Danbooru 分类噪声) */
 export function getLightboxData(raw = {}) {
   const p = typeof raw.path === 'string' ? raw.path : ''
@@ -576,7 +593,11 @@ export function getLightboxData(raw = {}) {
     return packLightbox(p, rec.tags)
   }
 
-  // 回退: 库外图片(「扫描文件夹」里的 AI 生成图) —— 直接读图片元数据。
+  // 兜底①: 库内记录但来源被隐藏(见 dbTagsByPath 注释)
+  const dbTags = dbTagsByPath(p)
+  if (dbTags) return packLightbox(p, dbTags)
+
+  // 兜底②: 库外图片(「扫描文件夹」里的 AI 生成图) —— 直接读图片元数据。
   // 注意: 即使没有任何元数据也要回 200 语义, 否则前端拿不到结构, lightbox 直接空白。
   if (fs.existsSync(p)) {
     const { text, source } = extractImagePrompt(p)

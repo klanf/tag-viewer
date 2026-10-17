@@ -67,3 +67,7 @@ tutorial-video/
 
 # 根目录的孤儿数据库(测试残留); 真正的库在 data/tags.db, 已由 data/* 覆盖
 /tags.db
+
+# SQLite 边车文件(活库运行时产生, 任何位置都不入库)
+*.db-shm
+*.db-wal
