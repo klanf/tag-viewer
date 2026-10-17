@@ -199,7 +199,7 @@ async function reload() {
  * 反推在后台跑, 队列 done≥1 时重载数据集就能进看板, 反推继续在后台跑完。
  * 若反推一直没动(降级 = 环境没好), 直接进环境下载面板 —— 不再让用户干等 90 秒。 */
 const taggingWait = computed(() => app.phase === 'error' && /打标队列|等待反推/.test(app.error || ''))
-const tagQ = ref({ done: 0, total: 0, pending: 0 })
+const tagQ = ref({ done: 0, total: 0, pending: 0, failed: 0 })
 const tagWarn = ref('')
 const tagPct = computed(() => {
   const { done, total } = tagQ.value
@@ -213,6 +213,7 @@ function startTagPoll() {
   let lastDone = -1
   let stallSince = Date.now()
   let envKicked = false
+  let reloadFails = 0
   const tick = async () => {
     if (app.ready || !taggingWait.value) return          // 已放行 / 状态已变, 停
     try {
@@ -227,7 +228,10 @@ function startTagPoll() {
       }
       const st = await api.ingestStatus()
       const q = st?.queue || {}
-      tagQ.value = { done: Number(q.done) || 0, total: Number(q.total) || 0, pending: Number(q.pending) || 0 }
+      tagQ.value = {
+        done: Number(q.done) || 0, total: Number(q.total) || 0,
+        pending: Number(q.pending) || 0, failed: Number(q.failed) || 0,
+      }
       if (tagQ.value.done !== lastDone) {
         lastDone = tagQ.value.done
         stallSince = Date.now()
@@ -239,6 +243,11 @@ function startTagPoll() {
       if (tagQ.value.done >= 1) {
         await reload()
         if (app.ready) return                            // 放行成功, 遮罩随 app.ready 消失
+        // 2026-10-17 (远端用户"1000/1000 读完都进不去"): 队列全 done 且没有
+        // pending 了还进不去 = 不会再有新标签产出(dataset 那边已是终态错误),
+        // 再一秒一刷只会把真实错误顶掉 —— 试 3 次就停, 让错误文案露出来。
+        reloadFails++
+        if (tagQ.value.pending === 0 && tagQ.value.total > 0 && reloadFails >= 3) return
       }
     } catch { /* 主进程忙, 下一拍再看 */ }
     setTimeout(tick, 1000)
@@ -284,6 +293,7 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
             <div class="nums">
               <span>{{ tagPct }}%</span>
               <span>已入库 {{ nfmt(tagQ.done) }} / {{ nfmt(tagQ.total) }} 张</span>
+              <span v-if="tagQ.failed" style="color: var(--danger);">失败 {{ nfmt(tagQ.failed) }}</span>
             </div>
             <div class="hint">
               反推在后台跑，反推出第一批标签即自动进入看板，之后反推继续在后台完成。<br>
@@ -311,6 +321,7 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
               <TvButton variant="primary" :loading="picking || scanning" @click="startWithFolder">
                 📁 选择图片文件夹，马上开始
               </TvButton>
+              <TvButton variant="secondary" title="配置/文件修好后, 不用重启应用直接重载" @click="reload">↻ 重试</TvButton>
             </div>
             <div v-if="scanning" class="hint">{{ scanNote }}（完成后自动进入看板）</div>
             <div class="btns">

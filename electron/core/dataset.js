@@ -380,14 +380,35 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
     // 场景) —— 后者是**暂态**, 不是错误文案该吓唬人的样子(旧文案让用户以为
     // 扫描失败"一张图都没入库")。反推消费完队列、tags 落库后, 下一轮 startLoad
     // 自然就绪。
-    let foldersN = 0, queuedN = 0
+    // 2026-10-17 (远端用户反馈"1000/1000 读完都进不去"): 队列全 done 却一条
+    // 标签都没落库是**终态**不是暂态 —— "反推无结果"也标 done(防循环, 刻意
+    // 不写 images), 全库都无结果时旧文案会让启动遮罩把它当暂态无限重试。
+    // 典型成因: 文件夹里全是非动漫照片(WD14 对真人照片基本无输出)/图损坏。
+    let foldersN = 0, pendingN = 0, doneN = 0, failedN = 0
     try {
       const db = openDb()
       foldersN = Number(db.prepare('SELECT COUNT(*) AS n FROM folders').get()?.n || 0)
-      queuedN = Number(db.prepare("SELECT COUNT(*) AS n FROM tag_queue WHERE state IN ('pending','done')").get()?.n || 0)
+      const q = db.prepare(`
+        SELECT
+          SUM(CASE WHEN state = 'pending' THEN 1 ELSE 0 END) AS pending,
+          SUM(CASE WHEN state = 'done' THEN 1 ELSE 0 END) AS done,
+          SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) AS failed
+        FROM tag_queue`).get() || {}
+      pendingN = Number(q.pending) || 0
+      doneN = Number(q.done) || 0
+      failedN = Number(q.failed) || 0
     } catch { /* 库还没建好, 按真没登记处理 */ }
-    if (foldersN > 0 && queuedN > 0) {
-      throw new Error(`已登记 ${foldersN} 个文件夹, ${queuedN} 张图正在打标队列里等待反推入库 —— 反推跑完后看板就会亮起来`)
+    if (foldersN > 0 && pendingN + doneN + failedN > 0) {
+      if (pendingN > 0) {
+        throw new Error(`已登记 ${foldersN} 个文件夹, ${pendingN} 张图正在打标队列里等待反推入库 —— 反推跑完后看板就会亮起来`)
+      }
+      // 终态: 队列跑完了却没产出。文案刻意避开"打标队列/等待反推"字样 ——
+      // 启动遮罩靠这两个词识别"暂态自动重试", 命中了就会变成无限 reload 循环。
+      throw new Error(
+        `反推已经跑完(出标签 ${doneN + failedN} 张, 其中失败 ${failedN} 张), 但这批图一张标签都没能落进库 —— ` +
+        `常见原因: 图片不是动漫风格(WD14 模型对真人照片基本没有输出)、图片损坏, 或反推环境有问题。` +
+        `换一个含动漫图的文件夹试试; 若确认是动漫图, 请带着 logs/launch.log 反馈`
+      )
     }
     throw new Error('没有可用的标签数据: 标签库还是空的, 也还没有登记任何图片文件夹')
   }
