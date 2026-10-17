@@ -13,11 +13,16 @@
  *
  * 扫描口径与看板数据集一致(gone=0 + 来源未注销, 2026-10-17);
  * 误报对(dupignore)在达标后、合并前剔除。
+ * 每张图附 unsafe 0/1/2(安全模式标记, 与数据集同一套词表) —— 查重面板
+ * 按它接安全模式过滤, 不让露骨内容从面板漏出去(2026-10-17 用户补充)。
  * 纯内存一次算完, 不落库不建索引。局限(诚实): tag 缺失或两图 tag 集差异大
  * 会漏检; 同图不同尺寸/裁剪版可能漏 —— 感知哈希是二期补充。
  */
 import { openDb } from './store.js'
 import { loadCats, catOf } from './tagcats.js'
+// 安全模式标记: 与数据集同一套词表/判定(safetyMatcher 带 mtime 缓存), 给每张图
+// 附 unsafe 0/1/2, 前端拿它接安全模式过滤(查重面板不该成为露骨内容的漏网之鱼)。
+import { safetyMatcher, unsafeLevelOf } from './safety.js'
 /** 单例缓存段位判定(catOf 内部有 memo, 这里只省 split 开销) */
 const segCache = new Map()
 function segOf(name) {
@@ -67,9 +72,13 @@ export function findDuplicateGroups(opts = {}) {
   const idOf = new Map()
   const names = []
   const df = []
-  const lists = rows.map((r) => {
+  const sm = safetyMatcher()        // 安全模式词表(带 mtime 缓存), 全库共用一次
+  const unsafeArr = []
+  const lists = rows.map((r, k) => {
+    const tagArr = r.tags.split(',')
+    unsafeArr[k] = unsafeLevelOf(tagArr, sm)
     const ids = new Set()
-    for (const t of r.tags.split(',')) {
+    for (const t of tagArr) {
       if (!t) continue
       let i = idOf.get(t)
       if (i === undefined) {
@@ -217,6 +226,7 @@ export function findDuplicateGroups(opts = {}) {
         px_w: rows[k].px_w || 0,
         px_h: rows[k].px_h || 0,
         size: rows[k].size || 0,
+        unsafe: unsafeArr[k] || 0,
         best: false,
       }))
       .sort((x, y) => y.px_w * y.px_h - x.px_w * x.px_h || y.size - x.size)

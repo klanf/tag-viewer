@@ -2,7 +2,8 @@
  * dupcheck 查重测试(2026-10-17) —— 纯 Node, 临时库, 不启 Electron
  * 覆盖: 相同 tag 集合成组 / 链式合并(A≈B,B≈C) / 不同角色惩罚把 D 排除 /
  *       无关图不误报 / gone 与空 tags 排除 / as_source=0 文件夹排除 /
- *       ignorePairs 误报忽略 / best=最大分辨率 / 阈值敏感性 / 共享 tag 列表按权重排序
+ *       ignorePairs 误报忽略 / best=最大分辨率 / 阈值敏感性 / 共享 tag 列表按权重排序 /
+ *       unsafe 安全模式标记(2026-10-17)
  */
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -138,7 +139,22 @@ r = dupcheck.findDuplicateGroups({ threshold: 0.65, ignorePairs: new Set(['99999
 ok('未命中的忽略对不影响结果', () => assert.deepEqual(groupIds(r).sort(), ['a.png+b.png+c.png', 'e.png+f.png']))
 ok('未命中时 ignoredPairs=0', () => assert.equal(r.ignoredPairs, 0))
 
-console.log('⑥ 空库/无候选安全')
+console.log('⑥ 安全模式标记: 每张图带 unsafe(2026-10-17 用户补充)')
+// 在此前断言跑完后再插敏感图, 免得动前面所有 scanned 计数
+ins.run(P('s1.png'), 'nude,silver_hair,long_hair', 0, 500, 500, 100)
+ins.run(P('s2.png'), 'nude,silver_hair,long_hair', 0, 500, 500, 100)
+r = dupcheck.findDuplicateGroups({ threshold: 0.65 })
+ok('s1/s2 成组且 unsafe=1(nude 命中默认 core 段)', () => {
+  const g = groupOf(r, 's1.png')
+  assert.ok(g, '应成组')
+  assert.deepEqual(g.items.map((it) => it.unsafe).sort(), [1, 1])
+})
+ok('干净图 unsafe=0', () => {
+  const g = groupOf(r, 'a.png')
+  assert.ok(g.items.every((it) => it.unsafe === 0))
+})
+
+console.log('⑦ 空库/无候选安全')
 ok('全新空库不炸', () => {
   store.closeDb()   // 库句柄是单例, 先关再换 workspace 才真的指向新目录
   const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'dupcheck-empty-'))
