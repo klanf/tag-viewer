@@ -2,9 +2,11 @@
 /**
  * 规则编辑器 —— 黑名单 / 替换规则共用一个弹窗
  * ==========================================
- * 黑名单仍是纯 textarea; 替换规则升级为**双模式**(2026-10-18):
- *   构建器(默认): 每条规则一行 —— 类型下拉 + 模式联想 + 原标签三态 + 替换标签联想chips,
- *                 不用再记 * / @ / {tag} 这些符号; 注释收纳到头/尾两个注释区。
+ * 黑名单仍是纯 textarea; 替换规则为**双模式**(2026-10-18, UI v2 重排):
+ *   构建器(默认): 每条规则一张**两行卡片** —— 第一行 类型+模式→导出结果预览(serializeRow
+ *                 实时生成, 所见即导出); 第二行 原标签三态+替换标签联想chips。
+ *                 左侧独立**组栏**(xl 弹窗 1200px), 注释/帮助/测试器分别收进
+ *                 工具栏按钮与底部停靠条, 不再纵向堆叠。
  *   原文模式:     老的 textarea, 注释随写、批量粘贴、构建器表达不了的行(raw)都在这改。
  * 两种模式共享同一份组文本: 切换/切组/保存时双向序列化(src/utils/replaceGrammar.js)。
  * 数据格式(user/replace_sets.json 的 text 字段)一字未变 —— 导出/预设/角色表无感。
@@ -61,9 +63,10 @@ const tips = computed(() => (isBlack.value
      '@xxx@ 整段匹配: @boy@ 命中 boy / xx_boy / boy_xx, 但不命中 tomboy / boyish / xxxboy',
      '  段里也能用 *: @boy*@ 段以 boy 开头 · @*hair@ 段以 hair 结尾']
   : builderMode.value
-    ? ['每行选「匹配类型」再填模式, 替换标签有联想(带中文和图片数) —— 符号交给程序生成',
+    ? ['每条规则一张卡片: 选「匹配类型」填模式, 替换标签有联想(带中文和图片数)',
+       '卡片第一行是**导出结果预览** —— 你看到的就是导出文件里会出现的文本',
        '「保留原标签」= 替换侧自动带 {tag}; 「保留+后缀」= {tag}_art 这种改写',
-       '想写注释/批量粘贴/改特殊规则 → 右上角「⌨ 原文模式」']
+       '想写注释/批量粘贴/改特殊规则 → 工具栏「⌨ 原文模式」; 注释在「🗒 注释」里']
     : ['每行一条: 模式 -> 替换后的标签(可多个, 逗号分隔); # 注释',
        '替换侧写 {tag} = 命中时的原标签(大小写不敏感), 用一条规则就能"留下来再追加"',
        '  *_painting -> {tag}, masterpiece, best_quality   给整类风格统一追质量词',
@@ -83,6 +86,11 @@ const headNotes = ref('')       // 第一条规则前的注释(分组说明)
 const tailNotes = ref('')       // 行间注释收纳到这里 + 规则后面的内容
 const rows = ref([])            // 行模型数组(见 replaceGrammar.js)
 const rawCount = ref(0)         // 构建器表达不了的行数(去原文模式改)
+const hasNotes = computed(() => !!(headNotes.value.trim() || tailNotes.value.trim()))
+
+/* 工具栏浮层 */
+const helpOpen = ref(false)
+const notesOpen = ref(false)
 
 function parseCurrent() {
   const p = parseRules(cur.value?.text || '')
@@ -103,6 +111,8 @@ function commitToSet() {
 }
 
 function switchMode() {
+  helpOpen.value = false
+  notesOpen.value = false
   if (builderMode.value) {
     commitToSet()               // 构建 → 原文: 先落文本
     builderMode.value = false
@@ -131,6 +141,9 @@ function addRow(prefill = null) {
 }
 
 function delRow(i) { rows.value.splice(i, 1) }
+
+/** 导出结果预览 —— 与导出引擎同一份序列化, 所见即导出 */
+function rowPreview(r) { return serializeRow(r) }
 
 const curCount = computed(() => (builderMode.value
   ? rows.value.filter((r) => r.mode !== 'raw').length
@@ -252,7 +265,9 @@ watch(activeId, (nv, ov) => {
   nextTick(() => { if (builderMode.value) parseCurrent() })
 })
 
-watch(() => props.modelValue, (v) => { if (v) load() })
+watch(() => props.modelValue, (v) => {
+  if (v) { load(); helpOpen.value = false; notesOpen.value = false; editing.value = null; confirmDel.value = false }
+})
 
 async function save() {
   saving.value = true
@@ -285,155 +300,193 @@ async function save() {
   <TvModal
     :model-value="modelValue"
     :title="title"
-    size="md"
+    :size="isBlack ? 'lg' : 'xl'"
     @update:model-value="(v) => emit('update:modelValue', v)"
   >
-    <div class="tip">
-      <div v-for="(t, i) in tips" :key="i">{{ t }}</div>
-    </div>
-
-    <!-- 替换规则: 组切换(chips) + 增删改(就地表单, 不用 window.prompt/confirm) -->
-    <div v-if="!isBlack" class="setbar">
-      <div v-if="!editing" class="setrow">
-        <TvChip
-          v-for="x in sets"
-          :key="x.id"
-          :label="x.name + (x.id === defaultId ? ' ★' : '')"
-          :active="x.id === activeId"
-          @click="activeId = x.id"
-        />
-        <TvButton size="xs" variant="ghost" @click="startNew">＋ 新建</TvButton>
-        <TvButton size="xs" variant="ghost" @click="startRename">✎ 改名</TvButton>
-        <TvButton size="xs" variant="ghost" @click="copySet">⧉ 复制</TvButton>
-        <TvButton size="xs" variant="ghost" :disabled="activeId === defaultId" @click="setAsDefault">★ 设为默认</TvButton>
-        <TvButton v-if="!confirmDel" size="xs" variant="ghost" @click="askDel">🗑 删除</TvButton>
-        <template v-else>
-          <span class="warn-txt">确定删掉「{{ cur?.name }}」?</span>
-          <TvButton size="xs" variant="warn" @click="reallyDel">确定删</TvButton>
-          <TvButton size="xs" variant="ghost" @click="confirmDel = false">算了</TvButton>
-        </template>
+    <!-- ============ 黑名单: 纯 textarea + 常驻提示(结构不变) ============ -->
+    <template v-if="isBlack">
+      <div class="tip">
+        <div v-for="(t, i) in tips" :key="i">{{ t }}</div>
       </div>
-      <div v-else class="setrow">
-        <TvInput
-          v-model="editing.name"
-          size="sm"
-          :placeholder="editing.id ? '新的组名' : '新规则组的名字'"
-          @enter="commitEdit"
-        />
-        <TvButton size="xs" variant="primary" @click="commitEdit">确定</TvButton>
-        <TvButton size="xs" variant="ghost" @click="editing = null">取消</TvButton>
-      </div>
-    </div>
-
-    <div v-if="loading" class="loading">读取中...</div>
-
-    <!-- ============ 黑名单: 仍是纯 textarea ============ -->
-    <textarea
-      v-else-if="isBlack"
-      v-model="text"
-      class="editor"
-      spellcheck="false"
-      :placeholder="placeholder"
-    />
-
-    <!-- ============ 替换规则: 构建器模式 ============ -->
-    <template v-else-if="builderMode">
-      <details class="notes">
-        <summary>🗒 分组注释{{ headNotes.trim() ? '(有内容)' : '' }}</summary>
-        <textarea v-model="headNotes" class="notes-area" spellcheck="false" placeholder="文件开头的 # 注释/分组说明, 会写在规则前面" />
-      </details>
-
-      <div class="rows">
-        <div v-for="(r, i) in rows" :key="i" class="row" :class="{ raw: r.mode === 'raw' }">
-          <template v-if="r.mode !== 'raw'">
-            <select v-model="r.mode" class="mode-sel" title="匹配类型">
-              <option v-for="m in MODE_OPTIONS" :key="m.value" :value="m.value">{{ m.label }}</option>
-            </select>
-            <TvTagComplete
-              v-model="r.core"
-              class="row-core"
-              :placeholder="MODE_OPTIONS.find((m) => m.value === r.mode)?.example || '模式'"
-            />
-            <span class="arr">→</span>
-            <select v-model="r.keep" class="mode-sel keep-sel" title="命中的原标签怎么处理">
-              <option :value="false">丢弃原标签</option>
-              <option :value="true">保留原标签</option>
-            </select>
-            <input
-              v-if="r.keep"
-              v-model="r.suffix"
-              class="suffix"
-              placeholder="后缀可空"
-              title="保留原标签并加后缀: 填 _art 生成 {tag}_art; 留空就是原样保留"
-            >
-            <span class="chips">
-              <span v-for="(t, j) in r.repl" :key="j" class="chip">
-                {{ t }}<b class="x" title="移除" @click="r.repl.splice(j, 1)">×</b>
-              </span>
-              <TvTagComplete
-                class="chip-add"
-                placeholder="+ 联想添加…"
-                @pick="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
-                @confirm="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
-              />
-            </span>
-          </template>
-          <template v-else>
-            <span class="raw-badge">高级</span>
-            <span class="raw-text">{{ r.text }}</span>
-            <span class="raw-hint">符号太特殊, 请切「原文模式」修改</span>
-          </template>
-          <span class="sp" />
-          <TvButton size="xs" variant="ghost" title="删除这条规则" @click="delRow(i)">🗑</TvButton>
-        </div>
-        <div v-if="!rows.length" class="empty">本组还没有规则 —— 点下面添加, 或切「原文模式」粘贴</div>
-        <TvButton size="xs" variant="ghost" class="add" @click="addRow()">＋ 添加规则</TvButton>
-      </div>
-
-      <details class="notes">
-        <summary>🗒 其他注释{{ tailNotes.trim() ? '(有内容)' : '' }}</summary>
-        <textarea v-model="tailNotes" class="notes-area" spellcheck="false" placeholder="行间注释会收纳到这里, 保存时写在规则后面" />
-      </details>
-
-      <!-- 规则测试器: 与导出引擎同一套代码(后端 rules:test) -->
-      <div class="tester">
-        <span class="lab">🧪 规则测试</span>
-        <TvTagComplete v-model="testTag" class="test-in" placeholder="输入一个标签试试, 如 blue_hair" :limit="8" />
-        <span v-if="testRes" class="test-out">
-          <template v-if="testRes.hits?.length">
-            命中 <b>{{ testRes.hits.map((h) => h.pat).join(' · ') }}</b>
-            → <b class="ok">{{ testRes.result.join(', ') }}</b>
-          </template>
-          <template v-else>未命中任何规则 → 原样 <b>{{ testRes.result.join(', ') }}</b></template>
-        </span>
-        <span v-else-if="testTag.trim()" class="lab">测试中…</span>
-      </div>
-      <div class="stat faint-note">测试基于**已保存**的规则; 编辑中的改动点 💾 保存后才会参与测试</div>
-    </template>
-
-    <!-- ============ 替换规则: 原文模式 ============ -->
-    <template v-else-if="cur">
       <textarea
-        v-model="cur.text"
-        class="editor"
+        v-if="!loading"
+        v-model="text"
+        class="editor tall"
         spellcheck="false"
         :placeholder="placeholder"
       />
-      <div class="stat">
-        本组 <b>{{ curCount }}</b> 条 · 共 <b>{{ sets.length }}</b> 套
-        <TvButton size="xs" variant="ghost" class="mode-btn" @click="switchMode">▦ 构建器模式</TvButton>
-      </div>
+      <div v-if="loading" class="loading">读取中...</div>
     </template>
 
-    <!-- 构建器模式的统计/切换行 -->
-    <div v-if="!isBlack && !loading && builderMode" class="stat">
-      本组 <b>{{ curCount }}</b> 条<template v-if="rawCount"> · <span class="warn-txt">{{ rawCount }} 条高级规则</span></template>
-      · 共 <b>{{ sets.length }}</b> 套
-      <span class="faint">(导出时在各导出入口选组; 不选 = 默认组)</span>
-      <TvButton size="xs" variant="ghost" class="mode-btn" @click="switchMode">⌨ 原文模式</TvButton>
-      <template v-if="bg && bg.append && bg.append.length">
-        · 🌄 缺背景时补 <b>{{ bg.append.join('/') }}</b>
-      </template>
+    <!-- ============ 替换规则: 左组栏 + 右主区 ============ -->
+    <div v-else class="grid">
+      <!-- 左: 组栏 -->
+      <aside class="side">
+        <div class="side-cap">规则组 · {{ sets.length }} 套</div>
+        <div class="side-list">
+          <div
+            v-for="x in sets"
+            :key="x.id"
+            class="side-item"
+            :class="{ on: x.id === activeId }"
+            @click="activeId = x.id"
+          >
+            <div class="side-name">
+              {{ x.name }}
+              <span v-if="x.id === defaultId" class="star" title="默认组">★</span>
+            </div>
+            <div class="side-meta">
+              {{ x.id === activeId ? curCount + ' 条 · 编辑中' : '已保存组' }}
+            </div>
+          </div>
+        </div>
+        <div class="side-ops">
+          <template v-if="!editing && !confirmDel">
+            <TvButton size="xs" variant="ghost" @click="startNew">＋ 新建</TvButton>
+            <TvButton size="xs" variant="ghost" @click="startRename">✎ 改名</TvButton>
+            <TvButton size="xs" variant="ghost" @click="copySet">⧉ 复制</TvButton>
+            <TvButton size="xs" variant="ghost" :disabled="activeId === defaultId" @click="setAsDefault">★ 默认</TvButton>
+            <TvButton size="xs" variant="ghost" @click="askDel">🗑 删除</TvButton>
+          </template>
+          <template v-else-if="editing">
+            <TvInput
+              v-model="editing.name"
+              size="sm"
+              :placeholder="editing.id ? '新的组名' : '新规则组的名字'"
+              @enter="commitEdit"
+            />
+            <div class="side-ops-row">
+              <TvButton size="xs" variant="primary" @click="commitEdit">确定</TvButton>
+              <TvButton size="xs" variant="ghost" @click="editing = null">取消</TvButton>
+            </div>
+          </template>
+          <template v-else>
+            <span class="warn-txt">删「{{ cur?.name }}」?</span>
+            <div class="side-ops-row">
+              <TvButton size="xs" variant="warn" @click="reallyDel">确定删</TvButton>
+              <TvButton size="xs" variant="ghost" @click="confirmDel = false">算了</TvButton>
+            </div>
+          </template>
+        </div>
+      </aside>
+
+      <!-- 右: 主区 -->
+      <div class="main">
+        <!-- 工具栏: 模式切换 / 统计 / 注释 / 帮助 -->
+        <div class="bar">
+          <div class="seg">
+            <button type="button" class="seg-b" :class="{ on: builderMode }" @click="!builderMode && switchMode()">▦ 构建器</button>
+            <button type="button" class="seg-b" :class="{ on: !builderMode }" @click="builderMode && switchMode()">⌨ 原文</button>
+          </div>
+          <span class="bar-stat">本组 <b>{{ curCount }}</b> 条<template v-if="rawCount"> · <span class="warn-txt">{{ rawCount }} 条高级</span></template></span>
+          <span v-if="!builderMode" class="bar-stat faint">直接改文本, 支持批量粘贴</span>
+          <span
+            class="bar-btn"
+            :class="{ lit: hasNotes, open: notesOpen }"
+            title="分组注释(# 开头, 保存时写在规则前/后)"
+            @click="notesOpen = !notesOpen; helpOpen = false"
+          >🗒 注释<i v-if="hasNotes" class="dot" /></span>
+          <span
+            class="bar-btn help"
+            :class="{ open: helpOpen }"
+            title="语法说明"
+            @click="helpOpen = !helpOpen; notesOpen = false"
+          >?</span>
+
+          <!-- 浮层: 分组注释 -->
+          <div v-if="notesOpen" class="pop notes-pop">
+            <div class="pop-cap">开头注释(分组说明)</div>
+            <textarea v-model="headNotes" class="notes-area" spellcheck="false" placeholder="文件开头的 # 注释/分组说明, 会写在规则前面" />
+            <div class="pop-cap">结尾注释(行间注释收纳在这)</div>
+            <textarea v-model="tailNotes" class="notes-area" spellcheck="false" placeholder="行间注释会收纳到这里, 保存时写在规则后面" />
+          </div>
+          <!-- 浮层: 语法帮助 -->
+          <div v-if="helpOpen" class="pop help-pop">
+            <div v-for="(t, i) in tips" :key="i" class="help-line">{{ t }}</div>
+            <div v-if="bg && bg.append && bg.append.length" class="help-line">🌄 缺背景时自动补 <b>{{ bg.append.join('/') }}</b>(背景补全设置)</div>
+          </div>
+        </div>
+
+        <div v-if="loading" class="loading">读取中...</div>
+
+        <!-- 构建器: 两行式规则卡片 -->
+        <div v-else-if="builderMode" class="rows">
+          <div v-for="(r, i) in rows" :key="i" class="row" :class="{ raw: r.mode === 'raw' }" @click="r.mode === 'raw' && switchMode()">
+            <template v-if="r.mode !== 'raw'">
+              <div class="row-top">
+                <select v-model="r.mode" class="mode-sel" title="匹配类型">
+                  <option v-for="m in MODE_OPTIONS" :key="m.value" :value="m.value">{{ m.label }}</option>
+                </select>
+                <TvTagComplete
+                  v-model="r.core"
+                  class="row-core"
+                  :placeholder="MODE_OPTIONS.find((m) => m.value === r.mode)?.example || '模式'"
+                />
+                <span class="arr">→</span>
+                <code class="preview" :title="'导出效果: ' + rowPreview(r)">{{ rowPreview(r) }}</code>
+                <TvButton size="xs" variant="ghost" class="row-del" title="删除这条规则" @click.stop="delRow(i)">🗑</TvButton>
+              </div>
+              <div class="row-sub">
+                <span class="lab">原标签</span>
+                <select v-model="r.keep" class="mode-sel keep-sel" title="命中的原标签怎么处理">
+                  <option :value="false">丢弃</option>
+                  <option :value="true">保留</option>
+                </select>
+                <input
+                  v-if="r.keep"
+                  v-model="r.suffix"
+                  class="suffix"
+                  placeholder="+后缀可空"
+                  title="保留原标签并加后缀: 填 _art 生成 {tag}_art; 留空就是原样保留"
+                >
+                <span class="sep" />
+                <span class="lab">替换标签</span>
+                <span v-for="(t, j) in r.repl" :key="j" class="chip">
+                  {{ t }}<b class="x" title="移除" @click="r.repl.splice(j, 1)">×</b>
+                </span>
+                <TvTagComplete
+                  class="chip-add"
+                  placeholder="+ 联想添加…"
+                  @pick="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
+                  @confirm="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
+                />
+              </div>
+            </template>
+            <template v-else>
+              <span class="raw-badge">高级</span>
+              <code class="raw-text">{{ r.text }}</code>
+              <span class="raw-hint">构建器表达不了 · 点击卡片切「原文模式」修改</span>
+            </template>
+          </div>
+          <div v-if="!rows.length" class="empty">本组还没有规则 —— 点下面添加, 或切「原文模式」粘贴</div>
+          <TvButton size="xs" variant="ghost" class="add" @click="addRow()">＋ 添加规则</TvButton>
+        </div>
+
+        <!-- 原文模式 -->
+        <template v-else-if="cur">
+          <textarea
+            v-model="cur.text"
+            class="editor tall"
+            spellcheck="false"
+            :placeholder="placeholder"
+          />
+        </template>
+
+        <!-- 底部停靠: 规则测试条(构建器模式才有) -->
+        <div v-if="builderMode && !loading" class="tester">
+          <span class="lab">🧪 测试</span>
+          <TvTagComplete v-model="testTag" class="test-in" placeholder="输入一个标签试试, 如 blue_hair" :limit="8" />
+          <span v-if="testRes" class="test-out">
+            <template v-if="testRes.hits?.length">
+              命中 <b>{{ testRes.hits.map((h) => h.pat).join(' · ') }}</b>
+              → <b class="ok">{{ testRes.result.join(', ') }}</b>
+            </template>
+            <template v-else>未命中任何规则 → 原样 <b>{{ testRes.result.join(', ') }}</b></template>
+          </span>
+          <span v-else-if="testTag.trim()" class="lab">测试中…</span>
+          <span class="lab faint" style="margin-left: auto;">基于<b class="u">已保存</b>的规则</span>
+        </div>
+      </div>
     </div>
 
     <template #footer>
@@ -445,12 +498,6 @@ async function save() {
 
 <style scoped>
 .tip { color: var(--muted); font-size: 12px; line-height: 1.8; margin-bottom: 10px; }
-.setbar {
-  display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
-  padding: 8px 10px; margin-bottom: 10px;
-  background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-sm);
-}
-.setrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; width: 100%; }
 .warn-txt { font-size: 12px; color: var(--warn, #c8862a); }
 .editor {
   width: 100%;
@@ -467,44 +514,106 @@ async function save() {
   outline: none;
 }
 .editor:focus { border-color: var(--accent); }
+.editor.tall { min-height: 52vh; }
 .loading { color: var(--muted); font-size: 12px; padding: 20px 0; }
-.stat { color: var(--muted); font-size: 11px; margin-top: 10px; }
-.stat b { color: var(--accent); }
-.faint { color: var(--faint); }
 
-/* ---- 构建器 ---- */
-.notes { margin-bottom: 8px; font-size: 11px; color: var(--muted); }
-.notes summary { cursor: pointer; user-select: none; }
+/* ============ 网格: 左组栏 + 右主区 ============ */
+.grid { display: flex; gap: 0; min-height: 60vh; align-items: stretch; }
+.side {
+  flex: 0 0 200px; display: flex; flex-direction: column;
+  border-right: 1px solid var(--border); padding-right: 12px; margin-right: 14px;
+}
+.side-cap { font-size: 11px; color: var(--faint); padding: 2px 6px 8px; }
+.side-list { flex: 1 1 auto; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.side-item { border-radius: var(--r-sm); padding: 7px 10px; cursor: pointer; border: 1px solid transparent; }
+.side-item:hover { background: var(--panel2); }
+.side-item.on { background: var(--panel2); border-color: var(--accent); }
+.side-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.star { color: var(--warn, #c8862a); font-size: 11px; }
+.side-meta { font-size: 11px; color: var(--faint); margin-top: 2px; }
+.side-ops { flex: 0 0 auto; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-wrap: wrap; gap: 4px; }
+.side-ops-row { display: flex; gap: 4px; width: 100%; }
+.side-ops :deep(.btn) { padding-left: 6px; padding-right: 6px; }
+
+.main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+
+/* ---- 工具栏 ---- */
+.bar {
+  position: relative; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 2px 0 10px;
+}
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+.seg-b {
+  background: transparent; color: var(--muted); border: none; cursor: pointer;
+  font-size: 12px; padding: 5px 14px;
+}
+.seg-b.on { background: var(--panel2); color: var(--text); }
+.bar-stat { font-size: 12px; color: var(--muted); }
+.bar-stat b { color: var(--accent); }
+.faint { color: var(--faint); }
+.bar-btn {
+  margin-left: auto; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none;
+  border: 1px solid var(--border); border-radius: var(--r-sm); padding: 3px 10px;
+  display: inline-flex; align-items: center; gap: 5px; position: relative;
+}
+.bar-btn:hover { color: var(--text); border-color: var(--border); }
+.bar-btn.open { color: var(--text); background: var(--panel2); }
+.bar-btn.help { margin-left: 0; border-radius: 50%; width: 24px; height: 24px; padding: 0; justify-content: center; }
+.bar-btn .dot {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--accent); display: inline-block;
+}
+.pop {
+  position: absolute; top: 30px; right: 0; z-index: 30;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+.notes-pop { width: min(560px, 90%); }
+.help-pop { width: min(520px, 90%); font-size: 12px; color: var(--muted); line-height: 1.8; }
+.help-line b { color: var(--accent); font-weight: normal; }
+.pop-cap { font-size: 11px; color: var(--faint); margin: 6px 0 4px; }
+.pop-cap:first-child { margin-top: 0; }
 .notes-area {
-  width: 100%; min-height: 60px; margin-top: 6px;
+  width: 100%; min-height: 60px;
   background: var(--panel2); color: var(--muted);
   border: 1px dashed var(--border); border-radius: var(--r-sm);
   padding: 6px 10px; font-family: Consolas, Menlo, monospace;
   font-size: 11px; line-height: 1.6; resize: vertical; outline: none;
 }
-.rows { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow: auto; padding: 2px; }
+
+/* ---- 规则卡片(两行式) ---- */
+.rows { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 0; overflow: auto; padding: 2px; }
 .row {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  padding: 6px 8px; background: var(--panel2);
+  padding: 9px 12px; background: var(--panel2);
   border: 1px solid var(--border); border-radius: var(--r-sm);
 }
-.row.raw { opacity: 0.75; border-style: dashed; }
+.row.raw { opacity: 0.8; border-style: dashed; cursor: pointer; }
+.row-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.row-sub {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+}
 .mode-sel {
   background: var(--panel); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--r-sm);
-  font-size: 11px; padding: 4px 4px; outline: none;
+  font-size: 12px; padding: 4px 6px; outline: none; flex: 0 0 auto;
 }
-.row-core { flex: 0 1 170px; }
+.row-core { flex: 0 1 180px; }
 .row-core :deep(input) { width: 100%; }
 .keep-sel { flex: 0 0 auto; }
 .suffix {
-  width: 92px; background: var(--panel); color: var(--text);
+  width: 96px; background: var(--panel); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--r-sm);
   padding: 4px 6px; font-size: 11px; font-family: Consolas, Menlo, monospace; outline: none;
 }
-.arr { color: var(--faint); font-size: 12px; }
-.chips { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; flex: 1 1 200px; }
-.chip {
+.arr { color: var(--faint); font-size: 13px; }
+.preview {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: Consolas, Menlo, monospace; font-size: 12px; color: var(--text);
+  background: var(--panel); border-radius: 4px; padding: 3px 8px;
+}
+.lab { font-size: 11px; color: var(--faint); flex: 0 0 auto; }
+.sep { width: 1px; height: 14px; background: var(--border); }
+.chips, .chip {
   display: inline-flex; align-items: center; gap: 4px;
   font-family: Consolas, Menlo, monospace; font-size: 11px;
   background: var(--panel); border: 1px solid var(--border);
@@ -512,29 +621,29 @@ async function save() {
 }
 .chip .x { color: var(--faint); cursor: pointer; font-weight: normal; }
 .chip .x:hover { color: var(--text); }
-.chip-add { flex: 0 1 120px; }
+.chip-add { flex: 0 1 140px; }
 .chip-add :deep(input) { min-width: 0; width: 100%; padding: 3px 6px; font-size: 11px; }
 .raw-badge {
   font-size: 10px; color: var(--warn, #c8862a);
-  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; flex: 0 0 auto;
 }
-.raw-text { font-family: Consolas, Menlo, monospace; font-size: 11px; }
-.raw-hint { color: var(--faint); font-size: 10px; }
-.sp { flex: 1; }
+.raw-text { font-family: Consolas, Menlo, monospace; font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.raw-hint { color: var(--faint); font-size: 11px; margin-left: auto; flex: 0 0 auto; }
 .empty { color: var(--faint); font-size: 12px; padding: 10px 4px; }
 .add { align-self: flex-start; }
+.row-del { margin-left: auto; flex: 0 0 auto; }
 
-/* ---- 测试器 ---- */
+/* ---- 测试条 ---- */
 .tester {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin-top: 10px; padding: 8px 10px;
   background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  flex: 0 0 auto;
 }
-.tester .lab { font-size: 11px; color: var(--muted); white-space: nowrap; }
-.test-in { flex: 0 1 200px; }
+.lab { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.test-in { flex: 0 1 220px; }
 .test-out { font-size: 11px; color: var(--text); }
 .test-out b { color: var(--accent); font-family: Consolas, Menlo, monospace; font-weight: normal; }
 .test-out .ok { color: var(--ok, #3d9970); }
-.faint-note { color: var(--faint); }
-.mode-btn { margin-left: 8px; }
+.u { border-bottom: 1px dotted var(--faint); }
 </style>
