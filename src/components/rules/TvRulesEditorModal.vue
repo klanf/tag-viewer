@@ -621,12 +621,13 @@ async function save() {
   border: 1px solid var(--border); border-radius: var(--r-sm);
   font-size: 12px; padding: 4px 6px; outline: none; flex: 0 0 auto;
 }
-/* 联想输入框宽度自适应: field-sizing 按内容撑开(Chrome 152+), 限上下限 */
-.row-core { flex: 1 1 auto; min-width: 0; }
+/* 联想输入框宽度自适应: field-sizing 按内容撑开(Chrome 152+), 限上下限。
+ * flex 必须是 0 0 auto —— 给 grow 会把自适应宽度重新拉满整行 */
+.row-core { flex: 0 0 auto; min-width: 0; }
 .row-core :deep(input),
 .chip-add :deep(input),
 .test-in :deep(input) {
-  field-sizing: content; min-width: 80px; max-width: 340px; width: auto;
+  field-sizing: content; min-width: 80px !important; max-width: 340px; width: auto;
 }
 .del-sub { border-top: none; margin-top: 6px; padding-top: 0; }
 .del-mark { font-size: 11px; color: var(--danger, #c05050); }

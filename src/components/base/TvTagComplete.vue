@@ -25,6 +25,8 @@ const text = ref(props.modelValue)
 const sug = ref([])          // [{tag, zh, count}]
 const active = ref(-1)       // 键盘高亮行; -1 = 没选
 const open = ref(false)
+const focused = ref(false)   // 输入框是否持有焦点 —— 联想响应回来时必须看它,
+                             // 否则切组/外部改值触发的联想会把**没聚焦**的框的下拉弹出来
 const loading = ref(false)
 
 watch(() => props.modelValue, (v) => { if (v !== text.value) text.value = v })
@@ -39,8 +41,9 @@ watch(text, (v) => {
     try {
       const r = await api.suggest({ q: v.trim(), limit: props.limit })
       sug.value = r?.suggestions || []
-      open.value = sug.value.length > 0
-      active.value = sug.value.length ? 0 : -1
+      // 只有正持有焦点的框才自动展开; blur 后才回来的响应只更新数据不弹下拉
+      open.value = focused.value && sug.value.length > 0
+      active.value = open.value && sug.value.length ? 0 : -1
     } catch { sug.value = []; open.value = false } finally { loading.value = false }
   }, 220)
 })
@@ -80,8 +83,8 @@ const hasSug = computed(() => open.value && sug.value.length > 0)
       spellcheck="false"
       autocomplete="off"
       @keydown="onKey"
-      @focus="open = sug.length > 0"
-      @blur="open = false"
+      @focus="focused = true; open = sug.length > 0"
+      @blur="focused = false; open = false"
     >
     <ul v-if="hasSug" class="twc-drop">
       <li
