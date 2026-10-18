@@ -430,21 +430,22 @@ async function save() {
           <div v-for="(r, i) in rows" :key="i" class="row" :class="{ raw: r.mode === 'raw' }" @click="r.mode === 'raw' && switchMode()">
             <template v-if="r.mode !== 'raw'">
               <div class="row-top">
-                <select v-model="r.mode" class="mode-sel" title="匹配类型">
+                <select
+                  v-model="r.mode"
+                  class="mode-sel"
+                  :title="MODE_OPTIONS.find((m) => m.value === r.mode)?.hint + ' · 例 ' + MODE_OPTIONS.find((m) => m.value === r.mode)?.example"
+                >
                   <option v-for="m in MODE_OPTIONS" :key="m.value" :value="m.value">{{ m.label }}</option>
                 </select>
-                <span class="mode-hint" :title="MODE_OPTIONS.find((m) => m.value === r.mode)?.hint">
-                  {{ MODE_OPTIONS.find((m) => m.value === r.mode)?.hint }}
-                </span>
                 <TvTagComplete
                   v-model="r.core"
                   class="row-core"
                   :placeholder="MODE_OPTIONS.find((m) => m.value === r.mode)?.example || '模式'"
                 />
-                <span class="arr">→</span>
                 <TvButton size="xs" variant="ghost" class="row-del" title="删除这条规则" @click.stop="delRow(i)">🗑</TvButton>
               </div>
               <div v-if="r.keep !== 'del'" class="row-sub">
+                <span class="arr">→</span>
                 <span class="lab">原标签</span>
                 <select v-model="r.keep" class="mode-sel keep-sel" title="命中的原标签怎么处理">
                   <option :value="false">丢弃</option>
@@ -620,14 +621,16 @@ async function save() {
   border: 1px solid var(--border); border-radius: var(--r-sm);
   font-size: 12px; padding: 4px 6px; outline: none; flex: 0 0 auto;
 }
-.mode-hint {
-  font-size: 11px; color: var(--faint); flex: 0 0 auto; max-width: 150px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* 联想输入框宽度自适应: field-sizing 按内容撑开(Chrome 152+), 限上下限 */
+.row-core { flex: 1 1 auto; min-width: 0; }
+.row-core :deep(input),
+.chip-add :deep(input),
+.test-in :deep(input) {
+  field-sizing: content; min-width: 80px; max-width: 340px; width: auto;
 }
 .del-sub { border-top: none; margin-top: 6px; padding-top: 0; }
 .del-mark { font-size: 11px; color: var(--danger, #c05050); }
 .del-mark b { font-weight: 500; }
-.row-core { flex: 0 1 180px; }
 .row-core :deep(input) { width: 100%; }
 .keep-sel { flex: 0 0 auto; }
 .suffix {
@@ -646,9 +649,9 @@ async function save() {
 }
 .chip .x { color: var(--faint); cursor: pointer; font-weight: normal; }
 .chip .x:hover { color: var(--text); }
-.chip-add { flex: 0 1 120px; }
+.chip-add { flex: 0 0 auto; }
 .chip-add :deep(input) { min-width: 0; width: 100%; padding: 3px 6px; font-size: 11px; }
-.test-in { flex: 0 1 200px; }
+.test-in { flex: 0 0 auto; }
 .test-in :deep(input) { min-width: 0; width: 100%; }
 .row-core :deep(input) { min-width: 0; }
 .test-out .bad { color: var(--danger, #c05050); }
@@ -677,7 +680,7 @@ async function save() {
   flex: 0 0 auto;
 }
 .lab { font-size: 11px; color: var(--muted); white-space: nowrap; }
-.test-in { flex: 0 1 220px; }
+.test-in { flex: 0 0 auto; }
 .test-out { font-size: 11px; color: var(--text); }
 .test-out b { color: var(--accent); font-family: Consolas, Menlo, monospace; font-weight: normal; }
 .test-out .ok { color: var(--ok, #3d9970); }
