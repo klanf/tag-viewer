@@ -26,6 +26,7 @@ import {
   blacklistText, blacklistRules, saveBlacklistText, toggleBlacklistTag,
   replaceText, saveReplaceText, loadReplaceRules, loadReplaceRulesGroup,
   replaceSets, saveReplaceSets, loadBgConfig, invalidateRuleCaches,
+  testReplaceRules,
 } from './core/rules.js'
 import {
   historySummary, historyDetail, saveHistory, deleteHistory, renameHistory,
@@ -628,6 +629,8 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'replace:sets:save': safe((body) => saveReplaceSets(body || {})),
     'bg:get': safe(() => loadBgConfig()),
     'rules:reload': safe(() => { invalidateRuleCaches(); return { ok: true } }),
+    // 规则测试器(编辑器底部 🧪): 与导出引擎同一套代码算命中与替换结果
+    'rules:test': safe((raw) => testReplaceRules(raw || {})),
 
     // ---------------- 安全模式(按标签集合隐藏露骨内容) ----------------
     /* 只做**展示层过滤**: 库里一行数据都不动, 统计数字也不重算 —— 开关关掉

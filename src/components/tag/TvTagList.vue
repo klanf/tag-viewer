@@ -54,7 +54,7 @@ const props = defineProps({
   /** 每行高度上限, 超出滚动 */
   maxHeight: { type: String, default: '' },
 })
-const emit = defineEmits(['click', 'ban', 'copy', 'cart', 'fav', 'hover', 'leave'])
+const emit = defineEmits(['click', 'ban', 'copy', 'cart', 'fav', 'rule-add', 'hover', 'leave'])
 
 /** 归一化成统一对象; 顺带带上分类快照 cat(pill 按段位着色用) */
 const items = computed(() => {
@@ -166,6 +166,7 @@ const groups = computed(() => {
           @copy="(t) => emit('copy', t)"
           @cart="(t) => emit('cart', t)"
           @fav="(t) => emit('fav', t)"
+          @rule-add="(t) => emit('rule-add', t)"
           @mouseenter="emit('hover', { tag: it.tag, zh: it.zh, event: $event })"
         />
       </template>
@@ -195,6 +196,7 @@ const groups = computed(() => {
         @copy="(t) => emit('copy', t)"
         @cart="(t) => emit('cart', t)"
         @fav="(t) => emit('fav', t)"
+        @rule-add="(t) => emit('rule-add', t)"
         @mouseenter="emit('hover', { tag: it.tag, zh: it.zh, event: $event })"
       />
     </template>

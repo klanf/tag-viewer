@@ -33,7 +33,7 @@ const CHANNELS = new Set([
   'dup:ignore:add', 'dup:ignore:clear',
   // 规则
   'blacklist:get', 'blacklist:save', 'blacklist:toggle',
-  'replace:get', 'replace:save', 'bg:get', 'rules:reload',
+  'replace:get', 'replace:save', 'bg:get', 'rules:reload', 'rules:test',
   // 替换规则组(2026-10-04): 多套规则手动命名、导出时选
   'replace:sets', 'replace:sets:save',
   // 导出默认目录(2026-10-04): 预填预设的目标目录, 省得每次开系统对话框

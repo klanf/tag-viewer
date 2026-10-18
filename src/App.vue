@@ -23,10 +23,16 @@ import TvSetupProgress from '@/components/layout/TvSetupProgress.vue'
 import TvTaggerSetupModal from '@/components/layout/TvTaggerSetupModal.vue'
 import TvSettingsModal from '@/components/layout/TvSettingsModal.vue'
 import TvTrashConfirm from '@/components/image/TvTrashConfirm.vue'
+import TvRulesEditorModal from '@/components/rules/TvRulesEditorModal.vue'
 import { useAppStore } from '@/stores/useAppStore.js'
+import { useRuleAddStore } from '@/stores/useRuleAddStore.js'
+import { watch } from 'vue'
 
 const app = useAppStore()
+const ruleAdd = useRuleAddStore()
 onMounted(() => app.init())
+// 预填用完即清(关编辑器时), 避免下次从工具栏打开时又多插一行
+watch(() => ruleAdd.open, (v) => { if (!v) ruleAdd.prefill = null })
 </script>
 
 <template>
@@ -51,6 +57,8 @@ onMounted(() => app.init())
     <TvTaggerSetupModal />
     <TvSettingsModal />
     <TvTrashConfirm />
+    <!-- 标签右键「加进替换规则」的全局编辑器(prefill 预填一条 exact+保留) -->
+    <TvRulesEditorModal v-model="ruleAdd.open" kind="replace" :prefill="ruleAdd.prefill" />
     <TvToastHost />
   </div>
 </template>

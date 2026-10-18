@@ -2,30 +2,33 @@
 /**
  * 规则编辑器 —— 黑名单 / 替换规则共用一个弹窗
  * ==========================================
- * 旧版是两块几乎一模一样的 DOM(.bl-mask + textarea + 保存/取消),
- * 只有标题、提示文案、两个接口不同。这里用 kind 区分。
+ * 黑名单仍是纯 textarea; 替换规则升级为**双模式**(2026-10-18):
+ *   构建器(默认): 每条规则一行 —— 类型下拉 + 模式联想 + 原标签三态 + 替换标签联想chips,
+ *                 不用再记 * / @ / {tag} 这些符号; 注释收纳到头/尾两个注释区。
+ *   原文模式:     老的 textarea, 注释随写、批量粘贴、构建器表达不了的行(raw)都在这改。
+ * 两种模式共享同一份组文本: 切换/切组/保存时双向序列化(src/utils/replaceGrammar.js)。
+ * 数据格式(user/replace_sets.json 的 text 字段)一字未变 —— 导出/预设/角色表无感。
  *
- * 规则语法(两侧一致, 用户已经习惯):
- *   精确  red_hair      后缀  *_hair      前缀  blue_*      包含  *color*
- *   # 开头是注释; 替换规则写成 模式 -> 替换后(可多个, 逗号分隔)
- *   替换侧可写 {tag} 引用原标签(如 *_painting -> {tag}, best_quality)
- *   @xxx@ = 整段匹配(按 _ 切段), 如 @boy@ -> {tag}, male_focus; # 仍是注释
- *
- * 替换规则**分组**(2026-10-04): 用户不同导出目的要不同替换方案, 于是规则可以
- * 手动命名多套、导出时选哪一套(看板 / 预设 / 角色表都能选)。黑名单不分组。
+ * 规则语法(后端 electron/core/rules.js 为唯一真源):
+ *   精确 red_hair · 前缀 blue_* · 后缀 *_hair · 包含 *color* · 整段 @boy@
+ *   替换侧 {tag} 引用原标签; # 注释
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import TvModal from '../base/TvModal.vue'
 import TvButton from '../base/TvButton.vue'
 import TvChip from '../base/TvChip.vue'
 import TvInput from '../base/TvInput.vue'
+import TvTagComplete from '../base/TvTagComplete.vue'
 import { api } from '@/utils/api.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { parseRules, serializeRules, serializeRow, MODE_OPTIONS } from '@/utils/replaceGrammar.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   /** blacklist | replace */
   kind: { type: String, default: 'blacklist' },
+  /** 打开时预填一条新规则(标签右键「加进替换规则」入口): {core, keep} */
+  prefill: { type: Object, default: null },
 })
 const emit = defineEmits(['update:modelValue', 'saved'])
 
@@ -57,55 +60,100 @@ const tips = computed(() => (isBlack.value
      'red_hair 精确 · *_hair 后缀 · blue_* 前缀 · *color* 包含 · # 注释',
      '@xxx@ 整段匹配: @boy@ 命中 boy / xx_boy / boy_xx, 但不命中 tomboy / boyish / xxxboy',
      '  段里也能用 *: @boy*@ 段以 boy 开头 · @*hair@ 段以 hair 结尾']
-  : ['每行一条: 模式 -> 替换后的标签(可多个, 逗号分隔); # 注释',
-     '替换侧写 {tag} = 命中时的原标签(大小写不敏感), 用一条规则就能"留下来再追加"',
-     '  *_painting -> {tag}, masterpiece, best_quality   给整类风格统一追质量词',
-     '  *_hair     -> {tag}, hair_focus                  保留原标签 + 追加',
-     '  painting   -> {tag}_art                          原标签整体改写',
-     '通配同黑名单: red_* 前缀 · *_hair 后缀 · *color* 包含 · 精确 red_hair',
-     '@xxx@ 整段匹配: @boy@ -> {tag}, male_focus 只对"boy 是独立段"的标签生效',
-     '  段里也能用 *: @boy*@ 段以 boy 开头 · @*hair@ 段以 hair 结尾']))
+  : builderMode.value
+    ? ['每行选「匹配类型」再填模式, 替换标签有联想(带中文和图片数) —— 符号交给程序生成',
+       '「保留原标签」= 替换侧自动带 {tag}; 「保留+后缀」= {tag}_art 这种改写',
+       '想写注释/批量粘贴/改特殊规则 → 右上角「⌨ 原文模式」']
+    : ['每行一条: 模式 -> 替换后的标签(可多个, 逗号分隔); # 注释',
+       '替换侧写 {tag} = 命中时的原标签(大小写不敏感), 用一条规则就能"留下来再追加"',
+       '  *_painting -> {tag}, masterpiece, best_quality   给整类风格统一追质量词',
+       '  *_hair     -> {tag}, hair_focus                  保留原标签 + 追加',
+       '  painting   -> {tag}_art                          原标签整体改写',
+       '通配同黑名单: red_* 前缀 · *_hair 后缀 · *color* 包含 · 精确 red_hair',
+       '@xxx@ 整段匹配: @boy@ -> {tag}, male_focus 只对"boy 是独立段"的标签生效',
+       '  段里也能用 *: @boy*@ 段以 boy 开头 · @*hair@ 段以 hair 结尾']))
 
 const placeholder = computed(() => (isBlack.value
   ? 'red_hair\n*_hair\n@boy@\n# 这是注释'
   : '*_painting -> {tag}, masterpiece, best_quality\n@boy@ -> {tag}, male_focus'))
 
-/** 前端数一遍当前组条数(切组时立刻能看, 不用回主进程) */
-const curCount = computed(() => {
-  const t = cur.value?.text || ''
-  let n = 0
-  for (const line of t.split('\n')) {
-    const s = line.trim()
-    if (!s || s.startsWith('#') || s.indexOf('->') < 0) continue
-    if (s.slice(s.indexOf('->') + 2).split(',').map((x) => x.trim()).filter(Boolean).length) n++
-  }
-  return n
-})
+/* ================= 构建器模式(替换规则专用) ================= */
+const builderMode = ref(true)   // 仅替换规则侧有意义
+const headNotes = ref('')       // 第一条规则前的注释(分组说明)
+const tailNotes = ref('')       // 行间注释收纳到这里 + 规则后面的内容
+const rows = ref([])            // 行模型数组(见 replaceGrammar.js)
+const rawCount = ref(0)         // 构建器表达不了的行数(去原文模式改)
 
-async function load() {
-  loading.value = true
-  try {
-    if (isBlack.value) {
-      const r = await api.blacklistGet()
-      text.value = r.text || ''
-      rules.value = r.rules || []
-    } else {
-      const r = await api.replaceSets()
-      sets.value = (r.sets || []).map((s) => ({ ...s }))
-      activeId.value = r.active || sets.value[0]?.id || ''
-      rules.value = r.rules || []
-    }
-    // 背景补全配置顺带显示出来(只读) —— 否则用户改完黑名单
-    // 会奇怪"为什么复制还是自动补了 scenery"
-    if (!bg.value) { try { bg.value = await api.bgGet() } catch { bg.value = null } }
-  } catch (e) {
-    ui.err('读取规则失败: ' + e.message)
-  } finally {
-    loading.value = false
+function parseCurrent() {
+  const p = parseRules(cur.value?.text || '')
+  headNotes.value = p.headNotes.join('\n')
+  tailNotes.value = p.tailNotes.join('\n')
+  rows.value = p.rows
+  rawCount.value = p.rows.filter((r) => r.mode === 'raw').length
+}
+
+/** 构建器当前状态写回所在组的 text(切组/切模式/保存前调用) */
+function commitToSet() {
+  if (!cur.value) return
+  cur.value.text = serializeRules({
+    headNotes: headNotes.value.split('\n'),
+    rows: rows.value,
+    tailNotes: tailNotes.value.split('\n'),
+  })
+}
+
+function switchMode() {
+  if (builderMode.value) {
+    commitToSet()               // 构建 → 原文: 先落文本
+    builderMode.value = false
+  } else {
+    const p = parseRules(cur.value?.text || '')
+    rawCount.value = p.rows.filter((r) => r.mode === 'raw').length
+    headNotes.value = p.headNotes.join('\n')
+    tailNotes.value = p.tailNotes.join('\n')
+    rows.value = p.rows
+    builderMode.value = true
   }
 }
 
-watch(() => props.modelValue, (v) => { if (v) load() })
+function addRow(prefill = null) {
+  rows.value.push({
+    mode: 'exact',
+    core: prefill?.core || '',
+    keep: prefill ? prefill.keep !== false : true,
+    suffix: '',
+    repl: [],
+  })
+  nextTick(() => {
+    const el = document.querySelectorAll('.row-core input')
+    el[el.length - 1]?.focus()
+  })
+}
+
+function delRow(i) { rows.value.splice(i, 1) }
+
+const curCount = computed(() => (builderMode.value
+  ? rows.value.filter((r) => r.mode !== 'raw').length
+  : (() => {
+      const t = cur.value?.text || ''
+      let n = 0
+      for (const line of t.split('\n')) {
+        const s = line.trim()
+        if (!s || s.startsWith('#') || s.indexOf('->') < 0) continue
+        if (s.slice(s.indexOf('->') + 2).split(',').map((x) => x.trim()).filter(Boolean).length) n++
+      }
+      return n
+    })()))
+
+/* ---- 规则测试器(与导出引擎同一套代码, 走后端) ---- */
+const testTag = ref('')
+const testRes = ref(null)
+watch(testTag, async (v) => {
+  const t = v.trim()
+  if (!t) { testRes.value = null; return }
+  try { testRes.value = await api.rulesTest({ setId: activeId.value, tag: t }) }
+  catch { testRes.value = null }
+})
 
 /* ---- 组的增删改(只在替换规则这一侧出现) ---- */
 
@@ -133,6 +181,7 @@ function commitEdit() {
 }
 
 function copySet() {
+  commitToSet()                 // 复制前把构建器状态落进当前组, 副本才完整
   const s = cur.value
   if (!s) return
   const id = `set_${Date.now().toString(36)}`
@@ -162,6 +211,49 @@ function setAsDefault() {
   ui.ok(`「${s.name}」将作为默认组(导出时没特意选就用它), 保存后生效`, 2400)
 }
 
+async function load() {
+  loading.value = true
+  try {
+    if (isBlack.value) {
+      const r = await api.blacklistGet()
+      text.value = r.text || ''
+      rules.value = r.rules || []
+    } else {
+      const r = await api.replaceSets()
+      sets.value = (r.sets || []).map((s) => ({ ...s }))
+      activeId.value = r.active || sets.value[0]?.id || ''
+      rules.value = r.rules || []
+      parseCurrent()
+      builderMode.value = true
+      if (props.prefill?.core) addRow(props.prefill)
+    }
+    // 背景补全配置顺带显示出来(只读) —— 否则用户改完黑名单
+    // 会奇怪"为什么复制还是自动补了 scenery"
+    if (!bg.value) { try { bg.value = await api.bgGet() } catch { bg.value = null } }
+  } catch (e) {
+    ui.err('读取规则失败: ' + e.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+/* 切组: 先把旧组构建器状态落盘(内存), 再解析新组 */
+watch(activeId, (nv, ov) => {
+  if (isBlack.value || ov === undefined) return
+  const old = sets.value.find((s) => s.id === ov)
+  if (old && builderMode.value) {
+    old.text = serializeRules({
+      headNotes: headNotes.value.split('\n'),
+      rows: rows.value,
+      tailNotes: tailNotes.value.split('\n'),
+    })
+  }
+  // 新组要等 sets 里对象就位后解析(cur 是 computed, 直接解析它)
+  nextTick(() => { if (builderMode.value) parseCurrent() })
+})
+
+watch(() => props.modelValue, (v) => { if (v) load() })
+
 async function save() {
   saving.value = true
   try {
@@ -170,6 +262,7 @@ async function save() {
       if (r?.error) { ui.err('保存失败: ' + r.error); return }
       rules.value = r?.rules || rules.value
     } else {
+      if (builderMode.value) commitToSet()
       const r = await api.replaceSetsSave({ active: defaultId.value || activeId.value, sets: sets.value })
       if (r?.error) { ui.err('保存失败: ' + r.error); return }
       sets.value = r.sets || sets.value
@@ -233,6 +326,8 @@ async function save() {
     </div>
 
     <div v-if="loading" class="loading">读取中...</div>
+
+    <!-- ============ 黑名单: 仍是纯 textarea ============ -->
     <textarea
       v-else-if="isBlack"
       v-model="text"
@@ -240,25 +335,104 @@ async function save() {
       spellcheck="false"
       :placeholder="placeholder"
     />
-    <textarea
-      v-else-if="cur"
-      v-model="cur.text"
-      class="editor"
-      spellcheck="false"
-      :placeholder="placeholder"
-    />
 
-    <div class="stat">
-      <template v-if="isBlack">
-        当前生效 <b>{{ rules.length }}</b> 条规则
-      </template>
-      <template v-else>
+    <!-- ============ 替换规则: 构建器模式 ============ -->
+    <template v-else-if="builderMode">
+      <details class="notes">
+        <summary>🗒 分组注释{{ headNotes.trim() ? '(有内容)' : '' }}</summary>
+        <textarea v-model="headNotes" class="notes-area" spellcheck="false" placeholder="文件开头的 # 注释/分组说明, 会写在规则前面" />
+      </details>
+
+      <div class="rows">
+        <div v-for="(r, i) in rows" :key="i" class="row" :class="{ raw: r.mode === 'raw' }">
+          <template v-if="r.mode !== 'raw'">
+            <select v-model="r.mode" class="mode-sel" title="匹配类型">
+              <option v-for="m in MODE_OPTIONS" :key="m.value" :value="m.value">{{ m.label }}</option>
+            </select>
+            <TvTagComplete
+              v-model="r.core"
+              class="row-core"
+              :placeholder="MODE_OPTIONS.find((m) => m.value === r.mode)?.example || '模式'"
+            />
+            <span class="arr">→</span>
+            <select v-model="r.keep" class="mode-sel keep-sel" title="命中的原标签怎么处理">
+              <option :value="false">丢弃原标签</option>
+              <option :value="true">保留原标签</option>
+            </select>
+            <input
+              v-if="r.keep"
+              v-model="r.suffix"
+              class="suffix"
+              placeholder="后缀可空"
+              title="保留原标签并加后缀: 填 _art 生成 {tag}_art; 留空就是原样保留"
+            >
+            <span class="chips">
+              <span v-for="(t, j) in r.repl" :key="j" class="chip">
+                {{ t }}<b class="x" title="移除" @click="r.repl.splice(j, 1)">×</b>
+              </span>
+              <TvTagComplete
+                class="chip-add"
+                placeholder="+ 联想添加…"
+                @pick="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
+                @confirm="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
+              />
+            </span>
+          </template>
+          <template v-else>
+            <span class="raw-badge">高级</span>
+            <span class="raw-text">{{ r.text }}</span>
+            <span class="raw-hint">符号太特殊, 请切「原文模式」修改</span>
+          </template>
+          <span class="sp" />
+          <TvButton size="xs" variant="ghost" title="删除这条规则" @click="delRow(i)">🗑</TvButton>
+        </div>
+        <div v-if="!rows.length" class="empty">本组还没有规则 —— 点下面添加, 或切「原文模式」粘贴</div>
+        <TvButton size="xs" variant="ghost" class="add" @click="addRow()">＋ 添加规则</TvButton>
+      </div>
+
+      <details class="notes">
+        <summary>🗒 其他注释{{ tailNotes.trim() ? '(有内容)' : '' }}</summary>
+        <textarea v-model="tailNotes" class="notes-area" spellcheck="false" placeholder="行间注释会收纳到这里, 保存时写在规则后面" />
+      </details>
+
+      <!-- 规则测试器: 与导出引擎同一套代码(后端 rules:test) -->
+      <div class="tester">
+        <span class="lab">🧪 规则测试</span>
+        <TvTagComplete v-model="testTag" class="test-in" placeholder="输入一个标签试试, 如 blue_hair" :limit="8" />
+        <span v-if="testRes" class="test-out">
+          <template v-if="testRes.hits?.length">
+            命中 <b>{{ testRes.hits.map((h) => h.pat).join(' · ') }}</b>
+            → <b class="ok">{{ testRes.result.join(', ') }}</b>
+          </template>
+          <template v-else>未命中任何规则 → 原样 <b>{{ testRes.result.join(', ') }}</b></template>
+        </span>
+        <span v-else-if="testTag.trim()" class="lab">测试中…</span>
+      </div>
+      <div class="stat faint-note">测试基于**已保存**的规则; 编辑中的改动点 💾 保存后才会参与测试</div>
+    </template>
+
+    <!-- ============ 替换规则: 原文模式 ============ -->
+    <template v-else-if="cur">
+      <textarea
+        v-model="cur.text"
+        class="editor"
+        spellcheck="false"
+        :placeholder="placeholder"
+      />
+      <div class="stat">
         本组 <b>{{ curCount }}</b> 条 · 共 <b>{{ sets.length }}</b> 套
-        <span class="faint">(导出时在各导出入口选组; 不选 = 默认组)</span>
-      </template>
+        <TvButton size="xs" variant="ghost" class="mode-btn" @click="switchMode">▦ 构建器模式</TvButton>
+      </div>
+    </template>
+
+    <!-- 构建器模式的统计/切换行 -->
+    <div v-if="!isBlack && !loading && builderMode" class="stat">
+      本组 <b>{{ curCount }}</b> 条<template v-if="rawCount"> · <span class="warn-txt">{{ rawCount }} 条高级规则</span></template>
+      · 共 <b>{{ sets.length }}</b> 套
+      <span class="faint">(导出时在各导出入口选组; 不选 = 默认组)</span>
+      <TvButton size="xs" variant="ghost" class="mode-btn" @click="switchMode">⌨ 原文模式</TvButton>
       <template v-if="bg && bg.append && bg.append.length">
         · 🌄 缺背景时补 <b>{{ bg.append.join('/') }}</b>
-        <span class="faint">(有 {{ (bg.have || []).length }} 个判定标签)</span>
       </template>
     </div>
 
@@ -297,4 +471,70 @@ async function save() {
 .stat { color: var(--muted); font-size: 11px; margin-top: 10px; }
 .stat b { color: var(--accent); }
 .faint { color: var(--faint); }
+
+/* ---- 构建器 ---- */
+.notes { margin-bottom: 8px; font-size: 11px; color: var(--muted); }
+.notes summary { cursor: pointer; user-select: none; }
+.notes-area {
+  width: 100%; min-height: 60px; margin-top: 6px;
+  background: var(--panel2); color: var(--muted);
+  border: 1px dashed var(--border); border-radius: var(--r-sm);
+  padding: 6px 10px; font-family: Consolas, Menlo, monospace;
+  font-size: 11px; line-height: 1.6; resize: vertical; outline: none;
+}
+.rows { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow: auto; padding: 2px; }
+.row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 6px 8px; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.row.raw { opacity: 0.75; border-style: dashed; }
+.mode-sel {
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  font-size: 11px; padding: 4px 4px; outline: none;
+}
+.row-core { flex: 0 1 170px; }
+.row-core :deep(input) { width: 100%; }
+.keep-sel { flex: 0 0 auto; }
+.suffix {
+  width: 92px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 4px 6px; font-size: 11px; font-family: Consolas, Menlo, monospace; outline: none;
+}
+.arr { color: var(--faint); font-size: 12px; }
+.chips { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; flex: 1 1 200px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: Consolas, Menlo, monospace; font-size: 11px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 2px 8px;
+}
+.chip .x { color: var(--faint); cursor: pointer; font-weight: normal; }
+.chip .x:hover { color: var(--text); }
+.chip-add { flex: 0 1 120px; }
+.chip-add :deep(input) { min-width: 0; width: 100%; padding: 3px 6px; font-size: 11px; }
+.raw-badge {
+  font-size: 10px; color: var(--warn, #c8862a);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+}
+.raw-text { font-family: Consolas, Menlo, monospace; font-size: 11px; }
+.raw-hint { color: var(--faint); font-size: 10px; }
+.sp { flex: 1; }
+.empty { color: var(--faint); font-size: 12px; padding: 10px 4px; }
+.add { align-self: flex-start; }
+
+/* ---- 测试器 ---- */
+.tester {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 10px; padding: 8px 10px;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.tester .lab { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.test-in { flex: 0 1 200px; }
+.test-out { font-size: 11px; color: var(--text); }
+.test-out b { color: var(--accent); font-family: Consolas, Menlo, monospace; font-weight: normal; }
+.test-out .ok { color: var(--ok, #3d9970); }
+.faint-note { color: var(--faint); }
+.mode-btn { margin-left: 8px; }
 </style>

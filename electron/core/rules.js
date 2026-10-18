@@ -354,8 +354,8 @@ export function toggleBlacklistTag(tag) {
 
 const DEFAULT_SET_ID = 'default'
 
-/** 文本 -> [{pat, replTags}]; 行格式与旧 txt 一模一样(兼容) */
-function parseReplaceRules(text) {
+/** 文本 -> [{pat, replTags}]; 行格式与旧 txt 一模一样(兼容)。导出供语法模块测试当 oracle */
+export function parseReplaceRules(text) {
   const out = []
   for (const line of String(text ?? '').split('\n')) {
     const s = line.trim()
@@ -452,22 +452,19 @@ const TAG_PLACEHOLDER = /\{tag\}/gi
  *
  * 不写 {tag} 时是纯替换(原标签被丢掉), 与旧行为完全一致。
  */
+/** 单个模式对单标签的命中判断(replaceTag 与规则测试器共用, 保证口径一致) */
+function patHit(tag, pat) {
+  if (isSegPat(pat)) return segHit(tag.toLowerCase(), pat.slice(1, -1))
+  if (pat.startsWith('*') && pat.endsWith('*') && pat.length > 2) return tag.toLowerCase().includes(pat.slice(1, -1))
+  if (pat.startsWith('*')) return tag.toLowerCase().endsWith(pat.slice(1))
+  if (pat.endsWith('*')) return tag.toLowerCase().startsWith(pat.slice(0, -1))
+  return tag.toLowerCase() === pat
+}
+
 export function replaceTag(tag, rules) {
   const out = []
   for (const { pat, replTags } of rules) {
-    let hit = false
-    if (isSegPat(pat)) {
-      hit = segHit(tag.toLowerCase(), pat.slice(1, -1))
-    } else if (pat.startsWith('*') && pat.endsWith('*') && pat.length > 2) {
-      hit = tag.toLowerCase().includes(pat.slice(1, -1))
-    } else if (pat.startsWith('*')) {
-      hit = tag.toLowerCase().endsWith(pat.slice(1))
-    } else if (pat.endsWith('*')) {
-      hit = tag.toLowerCase().startsWith(pat.slice(0, -1))
-    } else {
-      hit = tag.toLowerCase() === pat
-    }
-    if (!hit) continue
+    if (!patHit(tag, pat)) continue
     for (const r of replTags) {
       // 用函数式替换, 免得原标签里的 $& / $1 被当成替换模式吃掉
       const v = r.replace(TAG_PLACEHOLDER, () => tag)
@@ -481,6 +478,22 @@ export function replaceTag(tag, rules) {
 export function replaceText() {
   const { active, sets } = replaceSets()
   return (sets.find((s) => s.id === active) || sets[0])?.text || ''
+}
+
+/**
+ * 规则测试器(2026-10-18, 编辑器底部的 🧪): 与导出引擎**同一套代码**算,
+ * 返回命中了哪些规则、替换成什么 —— 保证「测试显示的」就是「导出会发生的」。
+ * 未命中时 result=[原标签] 与 replaceTag 语义一致。
+ */
+export function testReplaceRules(raw = {}) {
+  const tag = String(raw.tag || '').trim()
+  if (!tag) return { error: 'empty tag' }
+  const rules = loadReplaceRulesGroup(String(raw.setId || ''))
+  const hits = []
+  for (const { pat, replTags } of rules) {
+    if (patHit(tag, pat)) hits.push({ pat, replTags })
+  }
+  return { tag, hits, result: replaceTag(tag, rules) }
 }
 
 export function saveReplaceText(text) {

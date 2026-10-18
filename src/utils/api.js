@@ -139,6 +139,8 @@ export const api = {
   replaceSetsSave: (body) => call('replace:sets:save', body),
   bgGet: () => call('bg:get'),
   rulesReload: () => call('rules:reload'),
+  /** 规则测试器: {setId, tag} → {hits:[{pat,replTags}], result:[tag]} 与导出引擎同代码 */
+  rulesTest: (opts) => call('rules:test', opts),
 
   // 购物车历史
   cartHistory: () => call('cart:history'),

@@ -66,7 +66,7 @@ const props = defineProps({
   /** 长标签: 超出宽度省略 */
   clip: { type: Boolean, default: false },
 })
-const emit = defineEmits(['click', 'ban', 'copy', 'cart', 'fav'])
+const emit = defineEmits(['click', 'ban', 'copy', 'cart', 'fav', 'rule-add'])
 
 const wild = computed(() => props.banned && props.banRule.includes('*'))
 
@@ -148,6 +148,12 @@ function onFav(e) {
   e.stopPropagation()
   emit('fav', props.tag)
 }
+/** 右键 = 加进替换规则(2026-10-18): 看图时发现错 tag, 右键直接进构建器预填 */
+function onCtxMenu(e) {
+  e.preventDefault()
+  e.stopPropagation()
+  emit('rule-add', props.tag)
+}
 </script>
 
 <template>
@@ -156,6 +162,7 @@ function onFav(e) {
     :title="pillTitle"
     :data-tag="tag"
     @click="onClick"
+    @contextmenu="onCtxMenu"
   >
     <span class="en">{{ shownTag }}</span>
     <span v-if="showZh && zh" class="zh" :title="zh">{{ zh }}</span>
