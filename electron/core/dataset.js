@@ -328,7 +328,7 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
     let last = 0
     // readRecords 现在是 async(每块让出事件循环, 后台重载不再卡死光箱翻页) —— 必须 await
     await readRecords((rec) => {
-      pushRecord(rec.path, rec.tags, rec.source, { w: rec.px_w, h: rec.px_h })
+      pushRecord(rec.path, rec.tags, rec.source, { w: rec.px_w, h: rec.px_h }, rec.tagsSrc)
       const n = W.records.length
       if (n - last >= 5000) {
         last = n

@@ -115,14 +115,18 @@ console.log('\n[1] 第一轮: 新增分流 + 扫描夹被完全忽略')
 
   const st = await run()
   eq('读图 3 张(只有 imgs 里的)', st.readImages, 3)
-  eq('入库 2 张(自带元数据)', st.inserted, 2)
-  eq('入队 3 张(裸图 1 + meta 2, 合并语义)', st.queued, 3)
+  eq('入库 3 张(meta 2 + 裸图占位 1)', st.inserted, 3)
+  eq('入队 3 张(裸图 1 + meta 2)', st.queued, 3)
   eq('跳过 0', st.skipped, 0)
   eq('消失 0', st.goneSet, 0)
 
   const db = store.openDb()
-  eq('库内 images 2 行', db.prepare('SELECT COUNT(*) n FROM images').get().n, 2)
-  eq('tags_src 全是 meta', db.prepare("SELECT COUNT(*) n FROM images WHERE tags_src='meta'").get().n, 2)
+  eq('库内 images 3 行', db.prepare('SELECT COUNT(*) n FROM images').get().n, 3)
+  eq('meta 2 行', db.prepare("SELECT COUNT(*) n FROM images WHERE tags_src='meta'").get().n, 2)
+  eq('裸图占位 1 行(tags 空)', (() => {
+    const r = db.prepare('SELECT tags, tags_src FROM images WHERE path=?').get(norm(path.join(IMG_DIR, 'b.png')))
+    return r && String(r.tags) === '' && String(r.tags_src) === '' ? 'ok' : `bad:${JSON.stringify(r)}`
+  })(), 'ok')
   eq('a 的标签', db.prepare('SELECT tags FROM images WHERE path=?').get(norm(path.join(IMG_DIR, 'a.png'))).tags,
     '1girl,solo,smile')
   eq('folder_id 已写入', db.prepare('SELECT COUNT(*) n FROM images WHERE folder_id IS NULL').get().n, 0)
@@ -201,7 +205,7 @@ console.log('\n[5] 规则 6: 图又出现 -> 清 gone 并重读元数据')
   eq('gone 清零', Number(row.gone), 0)
   eq('标签更新为新的', row.tags, 'hatsune_miku,long_hair')
   eq('tags_src 仍为 meta', row.tags_src, 'meta')
-  eq('总数未变(没有重复插入)', db.prepare('SELECT COUNT(*) n FROM images').get().n, 2)
+  eq('总数未变(没有重复插入)', db.prepare('SELECT COUNT(*) n FROM images').get().n, 3)
   eq('c 重新入队(meta 变更也要补反推)', db.prepare('SELECT COUNT(*) n FROM tag_queue WHERE path=?').get(norm(c)).n, 1)
 }
 

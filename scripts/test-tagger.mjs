@@ -185,7 +185,7 @@ const C = writeImg(IMG_DIR, 'c.png', '', 300)
 writeImg(SCAN_ONLY, 'd.png', '', 300)          // 扫描夹 -> 不进这条流程
 {
   const st = await ingest.runIngest({})
-  eq('入库 1 张(自带元数据)', st.inserted, 1)
+  eq('入库 3 张(meta 1 + 裸图占位 2)', st.inserted, 3)
   eq('入队 3 张(裸图 2 + meta 1)', st.queued, 3)
   eq('队列 pending=3', ingest.queueStats().pending, 3)
   eq('扫描夹的图没入队', dbGet(`SELECT COUNT(*) n FROM tag_queue WHERE path LIKE '%d.png'`).n, 0)
@@ -201,8 +201,8 @@ const t1 = await tagger.runTagger({})
   eq('取出的条数 3(a/b/c, meta 也入队)', t1.picked, 3)
   eq('真正发给模型 3 张', t1.inferCalls, 3)
   eq('反推成功 3', t1.tagged, 3)
-  eq('新插入 images 行 2(裸图 b/c)', t1.created, 2)
-  eq('覆盖更新 1(a)', t1.updated, 1)
+  eq('新插入 images 行 0(裸图占位行已在入库时落好)', t1.created, 0)
+  eq('覆盖更新 3(裸图 b/c + meta a)', t1.updated, 3)
   eq('provider 以回执为准(CUDA)', t1.provider, 'CUDAExecutionProvider')
 
   const rb = dbGet('SELECT tags, tags_src FROM images WHERE path=?', norm(B))
@@ -301,7 +301,11 @@ console.log('\n[7] 反推无结果: 结清队列但不写空标签行(铁律 ⑦
   const st = await tagger.runTagger({})
   eq('记了一次"无结果"', st.noResult, 1)
   eq('没有写库', st.tagged, 0)
-  eq('g 没有进 images(不造空标签行)', dbGet(`SELECT COUNT(*) n FROM images WHERE path LIKE '%g.png'`).n, 0)
+  // v3: 裸图的占位行在 ingest 时已落(tags=''), "无结果"语义变为**不给占位行写标签**
+  eq('g 只有空标签占位行(无结果不写 tags)', (() => {
+    const r = dbGet(`SELECT tags FROM images WHERE path LIKE '%g.png'`)
+    return r ? `row,tags=${String(r.tags || '').length}ch` : 'none'
+  })(), 'row,tags=0ch')
   eq('队列已结清(留 pending 会每轮重推)', ingest.queueStats().pending, 0)
   eq('留了说明', dbGet(`SELECT note FROM tag_queue WHERE path LIKE '%g.png'`).note, '反推无结果')
 

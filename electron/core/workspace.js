@@ -146,6 +146,12 @@ export function saveSettings(patch) {
   if (patch.groupedTags !== undefined) next.groupedTags = !!patch.groupedTags
   // showBannedTags: 光箱/详情页是否显示被 ban 的标签(2026-10-16)。默认开(与旧行为一致)。
   if (patch.showBannedTags !== undefined) next.showBannedTags = !!patch.showBannedTags
+  // wd14Prompt: WD14 安装横幅的记忆三态(2026-10-18 按需安装 v3)。
+  // unset=可弹 / later=暂不(下会话可再弹) / never=永久静默(横幅不弹, 常驻入口仍在)。
+  if (patch.wd14Prompt !== undefined) {
+    const v = String(patch.wd14Prompt)
+    next.wd14Prompt = ['unset', 'later', 'never'].includes(v) ? v : 'unset'
+  }
   state.settings = next
   fs.writeFileSync(path.join(state.appDir, 'settings.json'),
     JSON.stringify(next, null, 2), 'utf8')

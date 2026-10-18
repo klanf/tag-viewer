@@ -31,8 +31,8 @@
  * 这条回填是必须的, 否则"跳过"永远算不出来, 每次启动都要重读全部图片。
  *
  * 三个落点(职责不重叠):
- *   · images    —— **有标签的图**(看板/搜索/系列的数据源)
- *   · tag_queue —— **待反推的图**(裸图 + 待合并的 meta 图), 持久化在 DB, 进程重启不丢
+ *   · images    —— **全部入册的图**(看板/搜索/系列的数据源; 含 v3 起的空标签占位行)
+ *   · tag_queue —— **待反推的图**(裸图 + 待覆盖的 meta 图), 持久化在 DB, 进程重启不丢
  *   · folders   —— 登记表, 只有 as_source=1 的目录参与本流程
  *
  * as_scan=1 / as_source=0 的目录(如「只看新生成的 AI 图」那个)在这里**直接跳过** ——
@@ -425,7 +425,7 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
   // ---- 5. 先算出落库计划(预演模式下就到此为止) ----
   const srcId = srcIdFor(db, f.label)
   const now = Date.now()
-  const plan = { inserts: [], metaUpdates: [], fpUpdates: [], queue: [] }
+  const plan = { inserts: [], bareInserts: [], metaUpdates: [], fpUpdates: [], queue: [] }
   for (const item of toRead) {
     const p = parsed.get(item.path) || { tags: [], source: '' }
     const dim = p.dim || null          // worker 顺手读到的像素尺寸, 可能为 null
@@ -439,13 +439,20 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
     } else if (item.kind === 'changed') {
       // 裸图: 不动已有标签(legacy 值可能是世上唯一一份), 只更新指纹
       plan.fpUpdates.push({ id: item.id, m: item.m, s: item.s, dim })
+    } else {
+      // 2026-10-18 WD14 按需安装(v3): 全新裸图也落一行占位(tags='', tags_src='')
+      // —— 否则没装反推的全新库 images 表是空的, 看板永远进不去(遮罩从后门把
+      // 用户逼回强制下载)。占位行让看板立刻有图可显示(无胶囊), 等反推打上
+      // 标签内容自然丰富; "已反推"计数(tagged_at IS NOT NULL)不受影响。
+      plan.bareInserts.push({ path: item.path, m: item.m, s: item.s, dim })
     }
-    // **无条件入队**(2026-10-02 合并语义): 裸图等反推打标; meta 图等 WD14 把规范化
-    // 标签**合并**进来(applyTags 保证 meta 部分永不丢)。文件没变的图走规则 1 跳过,
-    // 不会反复入队 —— 只有新图/图变了才到这里。
+    // **无条件入队**: 裸图等反推打标; meta 图等 WD14 用反推结果覆盖(2026-10-18
+    // v3 覆盖语义, applyTags 保证 tags_src 归一 'wd14')。文件没变的图走规则 1
+    // 跳过, 不会反复入队 —— 只有新图/图变了才到这里。
     plan.queue.push({ path: item.path, m: item.m, s: item.s })
   }
   const ins = plan.inserts.length
+  const bareIns = plan.bareInserts.length
   const metaUpd = plan.metaUpdates.length
   const qn = plan.queue.length
 
@@ -467,6 +474,16 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
       // "还没补过"每轮重读一遍。
       for (const x of plan.inserts) {
         insStmt.run(x.path, srcId, x.tags, f.id, x.m, x.s, now, x.dim?.w || 0, x.dim?.h || 0)
+      }
+
+      // 全新裸图占位行(2026-10-18 v3): tags 空、tags_src 空、tagged_at NULL
+      // ("已反推"口数按 tagged_at IS NOT NULL 算, 占位行不会混进去)
+      const bareStmt = db.prepare(`
+        INSERT INTO images (path, src_id, tags, folder_id, mtime_ms, size, tags_src, gone, tagged_at, px_w, px_h)
+        VALUES (?, ?, '', ?, ?, ?, '', 0, NULL, ?, ?)
+      `)
+      for (const x of plan.bareInserts) {
+        bareStmt.run(x.path, srcId, f.id, x.m, x.s, x.dim?.w || 0, x.dim?.h || 0)
       }
 
       // 重读到了元数据 -> 覆盖(图内原生提示词永远优先)。
@@ -512,12 +529,12 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
     }
   }
 
-  stats.inserted += ins
+  stats.inserted += ins + bareIns
   stats.metaUpdated += metaUpd
   stats.queued += qn
   emit(onProgress, {
     phase: 'folder-done', folderIndex: index, folderTotal: total,
-    note: `${f.label || f.path}: 新增 ${ins} · 更新 ${metaUpd} · 入队 ${qn} · 消失 ${goneUpd.length}`
+    note: `${f.label || f.path}: 新增 ${ins + bareIns} · 更新 ${metaUpd} · 入队 ${qn} · 消失 ${goneUpd.length}`
       + (dimRows.length ? ` · 补尺寸 ${dimRows.length}` : ''),
   })
 }
