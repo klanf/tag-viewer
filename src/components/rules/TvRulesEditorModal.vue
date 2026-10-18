@@ -427,7 +427,7 @@ async function save() {
 
         <!-- 构建器: 两行式规则卡片 -->
         <div v-else-if="builderMode" class="rows">
-          <div v-for="(r, i) in rows" :key="i" class="row" :class="{ raw: r.mode === 'raw' }" @click="r.mode === 'raw' && switchMode()">
+          <div v-for="(r, i) in rows" :key="i" class="rule-card" :class="{ raw: r.mode === 'raw' }" @click="r.mode === 'raw' && switchMode()">
             <template v-if="r.mode !== 'raw'">
               <div class="row-top">
                 <select
@@ -607,11 +607,11 @@ async function save() {
 
 /* ---- 规则卡片(两行式) ---- */
 .rows { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 0; overflow: auto; padding: 2px; }
-.row {
+.rule-card {
   padding: 9px 12px; background: var(--panel2);
   border: 1px solid var(--border); border-radius: var(--r-sm);
 }
-.row.raw { opacity: 0.8; border-style: dashed; cursor: pointer; }
+.rule-card.raw { opacity: 0.8; border-style: dashed; cursor: pointer; }
 .row-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .row-sub {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
