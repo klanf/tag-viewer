@@ -218,29 +218,8 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
         <div class="ttl">Tag 可视化看板</div>
 
         <template v-if="app.phase === 'error'">
-          <!-- 首启向导 · 环境准备(2026-10-15): WD14 下载是必须步骤, 画在遮罩正中, 界面天然锁定 -->
-          <template v-if="envUi">
-            <div class="err" style="color: var(--accent);">⚙️ 反推环境准备</div>
-            <div class="hint" style="margin-top: 4px;">
-              需要下载 Python 运行时（约 150MB）与 WD14 反推模型（约 1.27GB）。<br>
-              支持断点续传，下载完成后自动继续，期间请保持网络畅通。
-            </div>
-            <template v-if="!setupP.error">
-              <div class="phase" style="margin-top: 14px;">{{ setupP.stage || '正在连接下载源…' }}</div>
-              <div class="bar"><div class="fill" :style="{ width: `${setupP.pct || 0}%` }" /></div>
-              <div class="nums">
-                <span>{{ setupP.pct || 0 }}%</span>
-                <span v-if="setupP.bytes">{{ mb(setupP.bytes) }} / {{ mb(setupP.total) }}</span>
-              </div>
-            </template>
-            <div v-else class="err2">下载失败: {{ setupP.error }}</div>
-            <div class="btns" v-if="setupP.error">
-              <TvButton variant="primary" @click="retryEnv">重试下载</TvButton>
-            </div>
-          </template>
-
           <!-- 反推暂态: 图已入队、正在后台打标 —— 给进度条, done≥1 自动放行进看板 -->
-          <template v-else-if="taggingWait">
+          <template v-if="taggingWait">
             <div class="err" style="color: var(--accent);">🖼️ 图片已全部扫到，正在反推打标</div>
             <div class="bar"><div class="fill" :style="{ width: `${tagPct}%` }" /></div>
             <div class="nums">
