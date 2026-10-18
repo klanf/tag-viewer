@@ -110,11 +110,11 @@ export function serializeRules({ headNotes = [], rows = [], tailNotes = [] } = {
   return parts.join('\n') + (parts.length ? '\n' : '')
 }
 
-/** 类型下拉的选项(构建器行用) */
+/** 类型下拉的选项(构建器行用); hint 供悬停气泡与帮助页, 尽量带具体例子说人话 */
 export const MODE_OPTIONS = [
-  { value: 'exact', label: '精确', hint: 'tag 完全一致才命中', example: 'red_hair' },
-  { value: 'pre', label: '前缀', hint: '以 … 开头', example: 'blue_*' },
-  { value: 'suf', label: '后缀', hint: '以 … 结尾', example: '*_hair' },
-  { value: 'con', label: '包含', hint: '包含 … 即命中', example: '*color*' },
-  { value: 'seg', label: '整段', hint: '按 _ 切段逐段比, tomboy 不会误命中 @boy@', example: '@boy@' },
+  { value: 'exact', label: '精确', hint: '标签要和模式一字不差才命中: 模式 red_hair 只命中 red_hair 自己', example: 'red_hair' },
+  { value: 'pre', label: '前缀', hint: '命中所有以模式开头的标签: blue_* 命中 blue_hair、blue_eyes', example: 'blue_*' },
+  { value: 'suf', label: '后缀', hint: '命中所有以模式结尾的标签: *_hair 命中 blue_hair、long_hair', example: '*_hair' },
+  { value: 'con', label: '包含', hint: '标签里任意位置出现模式就命中(容易误伤): *color* 连 colorful 也会命中', example: '*color*' },
+  { value: 'seg', label: '整段', hint: '把标签按 _ 切成段, 必须有一段和模式完全一样才命中: @boy@ 命中 boy、xx_boy、boy_xx, 不会误伤 tomboy、boyish', example: '@boy@' },
 ]

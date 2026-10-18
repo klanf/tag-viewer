@@ -459,7 +459,8 @@ async function save() {
                   placeholder="例: _art"
                   title="保留原标签并加后缀: 填 _art 生成 {tag}_art; 留空就是原样保留"
                 >
-                <span class="sep" />
+              </div>
+              <div v-if="r.keep !== 'del'" class="row-sub repl-sub">
                 <span class="lab">替换标签</span>
                 <span v-for="(t, j) in r.repl" :key="j" class="chip">
                   {{ t }}<b class="x" title="移除" @click="r.repl.splice(j, 1)">×</b>
@@ -614,8 +615,9 @@ async function save() {
 .row-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .row-sub {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+  margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border);
 }
+.repl-sub { margin-top: 4px; padding-top: 0; border-top: none; padding-left: 18px; }
 .mode-sel {
   background: var(--panel); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--r-sm);
@@ -641,7 +643,6 @@ async function save() {
 }
 .arr { color: var(--faint); font-size: 13px; }
 .lab { font-size: 11px; color: var(--faint); flex: 0 0 auto; }
-.sep { width: 1px; height: 14px; background: var(--border); }
 .chips, .chip {
   display: inline-flex; align-items: center; gap: 4px;
   font-family: Consolas, Menlo, monospace; font-size: 11px;
