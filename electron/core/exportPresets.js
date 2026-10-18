@@ -173,6 +173,8 @@ const PARAM_ENUMS = {
   mode: ['any', 'all'],
   match: ['contains', 'exact'],
   exclude_match: ['contains', 'exact'],
+  // 安全剔除口径(2026-10-18): follow=跟随全局安全模式档位(老预设缺省, 行为不变)
+  safe_level: ['follow', 'core', 'edge'],
 }
 /** 这几个与首页/ buildExport 的默认值对齐: 缺省 = 开 */
 const PARAM_BOOL_TRUE = ['exclude_char', 'spaces', 'blacklist', 'replace', 'bg']
@@ -274,6 +276,7 @@ function toExportQuery(params) {
     strip_char: params.strip_char ? '1' : '0',
     strip_view: params.strip_view ? '1' : '0',
     safe_only: params.safe_only ? '1' : '0',
+    safe_level: params.safe_level || 'follow',
     seg_mode: params.seg_mode ? '1' : '0',
     exclude_char: params.exclude_char ? '1' : '0',
   }

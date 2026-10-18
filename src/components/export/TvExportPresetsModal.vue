@@ -46,6 +46,12 @@ const editing = ref(null)     // 表单对象; null = 看列表
 const formErr = ref('')
 
 const MODE_OPTS = [{ value: 'any', label: '任一命中(any)' }, { value: 'all', label: '全部命中(all)' }]
+/* 安全剔除口径(2026-10-18): core=仅露骨段 / edge=露骨+擦边段; follow=跟随全局安全模式档位 */
+const SAFE_LEVEL_OPTS = [
+  { value: 'follow', label: '跟随全局安全模式档位' },
+  { value: 'core', label: 'core —— 只剔明确露骨段' },
+  { value: 'edge', label: 'edge —— 露骨+擦边都剔' },
+]
 const MATCH_OPTS = [{ value: 'contains', label: '包含(contains)' }, { value: 'exact', label: '完全相等(exact)' }]
 
 const isNew = computed(() => !!editing.value && !presets.value.some((p) => p.id === editing.value.id))
@@ -463,7 +469,11 @@ function shortDir(d) {
           <TvCheckbox v-model="editing.params.strip_char" label="剔除角色/系列标签" />
           <TvCheckbox v-model="editing.params.strip_view" label="剔除视角/机位标签" title="去掉 from behind / high angle / dutch angle 等视角机位类标签, 词表 data/export_view_tags.txt 可自行增删" />
           <TvCheckbox v-model="editing.params.seg_mode" label="段位模式（只留内容 tag）" title="过滤画师/角色/系列/meta, 人数排最前, 通用按分类归堆 —— 给绘图管线随机抽注入用; 关掉则保持原始顺序" />
-          <TvCheckbox v-model="editing.params.safe_only" label="只导出安全模式的标签" title="每个标签串里剔除敏感tag(口径跟随安全模式档位 core/edge), 行数不变" />
+          <TvCheckbox v-model="editing.params.safe_only" label="只导出安全模式的标签" title="每个标签串里剔除敏感tag, 行数不变。敏感词表分 core(明确露骨)/edge(擦边)两段, 口径在下面选" />
+          <div v-if="editing.params.safe_only" class="half safe-level-row">
+            <span class="lb">剔除口径</span>
+            <TvSelect v-model="editing.params.safe_level" size="sm" :options="SAFE_LEVEL_OPTS" />
+          </div>
           <TvCheckbox v-model="editing.params.spaces" label="下划线转空格" />
           <TvCheckbox v-model="editing.params.with_path" label="每行带图片路径" />
           <TvCheckbox v-model="editing.params.exclude_char" label="排除词也命中带括号标签" />
@@ -589,4 +599,6 @@ function shortDir(d) {
 .switches { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
 .dirrow { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
 .dirrow > :first-child { flex: 1 1 auto; }
+.safe-level-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.safe-level-row .lb { font-size: 12px; color: var(--muted); flex: 0 0 auto; }
 </style>

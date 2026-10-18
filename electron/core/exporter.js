@@ -63,7 +63,7 @@ export function buildExport(raw = {}) {
     if (cfg.append.length) bg = cfg
   }
   const vm = stripView ? viewTagMatcher() : null
-  const safeHit = safeOnly ? safetyExportStripper() : null
+  const safeHit = safeOnly ? safetyExportStripper(String(raw.safe_level || '')) : null
 
   const lines = []
   let blockedCount = 0
