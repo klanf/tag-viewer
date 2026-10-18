@@ -23,7 +23,7 @@ import TvInput from '../base/TvInput.vue'
 import TvTagComplete from '../base/TvTagComplete.vue'
 import { api } from '@/utils/api.js'
 import { useUiStore } from '@/stores/useUiStore.js'
-import { parseRules, serializeRules, serializeRow, MODE_OPTIONS } from '@/utils/replaceGrammar.js'
+import { parseRules, serializeRules, MODE_OPTIONS } from '@/utils/replaceGrammar.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -141,9 +141,6 @@ function addRow(prefill = null) {
 }
 
 function delRow(i) { rows.value.splice(i, 1) }
-
-/** 导出结果预览 —— 与导出引擎同一份序列化, 所见即导出 */
-function rowPreview(r) { return serializeRow(r) }
 
 const curCount = computed(() => (builderMode.value
   ? rows.value.filter((r) => r.mode !== 'raw').length
@@ -400,9 +397,28 @@ async function save() {
             <div class="pop-cap">结尾注释(行间注释收纳在这)</div>
             <textarea v-model="tailNotes" class="notes-area" spellcheck="false" placeholder="行间注释会收纳到这里, 保存时写在规则后面" />
           </div>
-          <!-- 浮层: 语法帮助 -->
+          <!-- 浮层: 语法帮助(先讲用途, 再逐功能) -->
           <div v-if="helpOpen" class="pop help-pop">
-            <div v-for="(t, i) in tips" :key="i" class="help-line">{{ t }}</div>
+            <template v-if="builderMode">
+              <div class="h-sec"><b>这是干嘛的</b></div>
+              <div class="help-line">替换规则在<b>导出 txt 时</b>生效: 对每张图里命中的标签做改写 / 追加 / 删除。<b>不改动库内数据</b>, 同一张图用不同规则组能导出不同方案。</div>
+              <div class="h-sec"><b>匹配类型(选完填模式)</b></div>
+              <div v-for="m in MODE_OPTIONS" :key="m.value" class="help-line">
+                <b>{{ m.label }}</b> · {{ m.hint }} · 例 <code>{{ m.example }}</code>
+              </div>
+              <div class="h-sec"><b>命中的原标签怎么处理</b></div>
+              <div class="help-line"><b>丢弃</b> = 原标签不要了, 只留右边替换标签(不填替换标签等于没作用)</div>
+              <div class="help-line"><b>保留</b> = 原标签留着(替换侧自动带 <code>{tag}</code>), 后缀可加 <code>_art</code> 这类改写</div>
+              <div class="help-line"><b>删除标签</b> = 命中即整个删掉, 用来剔除不要的 tag</div>
+              <div class="h-sec"><b>其他</b></div>
+              <div class="help-line">🧪 测试条: 输入标签实时看命中与结果(基于<b class="u">已保存</b>规则)</div>
+              <div class="help-line">🗒 注释: <code>#</code> 开头, 保存时写在规则前/后, 只给人看</div>
+              <div class="help-line">⌨ 原文模式: 批量粘贴、改构建器表达不了的特殊符号规则</div>
+              <div class="help-line">★ 默认组: 导出入口不特意选组时用它</div>
+            </template>
+            <template v-else>
+              <div v-for="(t, i) in tips" :key="i" class="help-line">{{ t }}</div>
+            </template>
             <div v-if="bg && bg.append && bg.append.length" class="help-line">🌄 缺背景时自动补 <b>{{ bg.append.join('/') }}</b>(背景补全设置)</div>
           </div>
         </div>
@@ -417,26 +433,29 @@ async function save() {
                 <select v-model="r.mode" class="mode-sel" title="匹配类型">
                   <option v-for="m in MODE_OPTIONS" :key="m.value" :value="m.value">{{ m.label }}</option>
                 </select>
+                <span class="mode-hint" :title="MODE_OPTIONS.find((m) => m.value === r.mode)?.hint">
+                  {{ MODE_OPTIONS.find((m) => m.value === r.mode)?.hint }}
+                </span>
                 <TvTagComplete
                   v-model="r.core"
                   class="row-core"
                   :placeholder="MODE_OPTIONS.find((m) => m.value === r.mode)?.example || '模式'"
                 />
                 <span class="arr">→</span>
-                <code class="preview" :title="'导出效果: ' + rowPreview(r)">{{ rowPreview(r) }}</code>
                 <TvButton size="xs" variant="ghost" class="row-del" title="删除这条规则" @click.stop="delRow(i)">🗑</TvButton>
               </div>
-              <div class="row-sub">
+              <div v-if="r.keep !== 'del'" class="row-sub">
                 <span class="lab">原标签</span>
                 <select v-model="r.keep" class="mode-sel keep-sel" title="命中的原标签怎么处理">
                   <option :value="false">丢弃</option>
                   <option :value="true">保留</option>
+                  <option value="del">删除标签</option>
                 </select>
                 <input
-                  v-if="r.keep"
+                  v-if="r.keep === true"
                   v-model="r.suffix"
                   class="suffix"
-                  placeholder="+后缀可空"
+                  placeholder="例: _art"
                   title="保留原标签并加后缀: 填 _art 生成 {tag}_art; 留空就是原样保留"
                 >
                 <span class="sep" />
@@ -450,6 +469,9 @@ async function save() {
                   @pick="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
                   @confirm="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
                 />
+              </div>
+              <div v-else class="row-sub del-sub">
+                <span class="del-mark">命中即从导出结果中<b>删除</b>该标签 —— 不替换、不保留</span>
               </div>
             </template>
             <template v-else>
@@ -477,10 +499,11 @@ async function save() {
           <span class="lab">🧪 测试</span>
           <TvTagComplete v-model="testTag" class="test-in" placeholder="输入一个标签试试, 如 blue_hair" :limit="8" />
           <span v-if="testRes" class="test-out">
-            <template v-if="testRes.hits?.length">
+            <template v-if="testRes.hits?.length && testRes.result.length">
               命中 <b>{{ testRes.hits.map((h) => h.pat).join(' · ') }}</b>
               → <b class="ok">{{ testRes.result.join(', ') }}</b>
             </template>
+            <template v-else-if="testRes.hits?.length">命中 <b>{{ testRes.hits.map((h) => h.pat).join(' · ') }}</b> → <b class="bad">删除该标签</b></template>
             <template v-else>未命中任何规则 → 原样 <b>{{ testRes.result.join(', ') }}</b></template>
           </span>
           <span v-else-if="testTag.trim()" class="lab">测试中…</span>
@@ -597,6 +620,13 @@ async function save() {
   border: 1px solid var(--border); border-radius: var(--r-sm);
   font-size: 12px; padding: 4px 6px; outline: none; flex: 0 0 auto;
 }
+.mode-hint {
+  font-size: 11px; color: var(--faint); flex: 0 0 auto; max-width: 150px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.del-sub { border-top: none; margin-top: 6px; padding-top: 0; }
+.del-mark { font-size: 11px; color: var(--danger, #c05050); }
+.del-mark b { font-weight: 500; }
 .row-core { flex: 0 1 180px; }
 .row-core :deep(input) { width: 100%; }
 .keep-sel { flex: 0 0 auto; }
@@ -606,11 +636,6 @@ async function save() {
   padding: 4px 6px; font-size: 11px; font-family: Consolas, Menlo, monospace; outline: none;
 }
 .arr { color: var(--faint); font-size: 13px; }
-.preview {
-  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: Consolas, Menlo, monospace; font-size: 12px; color: var(--text);
-  background: var(--panel); border-radius: 4px; padding: 3px 8px;
-}
 .lab { font-size: 11px; color: var(--faint); flex: 0 0 auto; }
 .sep { width: 1px; height: 14px; background: var(--border); }
 .chips, .chip {
@@ -621,8 +646,19 @@ async function save() {
 }
 .chip .x { color: var(--faint); cursor: pointer; font-weight: normal; }
 .chip .x:hover { color: var(--text); }
-.chip-add { flex: 0 1 140px; }
+.chip-add { flex: 0 1 120px; }
 .chip-add :deep(input) { min-width: 0; width: 100%; padding: 3px 6px; font-size: 11px; }
+.test-in { flex: 0 1 200px; }
+.test-in :deep(input) { min-width: 0; width: 100%; }
+.row-core :deep(input) { min-width: 0; }
+.test-out .bad { color: var(--danger, #c05050); }
+.h-sec { font-size: 11px; color: var(--faint); margin: 8px 0 2px; }
+.h-sec:first-child { margin-top: 0; }
+.h-sec b { color: var(--text); font-weight: 500; }
+.help-pop code {
+  font-family: Consolas, Menlo, monospace; font-size: 11px;
+  background: var(--panel2); border-radius: 4px; padding: 0 5px;
+}
 .raw-badge {
   font-size: 10px; color: var(--warn, #c8862a);
   border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; flex: 0 0 auto;

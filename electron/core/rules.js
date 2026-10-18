@@ -7,6 +7,7 @@
  *                          替换侧里写 {tag} 表示"命中时的原标签", 用来做追加/改写:
  *                            *_hair   -> {tag}, hair_focus      (保留原标签 + 追加)
  *                            painting -> {tag}_style            (原标签改写, 见 replaceTag)
+ *                          替换侧为空('模式 ->') = 命中即删除该标签(2026-10-18)
  *
  * 通配两种写法(黑名单 / 替换规则 / 视角词表 三处通用):
  *   *  星号 = 纯子串语义 —— 下划线只是普通字符, 所以 *boy* 会连 tomboy/boyish/xxxboy 一起命中
@@ -354,7 +355,8 @@ export function toggleBlacklistTag(tag) {
 
 const DEFAULT_SET_ID = 'default'
 
-/** 文本 -> [{pat, replTags}]; 行格式与旧 txt 一模一样(兼容)。导出供语法模块测试当 oracle */
+/** 文本 -> [{pat, replTags}]; 行格式与旧 txt 一模一样(兼容)。导出供语法模块测试当 oracle
+ *  删除语义(2026-10-18): 替换侧为空(`pat ->`) = 命中即删除该标签(replTags=[]) */
 export function parseReplaceRules(text) {
   const out = []
   for (const line of String(text ?? '').split('\n')) {
@@ -364,7 +366,7 @@ export function parseReplaceRules(text) {
     if (i < 0) continue
     const pat = s.slice(0, i).trim().toLowerCase()
     const replTags = s.slice(i + 2).split(',').map((x) => x.trim()).filter(Boolean)
-    if (pat && replTags.length) out.push({ pat, replTags })
+    if (pat) out.push({ pat, replTags })
   }
   return out
 }
@@ -463,14 +465,18 @@ function patHit(tag, pat) {
 
 export function replaceTag(tag, rules) {
   const out = []
+  let del = false
   for (const { pat, replTags } of rules) {
     if (!patHit(tag, pat)) continue
+    // 删除规则(替换侧为空): 命中即整个删掉, 后面的规则不再看
+    if (!replTags.length) { del = true; break }
     for (const r of replTags) {
       // 用函数式替换, 免得原标签里的 $& / $1 被当成替换模式吃掉
       const v = r.replace(TAG_PLACEHOLDER, () => tag)
       if (!out.includes(v)) out.push(v)
     }
   }
+  if (del) return []
   return out.length ? out : [tag]
 }
 

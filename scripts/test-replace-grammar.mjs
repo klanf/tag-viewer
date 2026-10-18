@@ -128,4 +128,31 @@ ok('MODE_OPTIONS 覆盖 5 种模式', () => {
   assert.deepEqual(MODE_OPTIONS.map((m) => m.value), ['exact', 'pre', 'suf', 'con', 'seg'])
 })
 
+console.log('⑤ 删除语义(2026-10-18): 替换侧为空 = 命中即删除')
+ok('parseLine 识别删除行 → keep=del', () => {
+  const r = parseLine('bad_tag ->')
+  assert.deepEqual([r.mode, r.core, r.keep, r.repl], ['exact', 'bad_tag', 'del', []])
+  const s = parseLine('*_wet -> ')
+  assert.deepEqual([s.mode, s.core, s.keep], ['suf', '_wet', 'del'])
+})
+ok('serializeRow 删除行 round-trip 为 `pat ->`', () => {
+  assert.equal(serializeRow({ mode: 'exact', core: 'bad_tag', keep: 'del', suffix: '', repl: [] }), 'bad_tag ->')
+  const p = parseRules('bad_tag ->\nkeep_me -> good_tag')
+  assert.equal(p.rows.length, 2)
+  assert.equal(serializeRules({ headNotes: [], rows: p.rows, tailNotes: [] }), 'bad_tag ->\nkeep_me -> good_tag\n')
+})
+ok('后端 replaceTag 命中删除规则返回空数组(=删掉), 未命中原样', () => {
+  const rules = parseReplaceRules('bad_tag ->\n*_wet ->')
+  assert.deepEqual(replaceTag('bad_tag', rules), [])
+  assert.deepEqual(replaceTag('skin_wet', rules), [])
+  assert.deepEqual(replaceTag('fine_tag', rules), ['fine_tag'])
+})
+ok('删除规则在文本往返(构建器⇄原文)中语义不丢', () => {
+  const REAL = '# 删掉不要的\nbad_tag ->\nkeep_me -> good_tag'
+  const orig = parseReplaceRules(REAL)
+  const rebuilt = parseReplaceRules(serializeRules(parseRules(REAL)))
+  assert.equal(norm(rebuilt), norm(orig))
+  assert.deepEqual(replaceTag('bad_tag', rebuilt), replaceTag('bad_tag', orig))
+})
+
 console.log(`\n通过 ${n} 项断言${process.exitCode ? '（有失败）' : ''}`)

@@ -16,13 +16,13 @@
  * 行与行之间的注释在解析时**收集到尾部**, 序列化时写在规则后面 —— 不丢, 但不挡行。
  */
 
-/** 单行文本 → 行模型; 无法表达返回 null(调用方落 raw) */
+/** 单行文本 → 行模型; 无法表达返回 null(调用方落 raw)
+ *  删除语义(2026-10-18): 替换侧为空(`pat ->`) = 命中即删除该标签, 行模型 keep:'del' */
 export function parseLine(s) {
   const i = s.indexOf('->')
   if (i < 0) return null
   const pat = s.slice(0, i).trim().toLowerCase()
-  const replTags = s.slice(i + 2).split(',').map((x) => x.trim()).filter(Boolean)
-  if (!pat || !replTags.length) return null
+  if (!pat) return null
 
   // 模式侧 → (mode, core); core 里还剩 * 就是表达不了的形态
   let mode = 'exact'
@@ -38,6 +38,11 @@ export function parseLine(s) {
   }
   if (!core || core.includes('*')) return null
 
+  const replTags = s.slice(i + 2).split(',').map((x) => x.trim()).filter(Boolean)
+
+  // 替换侧为空 = 删除规则
+  if (!replTags.length) return { mode, core, keep: 'del', suffix: '', repl: [] }
+
   // 替换侧 → (keep, suffix, repl); {tag} 出现一次以内才可表达
   const nPh = replTags.join(',').match(/\{tag\}/gi)?.length || 0
   if (nPh > 1) return null
@@ -52,7 +57,7 @@ export function parseLine(s) {
   return { mode, core, keep, suffix, repl }
 }
 
-/** 行模型 → 单行文本 */
+/** 行模型 → 单行文本(keep:'del' 序列化为 `pat ->`, 与后端删除语义同一份真源) */
 export function serializeRow(row) {
   if (row.mode === 'raw') return row.text
   let pat = row.core
@@ -60,6 +65,7 @@ export function serializeRow(row) {
   else if (row.mode === 'con') pat = `*${row.core}*`
   else if (row.mode === 'suf') pat = `*${row.core}`
   else if (row.mode === 'pre') pat = `${row.core}*`
+  if (row.keep === 'del') return `${pat} ->`
   const replTags = row.keep ? [`{tag}${row.suffix || ''}`, ...row.repl] : [...row.repl]
   return `${pat} -> ${replTags.join(', ')}`
 }

@@ -12,7 +12,7 @@ import { recordsFor, frozenKey, isCharacterTag, isCopyrightTag } from './dataset
 import { parseQuery, scopeRecords, searchCached } from './search.js'
 import { blacklistMatcher, isBlockedFast, loadReplaceRules, loadReplaceRulesGroup, replaceTag, loadBgConfig, hasBgTagFast, viewTagMatcher, isViewFast } from './rules.js'
 import { safetyExportStripper } from './safety.js'
-import { exportSegSort } from './tagcats.js'
+import { exportSegSort, sortTags } from './tagcats.js'
 
 /**
  * 比较两个标签"是不是同一个"用的归一化键: 忽略大小写, 且把下划线/空格视作等价。
@@ -118,12 +118,19 @@ export function buildExport(raw = {}) {
       const next = []
       const seen = new Set()
       for (const t of tags) {
-        for (const nt of replaceTag(t, replRules)) {
-          if (nt !== t) replacedCount++
-          if (!seen.has(nt)) { seen.add(nt); next.push(nt) }
+        const nt = replaceTag(t, replRules)
+        // 删除规则: 返回空数组 = 该标签整个去掉, 也计入替换数
+        if (!nt.length) { replacedCount++; continue }
+        for (const v of nt) {
+          if (v !== t) replacedCount++
+          if (!seen.has(v)) { seen.add(v); next.push(v) }
         }
       }
       tags = next
+      // 替换产物按分类段位重排(sortTags 稳定, 未替换的原序列不变) ——
+      // 否则"blue_hair -> shota"这类改写会留在原 tag 的位置上, 导出顺序
+      // 与光箱看到的分类排序对不上(2026-10-18 用户实测)
+      tags = sortTags(tags)
     }
 
     if (bg && !hasBgTagFast(tags, bg)) {
