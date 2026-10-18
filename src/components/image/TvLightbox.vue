@@ -38,6 +38,7 @@ import { useTagFavStore } from '@/stores/useTagFavStore.js'
 import { useImageCtxMenu } from '@/composables/useImageCtxMenu.js'
 import { useTrash } from '@/composables/useTrash.js'
 import { useCharCart } from '@/composables/useCharCart.js'
+import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 import TvCopySplit from '../tag/TvCopySplit.vue'
 import TvQuickMoveBar from './TvQuickMoveBar.vue'
 import { fileUrl } from '@/utils/api.js'
@@ -510,6 +511,19 @@ function preheat() {
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.ban { background: var(--danger-soft, rgba(239, 68, 68, .14)); color: var(--danger); }
 .badge.dim { background: var(--panel3); color: var(--muted); }
+/* 来源徽章(2026-10-18): 反推入库高亮, 自带/历史合并/手工导入走低调灰 */
+.badge.src { align-self: flex-start; }
+.badge.src[data-src='wd14'] { background: var(--accent-soft); color: var(--accent); }
+.badge.src[data-src='meta'],
+.badge.src[data-src='meta+wd14'],
+.badge.src[data-src='legacy'] { background: var(--panel3); color: var(--muted); }
+/* T2 兜底: 无标签图的小字入口 —— 虚线框弱化, 点击打开安装引导 */
+a.badge.hint {
+  background: var(--panel3); color: var(--accent);
+  text-decoration: none; border: 1px dashed var(--border);
+  cursor: pointer; align-self: flex-start;
+}
+a.badge.hint:hover { border-color: var(--accent); }
 /* 被 ban 标签 显示/隐藏 开关(2026-10-16): 迷你 switch, 与徽章同排 */
 .ban-vis {
   display: inline-flex; align-items: center; gap: 5px;

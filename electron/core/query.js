@@ -576,26 +576,28 @@ export function getTagsForPath(raw = {}) {
  */
 function dbTagsByPath(p) {
   try {
-    const row = openDb().prepare('SELECT tags FROM images WHERE path = ? AND gone = 0').get(p)
+    const row = openDb().prepare('SELECT tags, tags_src FROM images WHERE path = ? AND gone = 0').get(p)
     if (!row || !row.tags) return null
     const tags = String(row.tags).split(',').map((t) => t.trim()).filter(Boolean)
-    return tags.length ? tags : null
+    if (!tags.length) return null
+    return { tags, tagsSrc: String(row.tags_src || '') }
   } catch { return null }
 }
 
-/** lightbox 用的结构化数据: 角色 / 系列 / 全部标签(已滤掉 Danbooru 分类噪声) */
+/** lightbox 用的结构化数据: 角色 / 系列 / 全部标签(已滤掉 Danbooru 分类噪声)
+ *  2026-10-18: 附带 tags_src 供来源徽章(图片自带 / 反推入库 / 自带+反推 / 手工导入) */
 export function getLightboxData(raw = {}) {
   const p = typeof raw.path === 'string' ? raw.path : ''
   if (!p) return { error: 'not found' }
 
   const rec = recordByPath(p)
   if (rec) {
-    return packLightbox(p, rec.tags)
+    return packLightbox(p, rec.tags, rec.tagsSrc)
   }
 
   // 兜底①: 库内记录但来源被隐藏(见 dbTagsByPath 注释)
   const dbTags = dbTagsByPath(p)
-  if (dbTags) return packLightbox(p, dbTags)
+  if (dbTags) return packLightbox(p, dbTags.tags, dbTags.tagsSrc)
 
   // 兜底②: 库外图片(「扫描文件夹」里的 AI 生成图) —— 直接读图片元数据。
   // 注意: 即使没有任何元数据也要回 200 语义, 否则前端拿不到结构, lightbox 直接空白。
@@ -607,7 +609,7 @@ export function getLightboxData(raw = {}) {
   return { error: 'not found' }
 }
 
-function packLightbox(p, tags) {
+function packLightbox(p, tags, tagsSrc = '') {
   const charTags = tags.filter(isCharacterTag)
   // 系列: 从全部标签里解析(角色的所属系列 + 裸系列标签), 不再只看带括号的角色
   const series = []
@@ -624,6 +626,7 @@ function packLightbox(p, tags) {
     series,
     all_tags: tags,
     plain_tags: plainTags,
+    tags_src: String(tagsSrc || ''),
     ban_map: buildBanMap(tags),
     ...bgInfoFor(tags, tags.length > 0),
   }

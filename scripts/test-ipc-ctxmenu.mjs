@@ -396,6 +396,8 @@ await ta('右键菜单「📁 打开图片所在位置」也走反斜杠(系统�
 })
 
 /* ---------------- 汇总 ---------------- */
-fs.rmSync(root, { recursive: true, force: true })
+/* 清理临时目录包一层容错: 断言全过时, rmSync 偶发的 EBUSY(杀软/索引服务
+ * 短暂占用新建的 tags.db)不该把全绿的测试染红 —— %TEMP% 里的残留系统自会清。 */
+try { fs.rmSync(root, { recursive: true, force: true }) } catch { /* 环境噪音, 忽略 */ }
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`)
 process.exit(fail ? 1 : 0)

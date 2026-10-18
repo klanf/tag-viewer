@@ -210,8 +210,9 @@ export function recomputeSafety() {
  * @param {string} p 路径
  * @param {string[]} rawTags 标签
  * @param {string} srcName 来源名
- * @param {{w:number,h:number}|null} [dims] 像素尺寸; 从 txt 建库时没有(留 0) */
-function pushRecord(p, rawTags, srcName, dims = null) {
+ * @param {{w:number,h:number}|null} [dims] 像素尺寸; 从 txt 建库时没有(留 0)
+ * @param {string} [tagsSrc] 标签来源(meta=自带 / wd14=反推 / meta+wd14=历史合并 / legacy=手工) */
+function pushRecord(p, rawTags, srcName, dims = null, tagsSrc = '') {
   const tags = []
   const ltags = []
   for (const raw of rawTags) {
@@ -219,10 +220,9 @@ function pushRecord(p, rawTags, srcName, dims = null) {
     tags.push(t)
     ltags.push(intern(t.toLowerCase()))
   }
-  if (!tags.length) return
-  /* 安全模式标记 —— 在**读数据集时**算一次(八万条 × 约 40 标签, 一两百毫秒)。
-   * 放这里而不是过滤时现算: 前端切开关/切档位就只做一次数值比较, 不用为了
-   * 过滤去重载整个数据集。ltags 已经是小写的, 直接喂进去。 */
+  /* 2026-10-18 WD14 按需安装(v3): 无标签的图不再在这里丢掉 —— 看板允许显示
+   * 没有标签的图(这是"没装反推也能正常进看板"的前提), 装好反推打上标签后
+   * 内容自然丰富。 */
   const unsafe = unsafeLevelOf(ltags)
   if (unsafe === 1) W.unsafeCore++
   else if (unsafe === 2) W.unsafeEdge++
@@ -231,6 +231,8 @@ function pushRecord(p, rawTags, srcName, dims = null) {
     tags,
     ltags,
     source: srcName,
+    // 标签来源徽章用: ''(txt 建库路径没有这层信息) / meta / wd14 / meta+wd14 / legacy
+    tagsSrc: String(tagsSrc || ''),
     // 0 = 不知道(老库还没回填 / 从 txt 建库来的)。消费方必须把 0 当"未知",
     // 回落到默认比例 —— 拿 0 算比例会得到 Infinity 或 0, 布局直接塌掉。
     px_w: Number(dims?.w) || 0,
@@ -383,7 +385,9 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
     // 2026-10-17 (远端用户反馈"1000/1000 读完都进不去"): 队列全 done 却一条
     // 标签都没落库是**终态**不是暂态 —— "反推无结果"也标 done(防循环, 刻意
     // 不写 images), 全库都无结果时旧文案会让启动遮罩把它当暂态无限重试。
-    // 典型成因: 文件夹里全是非动漫照片(WD14 对真人照片基本无输出)/图损坏。
+    // 2026-10-18 WD14 按需安装(v3): 无标签的图现在**会进数据集**(readRecords
+    // 不再跳过), 所以这个分支只剩"扫描还没落第一批行"和"全部行都不可见"
+    // 两种情况 —— 未装反推的全新库也能正常进看板, 不会再被队列卡死。
     let foldersN = 0, pendingN = 0, doneN = 0, failedN = 0
     try {
       const db = openDb()
@@ -400,7 +404,8 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
     } catch { /* 库还没建好, 按真没登记处理 */ }
     if (foldersN > 0 && pendingN + doneN + failedN > 0) {
       if (pendingN > 0) {
-        throw new Error(`已登记 ${foldersN} 个文件夹, ${pendingN} 张图正在打标队列里等待反推入库 —— 反推跑完后看板就会亮起来`)
+        // 文案保留"打标队列"字样 —— 启动遮罩靠它识别"暂态自动重试"
+        throw new Error(`已登记 ${foldersN} 个文件夹, ${pendingN} 张图在打标队列里等待入库 —— 第一批记录落库后看板就会亮起来`)
       }
       // 终态: 队列跑完了却没产出。文案刻意避开"打标队列/等待反推"字样 ——
       // 启动遮罩靠这两个词识别"暂态自动重试", 命中了就会变成无限 reload 循环。

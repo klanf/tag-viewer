@@ -41,11 +41,15 @@ async function oneClickDownload() {
   try { await api.setupDownload() } catch { /* 失败走 error 推送 */ } finally { downloading.value = false }
 }
 /* 下载不再"跑起来就关弹窗让位小卡"(2026-10-15): 进度内嵌在本弹窗, 弹窗本身锁背景。
- * done → 重新探测并自动关; error → 弹窗里给「重试下载」。 */
+ * done → 重新探测并自动关; error → 弹窗里给「重试下载」。
+ * 2026-10-18 按需安装 v3: 装完**自动反推补标**(用户拍板) —— 用户点横幅/提示条
+ * 装好环境的那一刻, 队列里攒着的图(含本会话扫进来的无标签图)立刻开跑;
+ * tagger:run 自带防重入, 重复调用无害。 */
 watch(() => setupP.value.done, (d) => {
   if (!d) return
   reprobe()
   open.value = false
+  api.taggerRun().catch(() => { /* 失败走 tagger-err 日志与胶囊状态 */ })
 })
 </script>
 

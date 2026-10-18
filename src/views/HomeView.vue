@@ -16,6 +16,7 @@
 import { ref, computed, watch, onMounted, onActivated, onDeactivated } from 'vue'
 import { useRouter } from 'vue-router'
 import TvSourceChips from '@/components/filter/TvSourceChips.vue'
+import TvWd14Banner from '@/components/board/TvWd14Banner.vue'
 import TvTagBars from '@/components/tag/TvTagBars.vue'
 import TvTabs from '@/components/base/TvTabs.vue'
 import TvTagSuggestInput from '@/components/tag/TvTagSuggestInput.vue'
@@ -564,6 +565,8 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 
     <!-- ---------------- 右栏 ---------------- -->
     <section class="panel result">
+      <!-- WD14 按需安装横幅: 未装反推 && 库里有图 && 未永久静默时出现(每会话最多一次) -->
+      <TvWd14Banner />
       <div class="result-head">
         <b>{{ nfmt(feed.total.value) }}</b><span class="muted">条匹配</span>
         <TvInput

@@ -3,9 +3,10 @@
  * =======================================
  * 它要守住的**不是"能跑"**, 而是这几条容易被后续改动破坏的性质:
  *
- *   ① **meta 部分永不丢(2026-10-02 合并语义)** —— meta 图也反推, 但原生标签必须
- *      原样保留、WD14 新标签并进去(tags_src 变 'meta+wd14')。谁把"反推覆盖一切"
- *      写进去, 就会被"a.png 的原生标签原样留在合并结果里"这条抓住。
+ *   ① **反推结果覆盖写回(2026-10-18 v3 覆盖语义)** —— meta 图也反推, 反推成功
+ *      就以反推为准: tags 整体替换、tags_src 归一为 'wd14'(自带 tag 只是暂存;
+ *      文件重扫时 ingest 会按 mtime 变化重新写回 meta 并重新入队, 不会真丢)。
+ *      谁把旧的"合并语义"(meta+wd14 并集)写回去, 会被"a.png 来源标必须是 wd14"抓住。
  *   ② **tagger 只消费队列, 不自造工作** —— 发给模型的每张图都必须是 ingest
  *      判定过的(裸图或待合并的 meta 图), 队列外的一次都不发。
  *   ③ **反推写完库, 下一轮同步不再重读 PNG** —— 指纹是这时写进去的, 漏了它
@@ -177,7 +178,7 @@ console.log('\n[0] 建登记表: 一个看板来源 + 一个纯扫描夹')
 
 /* ---------------------------------------------------------- 第一轮 */
 
-console.log('\n[1] 同步: 带元数据的直接入库, 裸图入队, meta 图也入队(等合并)')
+console.log('\n[1] 同步: 带元数据的直接入库, 裸图入队, meta 图也入队(等反推覆盖)')
 const A = writeImg(IMG_DIR, 'a.png', 'hatsune_miku, blue_hair', 300)
 const B = writeImg(IMG_DIR, 'b.png', '', 300)
 const C = writeImg(IMG_DIR, 'c.png', '', 300)
@@ -192,7 +193,7 @@ writeImg(SCAN_ONLY, 'd.png', '', 300)          // 扫描夹 -> 不进这条流�
 
 /* ---------------------------------------------------------- 正常反推 */
 
-console.log('\n[2] 反推: 裸图打标入库; meta 图合并(原生标签保留 + WD14 并入)')
+console.log('\n[2] 反推: 裸图打标入库; meta 图被反推结果覆盖(tags_src 归一 wd14)')
 useFake('ok')
 resetFakeLog()
 const t1 = await tagger.runTagger({})
@@ -201,7 +202,7 @@ const t1 = await tagger.runTagger({})
   eq('真正发给模型 3 张', t1.inferCalls, 3)
   eq('反推成功 3', t1.tagged, 3)
   eq('新插入 images 行 2(裸图 b/c)', t1.created, 2)
-  eq('合并更新 1(a)', t1.updated, 1)
+  eq('覆盖更新 1(a)', t1.updated, 1)
   eq('provider 以回执为准(CUDA)', t1.provider, 'CUDAExecutionProvider')
 
   const rb = dbGet('SELECT tags, tags_src FROM images WHERE path=?', norm(B))
@@ -209,15 +210,15 @@ const t1 = await tagger.runTagger({})
   eq('b 的来源标 wd14', rb.tags_src, 'wd14')
   eq('c 的来源标 wd14', dbGet('SELECT tags_src FROM images WHERE path=?', norm(C)).tags_src, 'wd14')
 
-  // ---- 铁律 ①(合并语义): meta 部分原样保留, WD14 标签并进去 ----
+  // ---- 铁律 ①(覆盖语义): 反推结果整体替换, tags_src 归一 'wd14' ----
   const ra = dbGet('SELECT tags, tags_src FROM images WHERE path=?', norm(A))
-  eq('a = 原生标签在前 + 反推新增在后', ra.tags, 'hatsune_miku,blue_hair,fake_tag,name_a')
-  eq('a 的来源标 meta+wd14', ra.tags_src, 'meta+wd14')
+  eq('a 被反推结果覆盖', ra.tags, 'fake_tag,name_a')
+  eq('a 的来源标 wd14', ra.tags_src, 'wd14')
 
   // ---- 铁律 ②: 只发队列里的(a/b/c), 队列外的一次不发 ----
   const calls = fakeCalls()
   eq('模型共收到 3 次调用', calls.length, 3)
-  eq('a.png 也发了(合并语义)', calls.some((p) => p.includes('a.png')), true)
+  eq('a.png 也发了(覆盖语义)', calls.some((p) => p.includes('a.png')), true)
   eq('d.png(扫描夹) 从未发给模型', calls.some((p) => p.includes('d.png')), false)
 
   eq('队列已结清', ingest.queueStats().pending, 0)

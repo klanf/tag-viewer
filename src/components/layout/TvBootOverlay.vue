@@ -57,31 +57,30 @@ async function startWithFolder() {
     }
     // 已在跑就静默跳过(登记跃迁本身会自动接同步; 这里兜底)
     api.ingestRun().catch(() => {})
-    // 2026-10-15 首启向导: 扫描先入库(与下载并行), 但反推必须等环境就绪 ——
-    // 环境没好就拉反推只会降级, 用户卡在 0% 打标页(远端实测)。环境是向导正式一步。
-    await ensureEnvThen(async () => {
-      scanning.value = true
-      try {
-        const ok = await waitFirstRecords(10 * 60 * 1000)
-        if (!ok) {
-          // 2026-10-03: 别再把"入队等反推"误报成"没扫到图" —— 拉一次队列状态区分
-          try {
-            const st = await api.ingestStatus()
-            const q = st?.queue || {}
-            const total = Number(q.total) || 0
-            if (total > 0) {
-              pickErr.value = `已扫到 ${total} 张图并在后台反推打标中（已完成 ${Number(q.done) || 0} 张）—— 反推继续在后台跑，完成后重新打开即可`
-            } else {
-              pickErr.value = '扫描完成但没找到支持的图片 —— 确认这个文件夹里真的有图片，然后点「重试」'
-            }
-          } catch { pickErr.value = '扫描未产生入库记录 —— 确认文件夹里有图片后重新选择，或重启应用' }
-          return
-        }
-        await reload()
-      } finally {
-        scanning.value = false
+    // 2026-10-18 WD14 按需安装(v3): 向导**不再强制装反推环境** —— 扫描照跑,
+    // 自带提示词的图直接入库, 一批记录落库就放行进看板; 没有自带提示词的图
+    // 等装了反推再打标(看板横幅会提示, 队列留着不会丢)。
+    scanning.value = true
+    try {
+      const ok = await waitFirstRecords(10 * 60 * 1000)
+      if (!ok) {
+        // 2026-10-03: 别再把"入队等反推"误报成"没扫到图" —— 拉一次队列状态区分
+        try {
+          const st = await api.ingestStatus()
+          const q = st?.queue || {}
+          const total = Number(q.total) || 0
+          if (total > 0) {
+            pickErr.value = `已扫到 ${total} 张图并在后台处理中（已完成 ${Number(q.done) || 0} 张）—— 处理继续在后台跑，完成后重新打开即可`
+          } else {
+            pickErr.value = '扫描完成但没找到支持的图片 —— 确认这个文件夹里真的有图片，然后点「重试」'
+          }
+        } catch { pickErr.value = '扫描未产生入库记录 —— 确认文件夹里有图片后重新选择，或重启应用' }
+        return
       }
-    })
+      await reload()
+    } finally {
+      scanning.value = false
+    }
   } catch (e) {
     pickErr.value = String(e?.message || e)
   } finally {
@@ -90,51 +89,10 @@ async function startWithFolder() {
   }
 }
 
-/* ---- 首启向导 · 环境准备(2026-10-15) ----
- * WD14 反推环境(Python 运行时 + 模型)是首启的必须步骤, 不再走旁路 native dialog。
- * 画在 boot 全屏遮罩正中 = 界面天然锁定; 进度字节级; 失败给「重试下载」(断点续传)。
- * 环境就绪(tagger:status 不再 degraded)后自动继续后续步骤, 不允许跳过。
- */
-const envUi = ref(null)          // null=不在环境步骤 | { phase:'running'|'error' }
-const envAfter = ref(null)       // 环境就绪后的续跑回调
-const setupP = computed(() => app.setup || {})
-
-/** 环境没就绪 → 进下载面板, 就绪后执行 cb; 已就绪直接 cb。
- *  判定用静态 config, 不能用 degraded —— 那个要反推真跑过一次才置位,
- *  选完文件夹那一刻永远是 false, 环境面板会被跳过(2026-10-15 远端实测)。
- *  规则: 模型/脚本/标签表缺一(available=false) 或 没有自持 python(嵌入式运行时/
- *  settings.pythonPath 都不在盘上, 裸 conda 不算) → 需要下载。 */
-function envNeeded(ts) {
-  if (!ts) return false
-  const c = ts.config || {}
-  return ts.degraded === true || c.available === false || c.pythonOwned === false
-}
-
-async function ensureEnvThen(cb) {
-  const ts = await api.taggerStatus().catch(() => null)
-  if (!envNeeded(ts)) { await cb(); return }
-  envUi.value = { phase: 'running' }
-  envAfter.value = cb
-  api.setupDownload().catch(() => { /* 失败走 error 推送 */ })
-}
-
-function retryEnv() {
-  envUi.value = { phase: 'running' }
-  api.setupDownload().catch(() => {})
-}
-
-function mb(v) { const n = Number(v) || 0; return `${(n / 1048576).toFixed(1)} MB` }
-
-watch(() => setupP.value.done, (d) => {
-  if (!d || !envUi.value) return
-  envUi.value = null
-  api.taggerRun().catch(() => {})       // 环境好了立刻拉反推(用户拍板: 立即放行)
-  const f = envAfter.value; envAfter.value = null
-  Promise.resolve(f ? f() : null).catch(() => {})
-})
-watch(() => setupP.value.error, (e) => {
-  if (e && envUi.value) envUi.value = { phase: 'error' }
-})
+/* ---- 反推环境面板已移除(2026-10-18 WD14 按需安装 v3) ----
+ * 首启不再强制下载 Python+模型(约 1.4GB): 向导只管登记+扫描+进看板,
+ * 反推环境的安装走看板横幅/扫描页提示条 -> TvTaggerSetupModal(一键下载,
+ * 进度画在弹窗里, 装完自动反推)。这里不掺和环境的事。 */
 
 /** 轮询 ingest:status, 等到 stats.inserted > 0(第一批图真正落库)或超时。
  *  完成判定: lastRunAt 晚于我们的起点 && 已不在跑 —— 说明这一轮扫完了。
@@ -217,15 +175,6 @@ function startTagPoll() {
   const tick = async () => {
     if (app.ready || !taggingWait.value) return          // 已放行 / 状态已变, 停
     try {
-      // 首拍探一次环境: 反推降级(没 python/模型)就开下载, 别让用户对着 0% 干等
-      if (!envKicked) {
-        envKicked = true
-        const ts = await api.taggerStatus().catch(() => null)
-        if (envNeeded(ts)) {
-          tagWarn.value = ''
-          await ensureEnvThen(() => { api.taggerRun().catch(() => {}) })
-        }
-      }
       const st = await api.ingestStatus()
       const q = st?.queue || {}
       tagQ.value = {
@@ -238,9 +187,13 @@ function startTagPoll() {
         tagWarn.value = ''
       } else if (tagQ.value.pending > 0 && Date.now() - stallSince > 90 * 1000) {
         const ts = await api.taggerStatus().catch(() => null)
-        if (ts?.degraded) tagWarn.value = `反推未在运行: ${ts.reason || '未知原因'}（修好环境后重启应用即可接着跑，队列里的图不会丢）`
+        if (ts?.degraded) tagWarn.value = `反推未在运行: ${ts.reason || '未知原因'}（队列里的图不会丢；可在看板横幅或扫描页安装反推环境后接着跑）`
       }
-      if (tagQ.value.done >= 1) {
+      // 2026-10-18 WD14 按需安装(v3): 放行判定加 stats.inserted —— 未装反推时
+      // 队列永远没有 done, 但扫描落库的行(含无标签图)已经够进看板了,
+      // 不能让用户对着 0% 打标进度干等。
+      const ins = Number(st?.stats?.inserted) || 0
+      if (tagQ.value.done >= 1 || ins > 0) {
         await reload()
         if (app.ready) return                            // 放行成功, 遮罩随 app.ready 消失
         // 2026-10-17 (远端用户"1000/1000 读完都进不去"): 队列全 done 且没有
@@ -313,8 +266,8 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
             <!-- 首次使用: 不用碰任何配置文件, 选个文件夹登记就开跑 -->
             <div class="hint">
               点下面的按钮选一个装满图的文件夹，登记后自动扫描入库。<br>
-              首次使用会先自动下载反推环境（Python + 模型，约 1.4GB，断点续传），下载完自动打标。<br>
-              中文标签已内置，开箱即有。数据目录: <code>{{ app.workspace.dataDir || '(未设置)' }}</code>
+              图片自带提示词(ComfyUI / A1111 等)会直接入库；没有提示词的图，之后在看板横幅里一键安装 WD14 反推即可自动打标。<br>
+              中文标签已内置，开箱即用。数据目录: <code>{{ app.workspace.dataDir || '(未设置)' }}</code>
             </div>
             <div v-if="pickErr" class="err2">{{ pickErr }}</div>
             <div class="btns">

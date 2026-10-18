@@ -17,11 +17,13 @@
  * 那等于把 ingest 已经付过的代价再付一次。但仍然保留一道便宜的防御性复查:
  * 万一某个路径这会儿已经有标签了(并发场景), 跳过它而不是覆盖。
  *
- * 写库的铁律: **只写 `tags_src='wd14'`, 永远不覆盖 meta/legacy**
+ * 写库的铁律(2026-10-18 v3 用户拍板): 反推结果**覆盖**写回, tags_src 归一为
+ * 'wd14' —— 自带提示词(meta)只是没装反推时的暂存, 装了反推就以反推为准
+ * (追求 tag 多样性: 反推给出风格/人物特征/构图等几十个 tag)。legacy 孤本仍让路。
  * ------------------------------------------------------------
- * 图内原生提示词(meta)是作者留下的唯一一份, 反推结果没资格盖它;
- * 旧 txt 的 legacy 值同理。所以写入前先看这一行现在是什么来源 ——
- * 是 wd14 才允许覆盖(重反推场景), 其余一律跳过。
+ * 覆盖会丢掉反推认不出的部分(自定义质量词/画师 handle), Danbooru 体系内的
+ * 角色/系列/画风反推会自己重新给出 —— 已知情拍板。legacy/未知来源的老手工
+ * 标签是孤本, 照旧跳过不碰。
  *
  * 可降级(这是本阶段唯一的新外部依赖, 必须在最坏情况下不拖垮主流程)
  * -------------------------------------------------------------
@@ -522,31 +524,19 @@ export function stopTagger() {
 
 /* ------------------------------------------------------------ 队列消费 */
 
-/**
- * 标签合并 —— meta 部分在前、WD14 新增在后, 逗号分隔去重(大小写不敏感,
- * 保留先出现的大小写写法)。并集操作天然幂等: 同一张图反复合并结果稳定。
- */
-function mergeTagStrings(cur, add) {
-  const seen = new Set()
-  const out = []
-  for (const raw of `${cur},${add}`.split(',')) {
-    const s = raw.trim()
-    if (!s) continue
-    const k = s.toLowerCase()
-    if (seen.has(k)) continue
-    seen.add(k)
-    out.push(s)
-  }
-  return out.join(',')
-}
+/* (2026-10-18 v3) mergeTagStrings 已随「合并写回」一起退役 —— 反推结果现在是
+ * 覆盖写回, 不再需要 meta∪wd14 的并集合并。文件重扫时 ingest 规则 3 会按
+ * mtime 变化重新写回 meta, 自带提示词不会真丢。 */
 
 /**
  * 写一条反推结果。
  *
  * 三件事按顺序: ①防御性复查 ②写 images ③结清队列。
- * 写回语义(2026-10-02 起, 用户拍板的合并方案):
- *   · tags_src='wd14'        -> 直接覆盖(反推结果可以刷新反推结果)
- *   · tags_src='meta'/'meta+wd14' -> **合并**(meta 部分永不丢, 来源标变 'meta+wd14')
+ * 写回语义(2026-10-18 v3 起, 用户拍板的**覆盖**方案):
+ *   · tags_src='wd14'            -> 直接覆盖(反推结果可以刷新反推结果)
+ *   · tags_src='meta'/'meta+wd14' -> **覆盖**(自带 tag 只是暂存, 反推为准;
+ *     tags_src 归一为 'wd14'。meta 部分不再保留 —— 文件重扫时 ingest 规则 3
+ *     会按 mtime 变化重新写回 meta 并重新入队, 不会真丢)
  *   · legacy / 未知来源      -> 一律让路(skipped) —— 老手工导入的标签是孤本
  *
  * @returns {'created'|'updated'|'skipped'}
@@ -559,11 +549,9 @@ function applyTags(db, row, tags, mtimeMs, size, now) {
     const curTags = String(cur.tags || '')
     const hasTags = curTags.trim().length > 0
     if (hasTags && src !== 'wd14' && src !== 'meta' && src !== 'meta+wd14') return 'skipped'
-    const nextTags = sortTagString(hasTags && src !== 'wd14' ? mergeTagStrings(curTags, tags) : tags)
-    const nextSrc = hasTags && src !== 'wd14' ? 'meta+wd14' : 'wd14'
-    db.prepare(`UPDATE images SET tags = ?, tags_src = ?, mtime_ms = ?, size = ?,
+    db.prepare(`UPDATE images SET tags = ?, tags_src = 'wd14', mtime_ms = ?, size = ?,
                 gone = 0, tagged_at = ? WHERE id = ?`)
-      .run(nextTags, nextSrc, mtimeMs, size, now, cur.id)
+      .run(sortTagString(tags), mtimeMs, size, now, cur.id)
     return 'updated'
   }
   const srcId = Number(row.src_id) || 0
@@ -693,7 +681,7 @@ export async function runTagger({ onProgress, limit = 0, onlyFolderId = 0, ...sv
       const base = path.basename(row.path)
 
       // ---- 防御性复查: legacy/未知来源的已有标签不碰(孤本); meta/meta+wd14/wd14
-      //      都放行 —— wd14 覆盖, meta 与 meta+wd14 走合并(applyTags 里分流)。
+      //      都放行 —— 一律覆盖写回, tags_src 归一为 wd14(applyTags 里分流)。
       //      并发场景下队列里可能躺着一张"这会儿刚被别的路子打上 legacy 标签"的图。
       const cur = db.prepare('SELECT tags, tags_src FROM images WHERE path = ? ORDER BY id LIMIT 1').get(row.path)
       const curSrc = String(cur?.tags_src || '')

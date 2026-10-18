@@ -925,7 +925,7 @@ export async function readRecords(onRecord, onProgress = () => {}) {
     : ''
   const chunk = db.prepare(`
     SELECT i.id AS id, i.path AS path, i.src_id AS src_id, i.folder_id AS folder_id,
-           i.tags AS tags, i.px_w AS px_w, i.px_h AS px_h
+           i.tags AS tags, i.tags_src AS tags_src, i.px_w AS px_w, i.px_h AS px_h
     FROM images i WHERE i.id > ? AND i.gone = 0${vis} ORDER BY i.id LIMIT ?
   `)
   let lastId = 0
@@ -945,13 +945,17 @@ export async function readRecords(onRecord, onProgress = () => {}) {
           if (t) tags.push(t)
         }
       }
-      if (!tags.length) continue
+      /* 2026-10-18 WD14 按需安装(v3): 无标签的图**不再跳过** —— 看板允许显示
+       * 没有标签的图(卡片没有胶囊, 搜索/筛选自然命不中), 这是"没装反推也能
+       * 正常进看板"的前提; 等装好反推打上标签, 内容自然丰富起来。 */
       onRecord({
         path: r.path,
         source: srcNames.get(Number(r.src_id))
           || folderNames.get(Number(r.folder_id))
           || '',
         tags,
+        // 标签来源: meta=图片自带 / wd14=反推入库 / meta+wd14=历史合并 / legacy=手工导入
+        tagsSrc: String(r.tags_src || ''),
         // 像素尺寸: 卡片按真实比例渲染 / 系列封面优先挑竖图的依据。
         // 老库回填之前这里是 null —— 消费方一律**回落到改动前的行为**,
         // 不要拿 0 或猜测值凑一个比例出来。
