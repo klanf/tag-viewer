@@ -106,11 +106,12 @@ const hasSug = computed(() => open.value && sug.value.length > 0)
 <style scoped>
 .twc { position: relative; display: inline-flex; flex-direction: column; }
 .twc-input {
-  background: var(--panel2); color: var(--text);
+  background: var(--panel); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--r-sm);
   padding: 4px 8px; font-size: 12px; font-family: Consolas, Menlo, monospace;
   outline: none; min-width: 150px;
 }
+.twc-input::placeholder { color: var(--faint); opacity: 1; }
 .twc-input:focus { border-color: var(--accent); }
 .twc-drop {
   position: absolute; top: calc(100% + 3px); left: 0; z-index: 60;

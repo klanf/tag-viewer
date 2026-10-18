@@ -452,12 +452,13 @@ async function save() {
                   <option :value="true">保留</option>
                   <option value="del">删除标签</option>
                 </select>
+                <span v-if="r.keep === true" class="lab">加后缀</span>
                 <input
                   v-if="r.keep === true"
                   v-model="r.suffix"
                   class="suffix"
-                  placeholder="例: _art"
-                  title="保留原标签并加后缀: 填 _art 生成 {tag}_art; 留空就是原样保留"
+                  placeholder="如 _art, 可空"
+                  title="保留原标签并加后缀: 填 _art 则 blue_hair 导出为 blue_hair_art; 留空就是原样保留"
                 >
               </div>
               <div v-if="r.keep !== 'del'" class="row-sub repl-sub">
@@ -641,13 +642,13 @@ async function save() {
   border: 1px solid var(--border); border-radius: var(--r-sm);
   padding: 4px 6px; font-size: 11px; font-family: Consolas, Menlo, monospace; outline: none;
 }
-.arr { color: var(--faint); font-size: 13px; }
+.arr { color: var(--accent); font-size: 13px; }
 .lab { font-size: 11px; color: var(--faint); flex: 0 0 auto; }
 .chips, .chip {
   display: inline-flex; align-items: center; gap: 4px;
   font-family: Consolas, Menlo, monospace; font-size: 11px;
-  background: var(--panel); border: 1px solid var(--border);
-  border-radius: 10px; padding: 2px 8px;
+  background: var(--panel); border: 1px solid var(--accent);
+  border-radius: 10px; padding: 2px 8px; color: var(--accent);
 }
 .chip .x { color: var(--faint); cursor: pointer; font-weight: normal; }
 .chip .x:hover { color: var(--text); }
