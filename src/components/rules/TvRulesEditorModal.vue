@@ -130,17 +130,37 @@ function addRow(prefill = null) {
   rows.value.push({
     mode: 'exact',
     core: prefill?.core || '',
+    extras: [],
     keep: prefill ? prefill.keep !== false : true,
     suffix: '',
     repl: [],
   })
   nextTick(() => {
-    const el = document.querySelectorAll('.row-core input')
+    const el = document.querySelectorAll('.chip-add input')
     el[el.length - 1]?.focus()
   })
 }
 
 function delRow(i) { rows.value.splice(i, 1) }
+
+/* ---- 来源 tag 组管理: 一张卡 = 同 mode/keep/suffix/repl 的 N 个来源 tag ----
+ * core 是主行, extras 是合并进来的其余来源(见 replaceGrammar.mergeRows);
+ * 序列化时展开回多行, 文本层不变。 */
+const coreList = (r) => [r.core, ...(r.extras || [])].filter(Boolean)
+
+function addCore(r, t) {
+  const v = String(t || '').trim()
+  if (!v) return
+  if (v === r.core || (r.extras || []).includes(v)) return
+  if (!r.core) { r.core = v; return }
+  r.extras = r.extras || []
+  r.extras.push(v)
+}
+
+function removeCore(r, idx) {
+  if (idx === 0) r.core = r.extras?.length ? r.extras.shift() : ''
+  else r.extras?.splice(idx - 1, 1)
+}
 
 const curCount = computed(() => (builderMode.value
   ? rows.value.filter((r) => r.mode !== 'raw').length
@@ -284,7 +304,8 @@ async function save() {
     await api.rulesReload()
     if (isBlack.value) ui.ok('✅ 已保存, 立即生效', 2000)
     emit('saved')
-    emit('update:modelValue', false)
+    // 保存后**不关窗**: 用户可能还要继续改 —— 编辑器与落盘内容重新对齐(sets 引用已换新)
+    if (!isBlack.value) parseCurrent()
   } catch (e) {
     ui.err('保存失败: ' + e.message)
   } finally {
@@ -437,12 +458,18 @@ async function save() {
                 >
                   <option v-for="m in MODE_OPTIONS" :key="m.value" :value="m.value">{{ m.label }}</option>
                 </select>
+                <span v-for="(c, ci) in coreList(r)" :key="ci" class="chip">
+                  {{ c }}<b class="x" title="移除这个来源 tag" @click="removeCore(r, ci)">×</b>
+                </span>
                 <TvTagComplete
-                  v-model="r.core"
-                  class="row-core"
-                  :placeholder="MODE_OPTIONS.find((m) => m.value === r.mode)?.example || '模式'"
+                  class="chip-add"
+                  variant="chips"
+                  :placeholder="coreList(r).length ? '+ 联想添加…' : (MODE_OPTIONS.find((m) => m.value === r.mode)?.example || '模式')"
+                  title="这个卡片命中的来源 tag; 同一张卡共用右侧同一套替换结果"
+                  @pick="(t) => addCore(r, t)"
+                  @confirm="(t) => addCore(r, t)"
                 />
-                <TvButton size="xs" variant="ghost" class="row-del" title="删除这条规则" @click.stop="delRow(i)">🗑</TvButton>
+                <TvButton size="xs" variant="ghost" class="row-del" title="删除这条规则(整张卡)" @click.stop="delRow(i)">🗑</TvButton>
               </div>
               <div v-if="r.keep !== 'del'" class="row-sub">
                 <span class="arr">→</span>
@@ -468,6 +495,7 @@ async function save() {
                 </span>
                 <TvTagComplete
                   class="chip-add"
+                  variant="chips"
                   placeholder="+ 联想添加…"
                   @pick="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
                   @confirm="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
@@ -626,8 +654,6 @@ async function save() {
 }
 /* 联想输入框宽度自适应: field-sizing 按内容撑开(Chrome 152+), 限上下限。
  * flex 必须是 0 0 auto —— 给 grow 会把自适应宽度重新拉满整行 */
-.row-core { flex: 0 0 auto; min-width: 0; }
-.row-core :deep(input),
 .chip-add :deep(input),
 .test-in :deep(input) {
   field-sizing: content; min-width: 80px !important; max-width: 340px; width: auto;
@@ -635,7 +661,6 @@ async function save() {
 .del-sub { border-top: none; margin-top: 6px; padding-top: 0; }
 .del-mark { font-size: 11px; color: var(--danger, #c05050); }
 .del-mark b { font-weight: 500; }
-.row-core :deep(input) { width: 100%; }
 .keep-sel { flex: 0 0 auto; }
 .suffix {
   width: 96px; background: var(--panel); color: var(--text);
@@ -653,10 +678,10 @@ async function save() {
 .chip .x { color: var(--faint); cursor: pointer; font-weight: normal; }
 .chip .x:hover { color: var(--text); }
 .chip-add { flex: 0 0 auto; }
-.chip-add :deep(input) { min-width: 0; width: 100%; padding: 3px 6px; font-size: 11px; }
+.chip-add :deep(input) { padding: 3px 6px; font-size: 11px; }
+/* 注意别给 chip-add 写 width:100% —— 会盖掉 field-sizing 的 width:auto, 输入框重新拉满 */
 .test-in { flex: 0 0 auto; }
 .test-in :deep(input) { min-width: 0; width: 100%; }
-.row-core :deep(input) { min-width: 0; }
 .test-out .bad { color: var(--danger, #c05050); }
 .h-sec { font-size: 11px; color: var(--faint); margin: 8px 0 2px; }
 .h-sec:first-child { margin-top: 0; }

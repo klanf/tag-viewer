@@ -74,6 +74,9 @@ export function serializeRow(row) {
  * 整段文本 → { headNotes, rows, tailNotes }
  *   headNotes: 第一条规则行之前的注释/空行(含文件头的分组说明)
  *   tailNotes: 行间注释统一收集到这里 + 规则行之后的所有内容
+ *
+ * 合并(2026-10-19 用户要求): mode/keep/suffix/repl 完全相同的行收进首行的
+ * extras —— 构建器里一张卡管多个来源 tag, 序列化时展开回多行, 文本层不变。
  */
 export function parseRules(text) {
   const headNotes = []
@@ -95,13 +98,43 @@ export function parseRules(text) {
       tailNotes.push(line)
     }
   }
-  return { headNotes, rows, tailNotes }
+  return { headNotes, rows: mergeRows(rows), tailNotes }
+}
+
+const rowKey = (r) => `${r.mode}|${r.keep}|${r.suffix || ''}|${(r.repl || []).join(',')}`
+
+/** 同 key 行合并进首行 extras(一条卡多个来源 tag); raw 行原样保留 */
+export function mergeRows(rows) {
+  const out = []
+  const index = new Map()
+  for (const r of rows) {
+    if (r.mode === 'raw') { out.push(r); continue }
+    const k = rowKey(r)
+    const first = index.get(k)
+    if (first) { first.extras.push(r.core); continue }
+    const copy = { ...r, extras: [] }
+    index.set(k, copy)
+    out.push(copy)
+  }
+  return out
+}
+
+/** 合并行展开回单 core 行(序列化前的逆操作, extras 摊平成一行一条) */
+export function expandRows(rows) {
+  const out = []
+  for (const r of rows) {
+    if (r.mode === 'raw') { out.push(r); continue }
+    const { extras = [], ...base } = r
+    out.push(base)
+    for (const core of extras) out.push({ ...base, core })
+  }
+  return out
 }
 
 /** { headNotes, rows, tailNotes } → 整段文本(与 parseRules 语义互逆, raw 行原样) */
 export function serializeRules({ headNotes = [], rows = [], tailNotes = [] } = {}) {
   const head = headNotes.join('\n')
-  const body = rows.map(serializeRow).filter(Boolean).join('\n')
+  const body = expandRows(rows).map(serializeRow).filter(Boolean).join('\n')
   const tail = tailNotes.join('\n')
   const parts = []
   if (head.trim()) parts.push(head.replace(/\n+$/, '') + '\n')

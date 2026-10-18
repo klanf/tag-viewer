@@ -7,7 +7,7 @@
  * 后端 parseReplaceRules/replaceTag 是 oracle(它们是导出真正在跑的代码)。
  */
 import assert from 'node:assert/strict'
-import { parseRules, serializeRules, parseLine, serializeRow, MODE_OPTIONS } from '../src/utils/replaceGrammar.js'
+import { parseRules, serializeRules, parseLine, serializeRow, MODE_OPTIONS, mergeRows, expandRows } from '../src/utils/replaceGrammar.js'
 import { parseReplaceRules, replaceTag } from '../electron/core/rules.js'
 
 let n = 0
@@ -153,6 +153,41 @@ ok('删除规则在文本往返(构建器⇄原文)中语义不丢', () => {
   const rebuilt = parseReplaceRules(serializeRules(parseRules(REAL)))
   assert.equal(norm(rebuilt), norm(orig))
   assert.deepEqual(replaceTag('bad_tag', rebuilt), replaceTag('bad_tag', orig))
+})
+
+console.log('⑥ 同替换内容合并(2026-10-19): 一张卡管多个来源 tag, 文本层不变')
+ok('parseRules 把 mode/keep/suffix/repl 相同的行合并进首行 extras', () => {
+  const p = parseRules('boy -> male_focus\nmale -> male_focus\ngirl -> female_focus')
+  assert.equal(p.rows.length, 2)
+  assert.deepEqual([p.rows[0].core, p.rows[0].extras], ['boy', ['male']])
+  assert.deepEqual([p.rows[1].core, p.rows[1].extras], ['girl', []])
+})
+ok('del 行同模式也合并(keep/suffix 参与分组)', () => {
+  const p = parseRules('bad ->\nbad2 ->\n*_wet ->')
+  assert.equal(p.rows.length, 2)
+  assert.deepEqual(p.rows[0].extras, ['bad2'])
+})
+ok('serializeRules 展开 extras 回多行, 文本逐字 round-trip', () => {
+  const REAL = 'boy -> male_focus\nmale -> male_focus\ngirl -> female_focus'
+  assert.equal(serializeRules(parseRules(REAL)), REAL + '\n')
+  // head 注释与规则行之间 serializeRules 恒补空行(既有行为), {tag} 恒排最前(既有行为)
+  const WITH_NOTES = '# 注释\n\nboy -> male_focus\nmale -> male_focus\nkeep -> good_tag'
+  assert.equal(serializeRules(parseRules(WITH_NOTES)), WITH_NOTES + '\n')
+})
+ok('expandRows 产物经后端解析与原文本语义逐条一致', () => {
+  const REAL = 'boy -> male_focus\nmale -> male_focus\n@xx@ -> {tag}_s, a'
+  const orig = parseReplaceRules(REAL)
+  const rebuilt = parseReplaceRules(serializeRules(parseRules(REAL)))
+  assert.equal(norm(rebuilt), norm(orig))
+})
+ok('mergeRows/expandRows 手工互逆', () => {
+  const rows = [{ mode: 'exact', core: 'a', keep: true, suffix: '_s', repl: ['x'] }, { mode: 'exact', core: 'b', keep: true, suffix: '_s', repl: ['x'] }]
+  const m = mergeRows(rows)
+  assert.equal(m.length, 1)
+  assert.deepEqual(m[0].extras, ['b'])
+  const e = expandRows(m)
+  assert.deepEqual(e.map((r) => r.core), ['a', 'b'])
+  assert.ok(e.every((r) => !('extras' in r)))
 })
 
 console.log(`\n通过 ${n} 项断言${process.exitCode ? '（有失败）' : ''}`)
