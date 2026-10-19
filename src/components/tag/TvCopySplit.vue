@@ -30,8 +30,8 @@ const root = ref(null)
 const current = computed(() => props.modes.find((m) => m.key === props.modelValue) || props.modes[0])
 const mainLabel = computed(() => props.currentLabel || current.value?.label || '')
 const mainTitle = computed(() => props.currentTitle || current.value?.title || '')
-/** 空模式列表时主按钮就写「复制」, 不带 "复制: xxx" 后缀 */
-const mainText = computed(() => (mainLabel.value ? `📋 复制: ${mainLabel.value}` : '📋 复制'))
+/** 空模式列表时主按钮写「复制标签」, 不带 "复制: xxx" 后缀 */
+const mainText = computed(() => (mainLabel.value ? `📋 复制: ${mainLabel.value}` : '📋 复制标签'))
 
 function run(key) {
   emit('update:modelValue', key)

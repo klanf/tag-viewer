@@ -538,7 +538,10 @@ function preheat() {
 }
 
 .lb-copy-row { display: flex; gap: 6px; flex-wrap: wrap; }
-.lb-copy-row :deep(.tv-btn) { flex: 1 1 auto; }
+/* 复制(两截按钮)与收藏等宽: 都是 1 1 0 平分整行, split 内部再让主按钮吃满 */
+.lb-copy-row :deep(.copy-split),
+.lb-copy-row :deep(.tv-btn) { flex: 1 1 0; }
+.lb-copy-row :deep(.cs-main) { flex: 1 1 auto; }
 
 /* 复制过滤设置面板(TvCopySplit 菜单底部插槽, 2026-10-19) */
 .lb-copy-row :deep(.cs-menu) { min-width: 250px; }
