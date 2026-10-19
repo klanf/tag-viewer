@@ -15,7 +15,7 @@
  *   精确 red_hair · 前缀 blue_* · 后缀 *_hair · 包含 *color* · 整段 @boy@
  *   替换侧 {tag} 引用原标签; # 注释
  */
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import TvModal from '../base/TvModal.vue'
 import TvButton from '../base/TvButton.vue'
 import TvChip from '../base/TvChip.vue'
@@ -181,6 +181,12 @@ function bumpW(r, j, d) {
   const nw = Math.min(2, Math.max(0.1, Math.round((w + d) * 10) / 10))
   r.repl[j] = withWeight(tag, nw)
 }
+/* 点气泡外任意处收起(chip-tag / 气泡自身都 .stop 了, 不会走到这) */
+function wEditOutside(e) {
+  if (wEdit.value && !(e.target instanceof Element && e.target.closest('.w-pop'))) wEdit.value = null
+}
+onMounted(() => document.addEventListener('click', wEditOutside))
+onBeforeUnmount(() => document.removeEventListener('click', wEditOutside))
 
 const curCount = computed(() => (builderMode.value
   ? rows.value.filter((r) => r.mode !== 'raw').length
@@ -516,21 +522,19 @@ async function save() {
                   class="chip"
                   :class="{ weighted: wOf(t) !== 1 }"
                 >
-                  <template v-if="wEdit && wEdit.ri === i && wEdit.j === j">
-                    <b class="w-btn" title="减 0.1" @click.stop="bumpW(r, j, -0.1)">−</b>
-                    <b class="w-val" title="权重; 1.0 = 不加权">{{ wOf(t).toFixed(1) }}</b>
-                    <b class="w-btn" title="加 0.1" @click.stop="bumpW(r, j, 0.1)">＋</b>
-                    <b class="x" title="移除" @click="r.repl.splice(j, 1); wEdit = null">×</b>
-                  </template>
-                  <template v-else>
-                    <span
-                      class="chip-tag"
-                      title="点击调权重(输出为 (tag:权重) 写法)"
-                      @click.stop="wEdit = { ri: i, j }"
-                    >{{ bareOf(t) }}</span>
-                    <b v-if="wOf(t) !== 1" class="w-badge">{{ wOf(t).toFixed(1) }}</b>
-                    <b class="x" title="移除" @click="r.repl.splice(j, 1)">×</b>
-                  </template>
+                  <span
+                    class="chip-tag"
+                    title="点击调权重(输出为 (tag:权重) 写法)"
+                    @click.stop="wEdit = wEdit?.ri === i && wEdit.j === j ? null : { ri: i, j }"
+                  >{{ bareOf(t) }}</span>
+                  <b v-if="wOf(t) !== 1" class="w-badge">{{ wOf(t).toFixed(1) }}</b>
+                  <b class="x" title="移除" @click="r.repl.splice(j, 1); wEdit = null">×</b>
+                  <!-- 权重气泡: 悬在 chip 上方, chip 本体不动 -->
+                  <span v-if="wEdit && wEdit.ri === i && wEdit.j === j" class="w-pop" @click.stop>
+                    <b class="w-btn" title="减 0.1" @click="bumpW(r, j, -0.1)">−</b>
+                    <b class="w-val" title="权重; 调回 1.0 = 不加权">{{ wOf(t).toFixed(1) }}</b>
+                    <b class="w-btn" title="加 0.1" @click="bumpW(r, j, 0.1)">＋</b>
+                  </span>
                 </span>
                 <TvTagComplete
                   class="chip-add"
@@ -716,7 +720,9 @@ async function save() {
 }
 .chip .x { color: var(--faint); cursor: pointer; font-weight: normal; }
 .chip .x:hover { color: var(--text); }
-/* 权重(2026-10-19): 带权重的 chip 加粗边框提示; chip-tag 可点调权重; 徽标显示数值 */
+/* 权重(2026-10-19): 带权重的 chip 加粗边框提示; chip-tag 可点调权重; 徽标显示数值。
+ * 点击 chip 在其上方弹 −/+ 气泡(用户 2026-10-19 定稿: chip 本体不动, 不再内联替换内容) */
+.chip { position: relative; }
 .chip.weighted { border-style: dashed; border-width: 2px; padding: 1px 7px; }
 .chip .chip-tag { cursor: pointer; }
 .chip .chip-tag:hover { text-decoration: underline; }
@@ -725,9 +731,20 @@ async function save() {
   background: var(--accent); color: var(--on-accent);
   border-radius: 6px; padding: 0 4px; line-height: 1.5;
 }
-.chip .w-btn { cursor: pointer; font-weight: 600; padding: 0 2px; }
-.chip .w-btn:hover { color: var(--text); }
-.chip .w-val { min-width: 24px; text-align: center; font-weight: 600; }
+.w-pop {
+  position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--panel2, var(--panel)); border: 1px solid var(--line);
+  border-radius: 8px; padding: 4px 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  z-index: 40; white-space: nowrap; cursor: default;
+}
+.w-pop .w-btn {
+  cursor: pointer; font-weight: 600; font-size: 13px; line-height: 1;
+  color: var(--accent); padding: 2px 4px; user-select: none; border-radius: 4px;
+}
+.w-pop .w-btn:hover { background: var(--accent-weak, rgba(255, 255, 255, 0.08)); }
+.w-pop .w-val { min-width: 28px; text-align: center; font-weight: 600; }
 .chip-add { flex: 0 0 auto; }
 .chip-add :deep(input) { padding: 3px 6px; font-size: 11px; }
 /* 注意别给 chip-add 写 width:100% —— 会盖掉 field-sizing 的 width:auto, 输入框重新拉满 */
