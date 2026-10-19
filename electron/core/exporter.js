@@ -135,20 +135,35 @@ export function buildExport(raw = {}) {
       tags = sortTags(tags)
     }
 
+    // 权重壳去重(2026-10-19): 裸词与 (裸词:权重) 算同一个, 先到先得 ——
+    // 图源标签本身同时含 uncensored 与 (uncensored:2)(A1111 元数据直出常见)时,
+    // 不开替换也不会插出肉眼重复; 顺带把 case/下划线变体的重复也收敛掉
+    {
+      const seen = new Set()
+      const kept = []
+      for (const t of tags) {
+        const dk = tagKey(unwrapWeight(t))
+        if (!seen.has(dk)) { seen.add(dk); kept.push(t) }
+      }
+      tags = kept
+    }
+
     if (bg && !hasBgTagFast(tags, bg)) {
+      const bgSeen = new Set(tags.map((t) => tagKey(unwrapWeight(t))))
       for (const b of bg.append) {
-        if (!tags.includes(b)) { tags.push(b); bgAdded++ }
+        const bk = tagKey(unwrapWeight(b))
+        if (!bgSeen.has(bk)) { bgSeen.add(bk); tags.push(b); bgAdded++ }
       }
     }
 
     if (appendTags.length) {
       // 去重口径: 跟"已有的标签"比 + 追加串内部自己也不重复。
-      // 比的是归一化键(忽略大小写 / 下划线=空格), 所以 best_quality 与 best quality、
-      // Masterpiece 与 masterpiece 都算同一个, 不会再插出一条肉眼重复的。
-      const seen = new Set(tags.map(tagKey))
+      // 比的是归一化键(忽略大小写 / 下划线=空格 / 剥权重壳), 所以 best_quality 与
+      // best quality、Masterpiece 与 masterpiece、uncensored 与 (uncensored:2) 都算同一个。
+      const seen = new Set(tags.map((t) => tagKey(unwrapWeight(t))))
       const add = []
       for (const t of appendTags) {
-        const k = tagKey(t)
+        const k = tagKey(unwrapWeight(t))
         if (seen.has(k)) continue
         seen.add(k)
         add.push(t)
@@ -291,6 +306,18 @@ export function filterTagsLikeExport(tags, opts = {}) {
     }
     // 替换产物按分类段位重排 —— 同 buildExport 的"导出顺序与光箱一致"理由
     out = sortTags(next)
+  }
+
+  // 权重壳去重(同 buildExport, 2026-10-19): 源列表本身同时含裸词与带权版
+  // (A1111 元数据直出)时也收敛, 先到先得 —— 不依赖替换规则开关
+  {
+    const seen = new Set()
+    const kept = []
+    for (const t of out) {
+      const dk = tagKey(unwrapWeight(t))
+      if (!seen.has(dk)) { seen.add(dk); kept.push(t) }
+    }
+    out = kept
   }
 
   return { tags: out, counts }

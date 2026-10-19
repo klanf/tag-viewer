@@ -244,4 +244,9 @@ ok('matchByMode 与后端 patHit 口径一致(经 replaceTag 删除语义差分�
   }
 })
 
+ok('replaceTag 替换侧同时写 (uncensored:2) 与 uncensored 只出先到的', () => {
+  const r = replaceTag('zzz', parseReplaceRules('zzz -> (uncensored:2), uncensored\n'))
+  assert.deepEqual(r, ['(uncensored:2)'])
+})
+
 console.log(`\n通过 ${n} 项断言${process.exitCode ? '（有失败）' : ''}`)

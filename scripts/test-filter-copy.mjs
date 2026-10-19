@@ -108,4 +108,12 @@ ok('裸词与带权重版去重归一: 保留先到的带权重版', () => {
   assert.equal(r.counts.replaced, 2)
 })
 
+/* ---- 权重壳去重全局化(2026-10-19): 不开替换也收敛 源列表里的 裸词+带权版 ---- */
+ok('无替换时源列表自带的 (uncensored:2) 与 uncensored 收敛, 先到先得', () => {
+  const a = filterTagsLikeExport(['(uncensored:2)', 'uncensored', '1girl'], { replace: false })
+  assert.deepEqual(a.tags, ['(uncensored:2)', '1girl'])
+  const b = filterTagsLikeExport(['uncensored', '(uncensored:2)'], { replace: false })
+  assert.deepEqual(b.tags, ['uncensored'])
+})
+
 console.log(`\n通过 ${n} 项断言${process.exitCode ? '（有失败）' : ''}`)

@@ -22,6 +22,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { dataFile } from './workspace.js'
+import { unwrapWeight } from './tagcats.js'
 
 const cache = {
   blacklist: { path: '', mtime: -1, value: null },
@@ -465,6 +466,9 @@ function patHit(tag, pat) {
 
 export function replaceTag(tag, rules) {
   const out = []
+  // 去重按剥权重壳归一(2026-10-19): 替换侧同时写 (uncensored:2) 与 uncensored
+  // 只出先到的那个 —— 与导出管线的去重口径一致
+  const seenOut = new Set()
   let del = false
   for (const { pat, replTags } of rules) {
     if (!patHit(tag, pat)) continue
@@ -473,7 +477,8 @@ export function replaceTag(tag, rules) {
     for (const r of replTags) {
       // 用函数式替换, 免得原标签里的 $& / $1 被当成替换模式吃掉
       const v = r.replace(TAG_PLACEHOLDER, () => tag)
-      if (!out.includes(v)) out.push(v)
+      const dk = unwrapWeight(v).toLowerCase()
+      if (!seenOut.has(dk)) { seenOut.add(dk); out.push(v) }
     }
   }
   if (del) return []
