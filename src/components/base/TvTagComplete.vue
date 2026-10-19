@@ -20,6 +20,9 @@ const props = defineProps({
   limit: { type: Number, default: 12 },
   /** fill=选词填入输入框(模式侧) / chips=选词清空交父级(替换侧) */
   variant: { type: String, default: 'fill' },
+  /** 可选过滤 (tag, typedText) => boolean —— 模式侧按当前模式筛联想,
+   *  让用户直观看到这个模式能命中哪些词(2026-10-19 用户要求) */
+  filter: { type: Function, default: null },
 })
 const emit = defineEmits(['update:modelValue', 'pick', 'confirm'])
 
@@ -41,8 +44,11 @@ watch(text, (v) => {
   timer = setTimeout(async () => {
     loading.value = true
     try {
-      const r = await api.suggest({ q: v.trim(), limit: props.limit })
-      sug.value = r?.suggestions || []
+      // 带过滤时多拉(suggest 上限 200)再本地筛, 不然先截 12 条再筛可能只剩两三行
+      const r = await api.suggest({ q: v.trim(), limit: props.filter ? 200 : props.limit })
+      let list = r?.suggestions || []
+      if (props.filter) list = list.filter((s) => props.filter(s.tag, v.trim())).slice(0, props.limit)
+      sug.value = list
       // 只有正持有焦点的框才自动展开; blur 后才回来的响应只更新数据不弹下拉
       open.value = focused.value && sug.value.length > 0
       active.value = open.value && sug.value.length ? 0 : -1

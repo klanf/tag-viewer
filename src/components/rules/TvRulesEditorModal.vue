@@ -23,7 +23,7 @@ import TvInput from '../base/TvInput.vue'
 import TvTagComplete from '../base/TvTagComplete.vue'
 import { api } from '@/utils/api.js'
 import { useUiStore } from '@/stores/useUiStore.js'
-import { parseRules, serializeRules, MODE_OPTIONS, parseWeight, withWeight } from '@/utils/replaceGrammar.js'
+import { parseRules, serializeRules, MODE_OPTIONS, parseWeight, withWeight, matchByMode } from '@/utils/replaceGrammar.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -491,7 +491,8 @@ async function save() {
                   class="chip-add"
                   variant="chips"
                   :placeholder="coreList(r).length ? '+ 联想添加…' : (MODE_OPTIONS.find((m) => m.value === r.mode)?.example || '模式')"
-                  title="这个卡片命中的来源 tag; 同一张卡共用右侧同一套替换结果"
+                  title="这个卡片命中的来源 tag; 同一张卡共用右侧同一套替换结果; 联想已按当前匹配类型过滤 —— 列出的就是能命中的词"
+                  :filter="(tag, typed) => matchByMode(tag, r.mode, typed)"
                   @pick="(t) => addCore(r, t)"
                   @confirm="(t) => addCore(r, t)"
                 />

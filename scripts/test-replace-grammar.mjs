@@ -7,7 +7,7 @@
  * 后端 parseReplaceRules/replaceTag 是 oracle(它们是导出真正在跑的代码)。
  */
 import assert from 'node:assert/strict'
-import { parseRules, serializeRules, parseLine, serializeRow, MODE_OPTIONS, mergeRows, expandRows, parseWeight, withWeight } from '../src/utils/replaceGrammar.js'
+import { parseRules, serializeRules, parseLine, serializeRow, MODE_OPTIONS, mergeRows, expandRows, parseWeight, withWeight, matchByMode } from '../src/utils/replaceGrammar.js'
 import { parseReplaceRules, replaceTag } from '../electron/core/rules.js'
 
 let n = 0
@@ -210,6 +210,38 @@ ok('parseLine 行模型保住权重文本(repl 自由文本)', () => {
   const r = parseLine('blue_hair -> (red_hair:1.2), solo')
   assert.deepEqual(r.repl, ['(red_hair:1.2)', 'solo'])
   assert.equal(serializeRow(r), 'blue_hair -> (red_hair:1.2), solo')
+})
+
+/* ---- matchByMode(2026-10-19): 模式侧联想过滤的匹配口径 ---- */
+ok('matchByMode 基本语义(大小写不敏感)', () => {
+  assert.equal(matchByMode('boys', 'exact', 'boys'), true)
+  assert.equal(matchByMode('Boys', 'exact', 'BOYS'), true)
+  assert.equal(matchByMode('multiple_boys', 'exact', 'boys'), false)
+  assert.equal(matchByMode('blue_hair', 'pre', 'blue_'), true)
+  assert.equal(matchByMode('xxblue_x', 'pre', 'blue_'), false)
+  assert.equal(matchByMode('long_hair', 'suf', '_hair'), true)
+  assert.equal(matchByMode('hairy', 'suf', '_hair'), false)
+  assert.equal(matchByMode('colorful', 'con', 'color'), true)
+  assert.equal(matchByMode('xx_boy', 'seg', 'boy'), true)
+  assert.equal(matchByMode('tomboy', 'seg', 'boy'), false)
+  assert.equal(matchByMode('xx_boy_yy', 'seg', 'boy'), true)
+  assert.equal(matchByMode('anything', 'exact', ''), false)
+})
+ok('matchByMode 与后端 patHit 口径一致(经 replaceTag 删除语义差分验证)', () => {
+  const CASES = [
+    ['exact', 'boys', ['boys', 'multiple_boys', '2boys', 'Boys']],
+    ['pre', 'blue_', ['blue_hair', 'blue_eyes', 'xxblue_x']],
+    ['suf', '_hair', ['long_hair', 'hair', 'hairy', 'red_hair']],
+    ['con', 'color', ['colorful', 'skin_color', 'color', 'colo']],
+    ['seg', 'boy', ['boy', 'xx_boy', 'boy_xx', 'xx_boy_yy', 'tomboy', 'boyish']],
+  ]
+  for (const [mode, core, tags] of CASES) {
+    const rules = parseReplaceRules(serializeRow({ mode, core, keep: 'del', suffix: '', repl: [] }) + '\n')
+    for (const t of tags) {
+      const backendHit = replaceTag(t, rules).length === 0   // 删除规则命中 = 返回 []
+      assert.equal(matchByMode(t, mode, core), backendHit, `${mode} "${core}" vs "${t}" 前后端口径不一致`)
+    }
+  }
 })
 
 console.log(`\n通过 ${n} 项断言${process.exitCode ? '（有失败）' : ''}`)

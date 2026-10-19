@@ -162,6 +162,22 @@ export function serializeRules({ headNotes = [], rows = [], tailNotes = [] } = {
   return parts.join('\n') + (parts.length ? '\n' : '')
 }
 
+/* ---------------- 模式匹配(2026-10-19): 前端镜像后端 patHit 的语义 ----------------
+ * 用于构建器**模式侧**联想过滤: 输入时按当前模式筛下拉, 让用户直观看到这个模式能命中哪些 tag。
+ * 与 electron/core/rules.js 的 patHit 分支一一对应 —— 改后端匹配语义必须同步这里。 */
+
+/** tag 是否被 (mode, core) 模式命中; 全小写比较(与后端 patHit 一致) */
+export function matchByMode(tag, mode, core) {
+  const t = String(tag || '').trim().toLowerCase()
+  const c = String(core || '').trim().toLowerCase()
+  if (!t || !c) return false
+  if (mode === 'pre') return t.startsWith(c)
+  if (mode === 'suf') return t.endsWith(c)
+  if (mode === 'con') return t.includes(c)
+  if (mode === 'seg') return t.split('_').includes(c)
+  return t === c   // exact(以及未知 mode 的兜底)
+}
+
 /** 类型下拉的选项(构建器行用); hint 供悬停气泡与帮助页, 尽量带具体例子说人话 */
 export const MODE_OPTIONS = [
   { value: 'exact', label: '精确', hint: '标签要和模式一字不差才命中: 模式 red_hair 只命中 red_hair 自己', example: 'red_hair' },
