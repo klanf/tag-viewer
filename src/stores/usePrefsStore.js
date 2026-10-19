@@ -25,6 +25,33 @@ export const usePrefsStore = defineStore('prefs', () => {
   watch(seriesShowZero, (v) => writeLS(LS.seriesShowZero.key, v ? '1' : '0'))
 
   /**
+   * 光箱「复制标签」的过滤配置(2026-10-19) —— JSON 存 localStorage, 读时过白名单。
+   * ban/char/view/safe/replace 五个开关 + safe_level 口径 + replace_set 规则组。
+   * 默认 = 旧「全部标签」模式: 只剔角色/系列, 其余全关(行为与改造前一致)。
+   */
+  const COPY_DEF = Object.freeze({
+    ban: false, char: true, view: false, safe: false, safe_level: 'follow', replace: false, replace_set: '',
+  })
+  function readCopyFilters() {
+    const raw = readLS(LS.lbCopyFilters.key)
+    if (!raw) return { ...COPY_DEF }
+    try {
+      const o = JSON.parse(raw) || {}
+      return {
+        ban: o.ban === true,
+        char: o.char !== false,
+        view: o.view === true,
+        safe: o.safe === true,
+        safe_level: ['follow', 'core', 'edge'].includes(o.safe_level) ? o.safe_level : 'follow',
+        replace: o.replace === true,
+        replace_set: typeof o.replace_set === 'string' ? o.replace_set : '',
+      }
+    } catch { return { ...COPY_DEF } }
+  }
+  const lbCopyFilters = ref(readCopyFilters())
+  watch(lbCopyFilters, (v) => writeLS(LS.lbCopyFilters.key, JSON.stringify(v)), { deep: true })
+
+  /**
    * 排序记忆 —— 每个页面各记各的(见 utils/lskey.js 的 sort* 说明)。
    * 取值一律**过白名单**: localStorage 是用户能随手改的地方, 存进去一个视图不认的值
    * 会让排序静默失效(而且很难看出是"记住了个坏值"), 所以认不出来的就回落默认。
@@ -60,7 +87,7 @@ export const usePrefsStore = defineStore('prefs', () => {
   }
 
   return {
-    bgAuto, gridPageSize, trashAsk, maybeAddBg, seriesShowZero,
+    bgAuto, gridPageSize, trashAsk, maybeAddBg, seriesShowZero, lbCopyFilters,
     sortHome, sortScan, sortSeries, sortTagImgs,
   }
 })

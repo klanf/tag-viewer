@@ -31,7 +31,7 @@ import {
 import {
   historySummary, historyDetail, saveHistory, deleteHistory, renameHistory,
 } from './core/cart.js'
-import { buildExport, buildCartExport } from './core/exporter.js'
+import { buildExport, buildCartExport, filterTagsLikeExport } from './core/exporter.js'
 import {
   listPresets, savePreset, deletePreset, runPreset,
   blacklistFingerprint, afterBlacklistChange, setAutoNotifier, flushAuto,
@@ -602,6 +602,9 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     }),
     'tags:forPath': safe((raw) => getTagsForPath(raw)),
     'lightbox:data': safe((raw) => getLightboxData(raw)),
+    // 光箱「复制标签」的过滤管线(2026-10-19): 与导出同一套原语算视角/安全/替换。
+    // 黑名单与角色系列在渲染层剔(光箱手里已有 ban_map / plain_tags)。
+    'tags:filterCopy': safe((raw) => filterTagsLikeExport(raw?.tags || [], raw?.opts || {})),
     'translate:get': safe((raw) => getTranslations(raw)),
 
     // ---------------- 规则(黑名单 / 替换 / 背景) ----------------

@@ -237,3 +237,57 @@ export function buildCartExport(tags, { spaces = true, replace = true, replaceSe
     suggestedName: 'roles_cart.txt',
   }
 }
+
+/**
+ * 单图「复制标签」过滤管线(2026-10-19 光箱复制设置面板)
+ * 与 buildExport 用**同一批原语**, 但只处理一张图的标签数组:
+ *   视角剔除 -> 安全剔除 -> 替换规则(+ sortTags 归位)
+ * 黑名单/角色系列的剔除留在渲染层(光箱手里已有 ban_map 和 plain_tags)。
+ * 顺序等价的理由: 这几步都是纯删除, 替换是唯一的改写步 —— 两条路径里替换都排最后,
+ * 且替换产物都不再回查黑名单/视角/安全(buildExport 里它们也排在替换之前)。
+ * opts: { replace_set, view, safe, safe_level, replace } —— replace=false 整体关, 其余缺省=关
+ * 返回 { tags, counts: { view, safe, replaced } }
+ */
+export function filterTagsLikeExport(tags, opts = {}) {
+  let out = (tags || []).slice()
+  const counts = { view: 0, safe: 0, replaced: 0 }
+
+  const vm = opts.view ? viewTagMatcher() : null
+  if (vm) {
+    const kept = []
+    for (const t of out) {
+      if (isViewFast(t, vm)) counts.view++
+      else kept.push(t)
+    }
+    out = kept
+  }
+
+  const safeHit = opts.safe ? safetyExportStripper(String(opts.safe_level || '')) : null
+  if (safeHit) {
+    const kept = []
+    for (const t of out) {
+      if (safeHit(t)) counts.safe++
+      else kept.push(t)
+    }
+    out = kept
+  }
+
+  const rules = opts.replace === false ? [] : loadReplaceRulesGroup(String(opts.replace_set || ''))
+  if (rules.length) {
+    const next = []
+    const seen = new Set()
+    for (const t of out) {
+      const nt = replaceTag(t, rules)
+      // 删除规则: 返回空数组 = 该标签整个去掉, 也计入替换数(与 buildExport 同口径)
+      if (!nt.length) { counts.replaced++; continue }
+      for (const v of nt) {
+        if (v !== t) counts.replaced++
+        if (!seen.has(v)) { seen.add(v); next.push(v) }
+      }
+    }
+    // 替换产物按分类段位重排 —— 同 buildExport 的"导出顺序与光箱一致"理由
+    out = sortTags(next)
+  }
+
+  return { tags: out, counts }
+}

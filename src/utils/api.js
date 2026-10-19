@@ -126,6 +126,8 @@ export const api = {
   tagsEditApply: (body) => call('tags:edit:apply', body),
   tagsForPath: (path) => call('tags:forPath', { path }),
   lightbox: (path) => call('lightbox:data', { path }),
+  // 光箱复制过滤(2026-10-19): { tags, opts:{ replace_set, view, safe, safe_level } } -> { tags, counts }
+  tagsFilterCopy: (body) => call('tags:filterCopy', body),
   translate: (tags) => call('translate:get', { q: tags.join(',') }),
 
   // 规则

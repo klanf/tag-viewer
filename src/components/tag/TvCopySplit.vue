@@ -9,18 +9,26 @@
  * modes: [{ key, label, menu, title }]
  *   label = 主按钮上显示的模式名(短), menu = 菜单项文案(长), title = 悬停说明
  * v-model = 当前模式 key; @run(key) = 父组件执行对应复制。
+ *
+ * 2026-10-19 扩展(光箱复制设置面板, 旧调用方不受影响):
+ *   currentLabel / currentTitle —— 覆写主按钮文案/悬停(配置驱动时主按钮不再对应某个 mode);
+ *   #menu-bottom 具名插槽 —— 菜单底部追加自定义面板(勾选项等), 菜单本身的开关仍归组件管。
  */
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 
 const props = defineProps({
   modelValue: { type: String, required: true },
   modes: { type: Array, required: true },
+  currentLabel: { type: String, default: '' },
+  currentTitle: { type: String, default: '' },
 })
 const emit = defineEmits(['update:modelValue', 'run'])
 
 const open = ref(false)
 const root = ref(null)
 const current = computed(() => props.modes.find((m) => m.key === props.modelValue) || props.modes[0])
+const mainLabel = computed(() => props.currentLabel || current.value?.label || '')
+const mainTitle = computed(() => props.currentTitle || current.value?.title || '')
 
 function run(key) {
   emit('update:modelValue', key)
@@ -50,10 +58,10 @@ onBeforeUnmount(() => {
   <span ref="root" class="copy-split">
     <button
       :class="['cs-main', 'tv-like']"
-      :title="current?.title || ''"
+      :title="mainTitle"
       type="button"
       @click="run(modelValue)"
-    >📋 复制: {{ current?.label }}</button><button
+    >📋 复制: {{ mainLabel }}</button><button
       class="cs-arrow tv-like"
       title="选择复制模式"
       :aria-expanded="open"
@@ -73,6 +81,7 @@ onBeforeUnmount(() => {
           <span class="mk">{{ m.key === modelValue ? '✓' : '' }}</span>
           {{ m.menu }}
         </div>
+        <slot name="menu-bottom" />
       </div>
     </transition>
   </span>

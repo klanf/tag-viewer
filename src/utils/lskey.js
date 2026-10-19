@@ -72,4 +72,6 @@ export const LS = Object.freeze({
   sortScan: { key: 'tv_sort_scan' },
   sortSeries: { key: 'tv_sort_series' },
   sortTagImgs: { key: 'tv_sort_tagimgs' },
+  /** 光箱复制过滤配置(2026-10-19) —— JSON 对象 { ban,char,view,safe,safe_level,replace,replace_set } */
+  lbCopyFilters: { key: 'tv_lb_copy_filters' },
 })

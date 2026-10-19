@@ -371,6 +371,55 @@ export const useLightboxStore = defineStore('lightbox', () => {
     await ui.copy(normTags(maybeAddBg(data.value?.all_tags || [])).join(', '))
   }
 
+  /**
+   * 按过滤配置复制(2026-10-19 复制设置面板):
+   *   ban / 角色·系列 在本地剔(ban_map / plain_tags 光箱手里现成);
+   *   视角 / 安全 / 替换 走主进程 tags:filterCopy —— 与导出同一套原语, 不漂移。
+   * 主进程没有这条通道(老版本没重启)时退回本地原始标签照常复制, 只报一句。
+   */
+  async function copyFiltered(cfg = {}) {
+    const d = data.value
+    if (!d) return
+    const base = cfg.char ? generalTags() : (d.all_tags || []).slice()
+    let tags = base
+    let banCut = 0
+    if (cfg.ban) {
+      const banMap = d.ban_map || {}
+      tags = base.filter((t) => {
+        const hit = (banMap[t] || {}).banned
+        if (hit) banCut++
+        return !hit
+      })
+    }
+    let out = tags
+    let counts = null
+    try {
+      const r = await api.tagsFilterCopy({
+        tags,
+        opts: {
+          replace_set: cfg.replace_set || '',
+          view: !!cfg.view,
+          safe: !!cfg.safe,
+          safe_level: cfg.safe_level || '',
+        },
+      })
+      if (r?.error) throw new Error(r.error)
+      out = r.tags || tags
+      counts = r.counts || null
+    } catch (e) {
+      ui.err(`过滤通道不可用(${e.message}), 已按本地标签复制`)
+    }
+    const bgOn = prefs.bgAuto && needBg.value && bgAppend.value.length
+    await ui.copy(normTags(maybeAddBg(out, needBg.value, bgAppend.value)).join(', '))
+    const parts = []
+    if (banCut) parts.push(`去ban ${banCut}`)
+    if (counts?.view) parts.push(`视角 ${counts.view}`)
+    if (counts?.safe) parts.push(`安全 ${counts.safe}`)
+    if (counts?.replaced) parts.push(`替换 ${counts.replaced}`)
+    if (bgOn) parts.push(`补背景 ${bgAppend.value.join('/')}`)
+    ui.ok(parts.length ? `✅ 已复制(${parts.join(' · ')})` : '✅ 已复制')
+  }
+
   /* ---------------- ban / 收藏 ---------------- */
 
   /** 返回 'banned' | 'unbanned' | 'wildcard' | 'error' */
@@ -423,6 +472,6 @@ export const useLightboxStore = defineStore('lightbox', () => {
     list, index, count, pos, canPrev, canNext, inList, lastPath, scrollPending,
     open, close, next, prev, go, jump, setList, removeCurrent, isGone,
     rememberJump, takeJump,
-    copyPlain, copyNoBan, copyRaw, toggleBan, unbanAll, toggleFav, maybeAddBg,
+    copyPlain, copyNoBan, copyRaw, copyFiltered, toggleBan, unbanAll, toggleFav, maybeAddBg,
   }
 })
