@@ -7,7 +7,7 @@
  * 后端 parseReplaceRules/replaceTag 是 oracle(它们是导出真正在跑的代码)。
  */
 import assert from 'node:assert/strict'
-import { parseRules, serializeRules, parseLine, serializeRow, MODE_OPTIONS, mergeRows, expandRows } from '../src/utils/replaceGrammar.js'
+import { parseRules, serializeRules, parseLine, serializeRow, MODE_OPTIONS, mergeRows, expandRows, parseWeight, withWeight } from '../src/utils/replaceGrammar.js'
 import { parseReplaceRules, replaceTag } from '../electron/core/rules.js'
 
 let n = 0
@@ -188,6 +188,28 @@ ok('mergeRows/expandRows 手工互逆', () => {
   const e = expandRows(m)
   assert.deepEqual(e.map((r) => r.core), ['a', 'b'])
   assert.ok(e.every((r) => !('extras' in r)))
+})
+
+/* ---- ⑥ 权重(2026-10-19): (tag:1.2) 社区写法, 存文本层 ---- */
+ok('parseWeight 拆裸词与权重; 非权重形态 w=1', () => {
+  assert.deepEqual(parseWeight('(red_hair:1.2)'), { tag: 'red_hair', w: 1.2 })
+  assert.deepEqual(parseWeight('red_hair'), { tag: 'red_hair', w: 1 })
+  assert.deepEqual(parseWeight('(frieren_(frieren):1.2)'), { tag: 'frieren_(frieren)', w: 1.2 })
+})
+ok('withWeight 包壳/去壳(1.0 = 裸词), 0.1 步进一位小数', () => {
+  assert.equal(withWeight('red_hair', 1.2), '(red_hair:1.2)')
+  assert.equal(withWeight('(red_hair:1.2)', 1), 'red_hair')
+  assert.equal(withWeight('red_hair', 0.9), '(red_hair:0.9)')
+  assert.equal(withWeight('red_hair', 1), 'red_hair')
+})
+ok('带权重的替换标签 round-trip: 文本逐字不变', () => {
+  const TEXT = 'blue_hair -> (red_hair:1.2), solo\nwet ->\n'
+  assert.equal(serializeRules(parseRules(TEXT)), TEXT)
+})
+ok('parseLine 行模型保住权重文本(repl 自由文本)', () => {
+  const r = parseLine('blue_hair -> (red_hair:1.2), solo')
+  assert.deepEqual(r.repl, ['(red_hair:1.2)', 'solo'])
+  assert.equal(serializeRow(r), 'blue_hair -> (red_hair:1.2), solo')
 })
 
 console.log(`\n通过 ${n} 项断言${process.exitCode ? '（有失败）' : ''}`)

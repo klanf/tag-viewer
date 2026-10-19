@@ -219,6 +219,20 @@ function loadWd14Chars(csvPathOverride) {
 /* ------------------------------------------------------------ 分类 */
 
 /**
+ * 权重壳(2026-10-19 替换规则加权): ComfyUI/SD 社区写法 (tag:1.2)。
+ * 里层 tag 允许再带括号(如 frieren_(frieren):1.2) —— 贪心匹配"最后一个 :数字"前的全部内容。
+ * 注意只认带 `:数字` 的完整壳: 裸括号形态(xxx_(series))不算权重, 不受影响。
+ */
+const RE_WEIGHT = /^\((.+):(\d+(?:\.\d+)?)\)$/
+
+/** 剥掉 (tag:1.2) 权重壳, 非权重形态原样返回。分类/排序/去重都按剥壳后的裸词算 */
+export function unwrapWeight(tag) {
+  const t = String(tag || '').trim()
+  const m = RE_WEIGHT.exec(t)
+  return m ? m[1] : t
+}
+
+/**
  * 分类一个标签。
  * @returns {{seg: 'count'|'char'|'series'|'artist'|'general'|'meta'|'other', sub: string, series: string}}
  *   sub = 通用细分的组名(仅 general 有); series = 命中的系列名(仅 char 有, 可能空=多系列歧义)
@@ -227,7 +241,9 @@ export function classify(tag) {
   if (!state.loaded) loadCats()   // 兜底: 直接调 classify 的路径也要有数据源
   const t = String(tag || '').trim()
   if (!t) return { seg: 'other', sub: '', series: '' }
-  const k = norm(t)
+  // 权重壳透明化: (tag:1.2) 按裸 tag 分类 —— 权重不影响段位(2026-10-19 排序后再加权的语义)
+  const bare = unwrapWeight(t)
+  const k = norm(bare)
 
   if (RE_COUNT.test(k)) return { seg: 'count', sub: '', series: '' }
   if (k.startsWith('@')) return { seg: 'artist', sub: '', series: '' }
@@ -242,8 +258,8 @@ export function classify(tag) {
   // 韦林库里部分系列名(genshin impact 等)被归在画面/场景等组, 语义上它们是系列
   if (state.seriesSet.has(k)) return { seg: 'series', sub: '', series: '' }
 
-  // 韦林人工分类(两个变体都试)
-  for (const v of variants(t)) {
+  // 韦林人工分类(两个变体都试) —— 按剥壳后的裸词查
+  for (const v of variants(bare)) {
     const g = state.weilin.get(v)
     if (g) return { seg: 'general', sub: g, series: '' }
   }

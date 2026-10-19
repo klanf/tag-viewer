@@ -70,6 +70,25 @@ export function serializeRow(row) {
   return `${pat} -> ${replTags.join(', ')}`
 }
 
+/* ---------------- 权重(2026-10-19): 替换标签的 ComfyUI/SD 加权写法 ---------------- */
+
+const RE_WEIGHT = /^\((.+):(\d+(?:\.\d+)?)\)$/
+
+/** 拆出 {tag, w}: '(red_hair:1.2)' -> {tag:'red_hair', w:1.2}; 非权重形态 w=1 */
+export function parseWeight(text) {
+  const t = String(text || '').trim()
+  const m = RE_WEIGHT.exec(t)
+  return m ? { tag: m[1], w: Number(m[2]) } : { tag: t, w: 1 }
+}
+
+/** 包权重: 先剥掉可能已有的壳再包; w=1 返回裸词(去壳); 0.1 步进一位小数, '(red_hair:1.2)' */
+export function withWeight(tag, w) {
+  const t = parseWeight(tag).tag
+  if (!t) return ''
+  const x = Math.round(Number(w) * 10) / 10
+  return x === 1 ? t : `(${t}:${x.toFixed(1)})`
+}
+
 /**
  * 整段文本 → { headNotes, rows, tailNotes }
  *   headNotes: 第一条规则行之前的注释/空行(含文件头的分组说明)

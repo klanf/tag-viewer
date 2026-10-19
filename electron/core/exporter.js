@@ -12,7 +12,7 @@ import { recordsFor, frozenKey, isCharacterTag, isCopyrightTag } from './dataset
 import { parseQuery, scopeRecords, searchCached } from './search.js'
 import { blacklistMatcher, isBlockedFast, loadReplaceRules, loadReplaceRulesGroup, replaceTag, loadBgConfig, hasBgTagFast, viewTagMatcher, isViewFast } from './rules.js'
 import { safetyExportStripper } from './safety.js'
-import { exportSegSort, sortTags } from './tagcats.js'
+import { exportSegSort, sortTags, unwrapWeight } from './tagcats.js'
 
 /**
  * 比较两个标签"是不是同一个"用的归一化键: 忽略大小写, 且把下划线/空格视作等价。
@@ -116,6 +116,7 @@ export function buildExport(raw = {}) {
 
     if (replRules.length) {
       const next = []
+      // 去重键按剥权重壳归一 —— red_hair 与 (red_hair:1.2) 算同一个, 先到先得
       const seen = new Set()
       for (const t of tags) {
         const nt = replaceTag(t, replRules)
@@ -123,7 +124,8 @@ export function buildExport(raw = {}) {
         if (!nt.length) { replacedCount++; continue }
         for (const v of nt) {
           if (v !== t) replacedCount++
-          if (!seen.has(v)) { seen.add(v); next.push(v) }
+          const dk = tagKey(unwrapWeight(v))
+          if (!seen.has(dk)) { seen.add(dk); next.push(v) }
         }
       }
       tags = next
@@ -275,6 +277,7 @@ export function filterTagsLikeExport(tags, opts = {}) {
   const rules = opts.replace === false ? [] : loadReplaceRulesGroup(String(opts.replace_set || ''))
   if (rules.length) {
     const next = []
+    // 去重键按剥权重壳归一(同 buildExport)
     const seen = new Set()
     for (const t of out) {
       const nt = replaceTag(t, rules)
@@ -282,7 +285,8 @@ export function filterTagsLikeExport(tags, opts = {}) {
       if (!nt.length) { counts.replaced++; continue }
       for (const v of nt) {
         if (v !== t) counts.replaced++
-        if (!seen.has(v)) { seen.add(v); next.push(v) }
+        const dk = tagKey(unwrapWeight(v))
+        if (!seen.has(dk)) { seen.add(dk); next.push(v) }
       }
     }
     // 替换产物按分类段位重排 —— 同 buildExport 的"导出顺序与光箱一致"理由

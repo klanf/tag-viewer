@@ -16,7 +16,7 @@ fs.writeFileSync(path.join(DATA, 'export_view_tags.txt'), '# 视角\nfrom above\
 fs.writeFileSync(path.join(DATA, 'safety_tags.txt'), '[core]\nnude\nnipples\n[edge]\nlingerie\nswimsuit\n')
 fs.writeFileSync(path.join(DATA, 'replace_sets.json'), JSON.stringify({
   active: 'g1',
-  sets: [{ id: 'g1', name: '测试组', text: 'blue_hair -> red_hair\nwet ->\n@multi@ -> a, b\n' }],
+  sets: [{ id: 'g1', name: '测试组', text: 'blue_hair -> red_hair\nwet ->\n@multi@ -> a, b\n@w1@ -> (red_hair:1.2)\n@w2@ -> red_hair\n' }],
 }))
 
 import { initWorkspace } from '../electron/core/workspace.js'
@@ -94,6 +94,18 @@ ok('replace=false 整体关(与缺省区分留给调用方)', () => {
 ok('空数组/缺参不炸', () => {
   assert.deepEqual(filterTagsLikeExport([], { view: true, safe: true }).tags, [])
   assert.deepEqual(filterTagsLikeExport(undefined).tags, [])
+})
+
+/* ---- 权重(2026-10-19): (tag:1.2) 排序按裸词归位, 去重保带权重版 ---- */
+ok('权重产物 sortTags 归位到裸词同段位(排序后再加权的语义)', () => {
+  const r = filterTagsLikeExport(['zzz_last', 'w1'], { replace: true, replace_set: 'g1' })
+  // zzz_last -> (red_hair:1.2) 应排在 other 段的 zzz_last 前面(人物/通用段), 而不是队尾
+  assert.deepEqual(r.tags, ['(red_hair:1.2)', 'zzz_last'])
+})
+ok('裸词与带权重版去重归一: 保留先到的带权重版', () => {
+  const r = filterTagsLikeExport(['w1', 'w2'], { replace: true, replace_set: 'g1' })
+  assert.deepEqual(r.tags, ['(red_hair:1.2)'])
+  assert.equal(r.counts.replaced, 2)
 })
 
 console.log(`\n通过 ${n} 项断言${process.exitCode ? '（有失败）' : ''}`)

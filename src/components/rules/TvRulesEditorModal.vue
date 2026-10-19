@@ -23,7 +23,7 @@ import TvInput from '../base/TvInput.vue'
 import TvTagComplete from '../base/TvTagComplete.vue'
 import { api } from '@/utils/api.js'
 import { useUiStore } from '@/stores/useUiStore.js'
-import { parseRules, serializeRules, MODE_OPTIONS } from '@/utils/replaceGrammar.js'
+import { parseRules, serializeRules, MODE_OPTIONS, parseWeight, withWeight } from '@/utils/replaceGrammar.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -98,6 +98,7 @@ function parseCurrent() {
   tailNotes.value = p.tailNotes.join('\n')
   rows.value = p.rows
   rawCount.value = p.rows.filter((r) => r.mode === 'raw').length
+  wEdit.value = null   // 换了一组规则, 权重步进器自然作废
 }
 
 /** 构建器当前状态写回所在组的 text(切组/切模式/保存前调用) */
@@ -160,6 +161,25 @@ function addCore(r, t) {
 function removeCore(r, idx) {
   if (idx === 0) r.core = r.extras?.length ? r.extras.shift() : ''
   else r.extras?.splice(idx - 1, 1)
+}
+
+/* ---- 替换标签的权重(2026-10-19): (tag:1.2) 社区写法, 存文本层 ----
+ * chip 显示裸词 + 权重徽标; 点 chip 弹 −/+ 步进(0.1 步, 0.1~2.0), 调回 1.0 去壳。
+ * 落盘文本就是 (tag:1.2), 后端 replaceTag 原样输出, 排序/去重按剥壳裸词(见 tagcats)。 */
+const wEdit = ref(null)   // { ri, j } = 正在调权重的 chip; null = 收起
+const wOf = (t) => parseWeight(t).w
+const bareOf = (t) => parseWeight(t).tag
+function addRepl(r, t) {
+  const v = String(t || '').trim()
+  if (!v) return
+  const bare = bareOf(v)
+  if (r.repl.some((x) => bareOf(x) === bare)) return   // 裸词相同 = 同一个, 带权重也算
+  r.repl.push(v)
+}
+function bumpW(r, j, d) {
+  const { tag, w } = parseWeight(r.repl[j])
+  const nw = Math.min(2, Math.max(0.1, Math.round((w + d) * 10) / 10))
+  r.repl[j] = withWeight(tag, nw)
 }
 
 const curCount = computed(() => (builderMode.value
@@ -490,15 +510,34 @@ async function save() {
               </div>
               <div v-if="r.keep !== 'del'" class="row-sub repl-sub">
                 <span class="lab">替换标签</span>
-                <span v-for="(t, j) in r.repl" :key="j" class="chip">
-                  {{ t }}<b class="x" title="移除" @click="r.repl.splice(j, 1)">×</b>
+                <span
+                  v-for="(t, j) in r.repl"
+                  :key="j"
+                  class="chip"
+                  :class="{ weighted: wOf(t) !== 1 }"
+                >
+                  <template v-if="wEdit && wEdit.ri === i && wEdit.j === j">
+                    <b class="w-btn" title="减 0.1" @click.stop="bumpW(r, j, -0.1)">−</b>
+                    <b class="w-val" title="权重; 1.0 = 不加权">{{ wOf(t).toFixed(1) }}</b>
+                    <b class="w-btn" title="加 0.1" @click.stop="bumpW(r, j, 0.1)">＋</b>
+                    <b class="x" title="移除" @click="r.repl.splice(j, 1); wEdit = null">×</b>
+                  </template>
+                  <template v-else>
+                    <span
+                      class="chip-tag"
+                      title="点击调权重(输出为 (tag:权重) 写法)"
+                      @click.stop="wEdit = { ri: i, j }"
+                    >{{ bareOf(t) }}</span>
+                    <b v-if="wOf(t) !== 1" class="w-badge">{{ wOf(t).toFixed(1) }}</b>
+                    <b class="x" title="移除" @click="r.repl.splice(j, 1)">×</b>
+                  </template>
                 </span>
                 <TvTagComplete
                   class="chip-add"
                   variant="chips"
                   placeholder="+ 联想添加…"
-                  @pick="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
-                  @confirm="(t) => { if (!r.repl.includes(t)) r.repl.push(t) }"
+                  @pick="addRepl"
+                  @confirm="addRepl"
                 />
               </div>
               <div v-else class="row-sub del-sub">
@@ -677,6 +716,18 @@ async function save() {
 }
 .chip .x { color: var(--faint); cursor: pointer; font-weight: normal; }
 .chip .x:hover { color: var(--text); }
+/* 权重(2026-10-19): 带权重的 chip 加粗边框提示; chip-tag 可点调权重; 徽标显示数值 */
+.chip.weighted { border-style: dashed; border-width: 2px; padding: 1px 7px; }
+.chip .chip-tag { cursor: pointer; }
+.chip .chip-tag:hover { text-decoration: underline; }
+.chip .w-badge {
+  font-size: 9px; font-weight: 600;
+  background: var(--accent); color: var(--on-accent);
+  border-radius: 6px; padding: 0 4px; line-height: 1.5;
+}
+.chip .w-btn { cursor: pointer; font-weight: 600; padding: 0 2px; }
+.chip .w-btn:hover { color: var(--text); }
+.chip .w-val { min-width: 24px; text-align: center; font-weight: 600; }
 .chip-add { flex: 0 0 auto; }
 .chip-add :deep(input) { padding: 3px 6px; font-size: 11px; }
 /* 注意别给 chip-add 写 width:100% —— 会盖掉 field-sizing 的 width:auto, 输入框重新拉满 */
