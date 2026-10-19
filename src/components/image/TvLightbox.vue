@@ -102,40 +102,11 @@ const noMeta = computed(() => !chars.value.length && !series.value.length)
 
 function copyTag(tag) { ui.copy(tag) }
 
-/* 复制模式下拉(2026-09-20 用户需求): 三个复制按钮收成一个"主按钮+箭头菜单"。
- * 2026-10-19 升级为「配置驱动」: 主按钮按 prefs.lbCopyFilters 的过滤配置复制,
- * 菜单顶部三个快捷档 = 三组预置勾选(点了即套用并复制), 底部是过滤设置面板
- * (勾选状态跨会话记忆)。勾出来的组合不属于任何快捷档时主按钮显示"自定义"。 */
-const copyModes = [
-  { key: 'plain', label: '全部标签', menu: '复制全部标签(剔角色/系列)', title: '只复制普通标签(剔除角色/系列)' },
-  { key: 'noban', label: '去ban', menu: '去ban 复制(与导出一致)', title: '剔角色/系列 + 去ban + 替换规则(与导出一致)' },
-  { key: 'raw', label: '含角色', menu: '复制完整标签(含角色/系列)', title: '复制完整标签(含角色/系列)' },
-]
-/* 快捷档 -> 过滤配置。replace_set 不在此列: 沿用当前选的规则组, 快捷档不覆盖它。 */
-const COPY_PRESETS = {
-  plain: { ban: false, char: true, view: false, safe: false, replace: false },
-  noban: { ban: true, char: true, view: false, safe: false, replace: true },
-  raw: { ban: false, char: false, view: false, safe: false, replace: false },
-}
+/* 复制(2026-10-19 二次简化): 主按钮就写「复制」, 按过滤面板的勾选配置复制;
+ * 三个快捷档删了 —— 勾选项本身已能表达它们, 菜单里两套入口是重复功能。
+ * 勾选状态记在 prefs.lbCopyFilters, 跨会话记忆。 */
 const prefs = usePrefsStore()
 const cfg = computed(() => prefs.lbCopyFilters)
-function setCfg(patch) { prefs.lbCopyFilters = { ...prefs.lbCopyFilters, ...patch } }
-
-/** 当前配置属于哪个快捷档; 都不是 = 自定义 */
-function presetKeyOf(c) {
-  for (const [key, p] of Object.entries(COPY_PRESETS)) {
-    if (['ban', 'char', 'view', 'safe', 'replace'].every((k) => !!c[k] === p[k])) return key
-  }
-  return 'custom'
-}
-const copyMode = computed({
-  get: () => presetKeyOf(cfg.value),
-  set: (key) => { if (COPY_PRESETS[key]) setCfg(COPY_PRESETS[key]) },
-})
-const copyLabel = computed(() => {
-  const m = copyModes.find((x) => x.key === copyMode.value)
-  return m ? m.label : '自定义'
-})
 const copyTitle = computed(() => {
   const on = []
   if (cfg.value.ban) on.push('去ban')
@@ -143,12 +114,9 @@ const copyTitle = computed(() => {
   if (cfg.value.view) on.push('剔视角/机位')
   if (cfg.value.replace) on.push('替换规则')
   if (cfg.value.safe) on.push(`安全标签(${cfg.value.safe_level === 'edge' ? 'edge' : cfg.value.safe_level === 'core' ? 'core' : '跟随全局'})`)
-  return on.length ? `按当前过滤复制: ${on.join(' + ')}` : '复制(无过滤)'
+  return on.length ? `按当前过滤复制: ${on.join(' + ')}(下拉可调)` : '复制全部标签(下拉可调过滤)'
 })
-function runCopy(key) {
-  copyMode.value = key
-  lb.copyFiltered(prefs.lbCopyFilters)
-}
+function doCopy() { lb.copyFiltered(prefs.lbCopyFilters) }
 
 /* 过滤面板里的规则组下拉: 光箱打开时懒加载一次 */
 const ruleSets = ref([])
@@ -319,11 +287,8 @@ function preheat() {
         <div class="lb-side" @click.stop>
           <div class="lb-copy-row">
             <TvCopySplit
-              v-model="copyMode"
-              :modes="copyModes"
-              :current-label="copyLabel"
               :current-title="copyTitle"
-              @run="runCopy"
+              @run="doCopy"
             >
               <template #menu-bottom>
                 <div class="cpy-panel">

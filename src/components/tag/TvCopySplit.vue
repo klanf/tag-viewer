@@ -17,8 +17,9 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 
 const props = defineProps({
-  modelValue: { type: String, required: true },
-  modes: { type: Array, required: true },
+  /** 空数组 = 无快捷档, 菜单只剩 #menu-bottom 面板(光箱复制过滤, 2026-10-19) */
+  modelValue: { type: String, default: '' },
+  modes: { type: Array, default: () => [] },
   currentLabel: { type: String, default: '' },
   currentTitle: { type: String, default: '' },
 })
@@ -29,6 +30,8 @@ const root = ref(null)
 const current = computed(() => props.modes.find((m) => m.key === props.modelValue) || props.modes[0])
 const mainLabel = computed(() => props.currentLabel || current.value?.label || '')
 const mainTitle = computed(() => props.currentTitle || current.value?.title || '')
+/** 空模式列表时主按钮就写「复制」, 不带 "复制: xxx" 后缀 */
+const mainText = computed(() => (mainLabel.value ? `📋 复制: ${mainLabel.value}` : '📋 复制'))
 
 function run(key) {
   emit('update:modelValue', key)
@@ -61,7 +64,7 @@ onBeforeUnmount(() => {
       :title="mainTitle"
       type="button"
       @click="run(modelValue)"
-    >📋 复制: {{ mainLabel }}</button><button
+    >{{ mainText }}</button><button
       class="cs-arrow tv-like"
       title="选择复制模式"
       :aria-expanded="open"
