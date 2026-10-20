@@ -34,9 +34,11 @@ import { useFavStore } from '@/stores/useFavStore.js'
 import { useAppStore } from '@/stores/useAppStore.js'
 import { useTrash } from '@/composables/useTrash.js'
 import { useJustifiedRows } from '@/composables/useJustifiedRows.js'
+import { useGridZoom } from '@/composables/useGridZoom.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
+import TvZoomBadge from '@/components/base/TvZoomBadge.vue'
 import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
 import { useFloatBack } from '@/composables/useFloatBack.js'
 import { api, onPush } from '@/utils/api.js'
@@ -196,7 +198,13 @@ const imgPaths = computed(() => sortedItems.value.map((it) => it.path))
 /* 自适应行高: 每行按真实比例铺满、行高自适应(与首页/系列页/标签页同一套)。
  * 用 pagedItems(增量显示到第 page 页)而不是 sortedItems —— 必须和**实际渲染的内容**
  * 一致, 否则行会被还没显示出来的图撑变形。 */
-const { wrapEl: rowsEl, rows: scanRows } = useJustifiedRows(pagedItems, { base: 150 })
+/* 自适应行高: 每行按真实比例铺满、行高自适应(与首页/系列页/标签页同一套)。
+ * 用 pagedItems(增量显示到第 page 页)而不是 sortedItems —— 必须和**实际渲染的内容**
+ * 一致, 否则行会被还没显示出来的图撑变形。
+ * base 乘上 Ctrl+滚轮的缩放倍率(2026-10-20, 与看板四个网格同一套, 倍率共用
+ * tv_grid_zoom)—— base 支持响应式, 倍率一变行高立刻重排。 */
+const { zoom: gridZoom, zoomFlash, onWheel: onGridWheel, reset: resetGridZoom } = useGridZoom()
+const { wrapEl: rowsEl, rows: scanRows } = useJustifiedRows(pagedItems, { base: computed(() => 150 * gridZoom.value) })
 
 /* 网格顺序变了(删除/移动联动剔除、改排序)就同步给光箱 —— 与首页 / 系列 / 标签三页一致。
  * 少了这一步, 光箱里那份 list 就只是"打开那一刻的快照": 网格已经把某张剔掉了,
@@ -1024,7 +1032,7 @@ onActivated(() => {
             :text="`这个文件夹里没有匹配「${filterKw.trim()}」的图片(标签或文件名)`"
           />
 
-          <div v-else ref="rowsEl" class="grid imgs jrows">
+          <div v-else ref="rowsEl" class="grid imgs jrows" @wheel="onGridWheel">
             <div v-for="(row, ri) in scanRows" :key="ri" class="jrow">
               <div
                 v-for="(c, ci) in row.cells"
@@ -1052,6 +1060,8 @@ onActivated(() => {
               </div>
             </div>
           </div>
+          <!-- Ctrl+滚轮缩放提示徽标: 停手即淡出, 点击恢复 100% -->
+          <TvZoomBadge :zoom="gridZoom" :show="zoomFlash" @reset="resetGridZoom" />
           <!-- 无限滚动哨兵: 进入视口(提前 400px)自动追加下一页 -->
           <div v-if="page < totalPages" ref="sentinel" class="load-sentinel">
             <span class="hint">加载中...</span>
