@@ -405,6 +405,48 @@ export async function rescanFolder(raw = {}, onProgress = null) {
 }
 
 /**
+ * 扫描页文件夹卡片的**后台统计刷新**(2026-10-20)。
+ *
+ * 为什么需要: 卡片上的「含提示词 N · 共 M」是 stats_json —— 只在打开/重扫该夹时
+ * 写入。批量把图移走后(应用内移动已 purgeScanCachePaths, 应用外搬走也有增量对账兜),
+ * 缓存条目是对的, 但**快照没人重写**, 卡片就一直停在旧数字, 必须手点重扫。
+ *
+ * 做法: 逐个扫描夹跑一遍**增量** scanFolder(枚举+stat 对账, 只解析新增/变动的文件,
+ * 没变化的夹在 5 分钟 TTL 内直接秒回), 把最新统计写回 stats_json。不动封面 ——
+ * 封面挑选用时且已有快照, 没必要每次都换。
+ *
+ * 单夹失败不挡其他夹; refreshRunning 防重入(渲染端列表页每次进来都会叫一遍)。
+ */
+let statsRefreshRunning = false
+export async function refreshScanStats(onProgress = null) {
+  if (statsRefreshRunning) return { ok: true, skipped: true }
+  statsRefreshRunning = true
+  try {
+    const db = openDb()
+    const rows = db.prepare('SELECT path, recursive FROM folders WHERE as_scan = 1 ORDER BY id').all()
+    let done = 0
+    for (const rec of rows) {
+      try {
+        const r = await scanFolder({ path: rec.path, recursive: !!rec.recursive }, null)
+        if (!r?.error) {
+          upsertFolder(db, {
+            path: rec.path,
+            recursive: !!rec.recursive,
+            last_scan_ms: Date.now(),
+            stats: statsOf(r),
+          })
+        }
+      } catch { /* 单个夹失败不影响其余 */ }
+      done++
+      try { onProgress?.({ done, total: rows.length, path: rec.path }) } catch { /* 忽略 */ }
+    }
+    return { ok: true, total: rows.length }
+  } finally {
+    statsRefreshRunning = false
+  }
+}
+
+/**
  * 打开一个文件夹(取图片清单)。
  * 默认走 scan.js 的内存缓存 —— 点过第二次就是秒开; raw.refresh=true 强制重扫。
  *

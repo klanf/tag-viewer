@@ -242,6 +242,29 @@ async function loadFolders() {
   }
 }
 
+/* ---------------- 卡片统计后台刷新(2026-10-20) ----------------
+ * 卡片上的「含提示词 N · 共 M」是上次打开/重扫时写的快照 —— 批量把图移走后
+ * 缓存条目虽然被剔了, 快照没人重写, 卡片就一直停在旧数字。
+ * 现在列表页每次进来(挂载/切回/搬完图返回)都叫主进程逐夹**增量对账**一遍,
+ * 没变化的夹在 5 分钟 TTL 内秒回; 每夹完成推 folders:stats 回来重拉列表,
+ * 卡片逐个变准, 不再需要手点「重扫」才更新。 */
+const statsRefresh = ref(null)        // { done, total } | null —— 列表工具栏的小字进度
+let statsReloadTimer = null
+let lastStatsKick = 0
+function kickStatsRefresh() {
+  if (Date.now() - lastStatsKick < 15000) return    // 防连点; 主进程另有防重入
+  lastStatsKick = Date.now()
+  api.refreshFolderStats().catch(() => { /* 主进程老版没这条通道就静默 */ })
+}
+function onStatsPush(p) {
+  if (level.value !== 'list') return
+  statsRefresh.value = p?.done ? null : { done: p.done, total: p.total }
+  clearTimeout(statsReloadTimer)
+  statsReloadTimer = setTimeout(() => {
+    if (level.value === 'list') loadFolders()
+  }, 250)
+}
+
 /** 选目录(可多选) -> 逐个扫描入库 */
 async function addByPicker() {
   let picked
@@ -388,6 +411,7 @@ function backToList() {
   streaming.value = false            // 回列表后后台扫描的推送不再有落点(path 匹配挡住)
   streamInfo.value = null
   clearSel()
+  kickStatsRefresh()                 // 在夹里动过图(搬移/删除)回来, 卡片数字自动对账
 }
 
 function openImage(it) { lb.open(it.path, { list: imgPaths.value }) }
@@ -684,6 +708,9 @@ const offScanProg = onPush('scan:progress', (p) => {
   if (level.value === 'folder') scanProg.value = p
 })
 
+/* 卡片统计后台刷新的进度/完成(2026-10-20) —— 每夹完成推一次, 防抖重拉列表 */
+const offStatsPush = onPush('folders:stats', onStatsPush)
+
 /* ---------------- 流式扫描合并(2026-10-16) ----------------
  * 大文件夹"扫到首批就能进": openFolder 先返回前 ~100 张(out.streaming=true),
  * 后台每解析完一批推 scan:partial(增量 items), 全部扫完推 scan:final(全量快照,
@@ -733,6 +760,8 @@ onBeforeUnmount(() => {
   offScanProg()
   offScanPartial()
   offScanFinal()
+  offStatsPush()
+  clearTimeout(statsReloadTimer)
   gridOb?.disconnect()
 })
 
@@ -764,8 +793,9 @@ onActivated(() => {
    * 用户会以为"加了没用"(2026-09-23 实测: e2e 里先改开关再切回来, 页面压根没刷新)。
    * loadFolders() 是整体替换 folders.value, 不会重复追加, 也不动 level/分页/滚动,
    * 所以每次激活重查一遍是安全的; 代价只有一条 folders:list 查询。 */
-  if (firstActivate) { firstActivate = false; return }
+  if (firstActivate) { firstActivate = false; kickStatsRefresh(); return }
   loadFolders()
+  if (level.value === 'list') kickStatsRefresh()
 })
 </script>
 
@@ -819,6 +849,7 @@ onActivated(() => {
           <!-- 也放在这里一份: 图要"进了文件夹"才看得到, 但开关不该被藏在里面 -->
           <TvSafetyToggle />
           <TvButton size="sm" variant="secondary" :loading="loadingList" @click="loadFolders">🔄 刷新列表</TvButton>
+          <span v-if="statsRefresh" class="stats-refresh" title="逐个文件夹增量对账, 卡片张数自动对齐磁盘现状">⏳ 统计对账中 {{ statsRefresh.done }}/{{ statsRefresh.total }}</span>
         </div>
 
         <div v-if="listError" class="err">读取列表失败: {{ listError }}</div>
@@ -1107,6 +1138,7 @@ onActivated(() => {
 .path { flex: 1; min-width: 260px; }
 .kw { max-width: 320px; }
 .progress { color: var(--accent2); font-size: 12px; margin-top: 8px; }
+.stats-refresh { color: var(--muted); font-size: 12px; }
 /* 反推未就绪的常驻引导条: 警示但不吓人, 入口("看看怎么装")才是重点 */
 .tagger-warn {
   margin-bottom: 12px;

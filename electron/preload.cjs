@@ -68,7 +68,7 @@ const CHANNELS = new Set([
   // 文件夹登记表(扫描夹 + 看板来源 共用一份, 真源是 tags.db 的 folders 表)
   'folders:list', 'folders:add', 'folders:remove', 'folders:update',
   'folders:rescan', 'folders:open', 'folders:prune',
-  'folders:purge', 'folders:export', 'folders:sync',
+  'folders:refreshStats', 'folders:purge', 'folders:export', 'folders:sync',
   // 剪贴板
   'clipboard:write',
   // 诊断
@@ -90,6 +90,8 @@ const PUSH = new Set([
   'tagger:setup-progress',
   // 流式扫描（2026-10-16）: 大文件夹扫到首批就能进, 后台每批推进度、扫完全量修正
   'scan:partial', 'scan:final',
+  // 文件夹卡片统计后台刷新(2026-10-20): 每夹完成/全部完成推一次, 渲染端重拉列表
+  'folders:stats',
 ])
 
 /** 自定义协议的 URL 构造 —— 与 imageproto.js 的解析必须成对 */

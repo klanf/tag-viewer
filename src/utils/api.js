@@ -231,6 +231,9 @@ export const api = {
   updateFolder: (q) => call('folders:update', q),
   rescanFolder: (q) => call('folders:rescan', q),
   openFolder: (q) => call('folders:open', q),
+  // 文件夹卡片统计后台刷新(2026-10-20): 逐夹增量对账 + 重写 stats_json,
+  // 进度/完成经 folders:stats 推送回渲染端
+  refreshFolderStats: () => call('folders:refreshStats'),
   pruneFolders: () => call('folders:prune'),
   exportFolders: () => call('folders:export'),
   // 单个来源立即同步(只跑这一个目录)
