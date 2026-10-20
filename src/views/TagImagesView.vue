@@ -124,6 +124,12 @@ function onTagRenamed(newTag) {
 function onTagDeleted() {
   router.replace('/tags')
 }
+/** 面包屑悬停复制(2026-10-20): 复制当前标签名, 省得划选文字 Ctrl+C */
+function copyTag(t) {
+  if (!t) return
+  ui.copy(t)
+  ui.ok(`📋 已复制标签: ${t}`, 'ok', 1400)
+}
 </script>
 
 <template>
@@ -132,7 +138,10 @@ function onTagDeleted() {
       <div class="crumb">
         <span class="link" @click="backToTags">全部标签</span>
         <span class="sep">&gt;</span>
-        <span class="now">{{ tag }}</span>
+        <span class="crumb-item">
+          <span class="now">{{ tag }}</span>
+          <button class="crumb-copy" :title="`复制标签名(${tag})`" @click="copyTag(tag)">📋</button>
+        </span>
       </div>
       <span class="spacer" />
       <TvButton size="sm" variant="secondary" title="改名(全库替换)或删除(可圈范围)这个标签" @click="showEdit = true">✏️ 编辑标签</TvButton>

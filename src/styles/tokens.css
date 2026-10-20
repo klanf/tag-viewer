@@ -536,6 +536,17 @@ a:hover { text-decoration: underline; }
 .crumb .link:hover { text-decoration: underline; }
 .crumb .now { color: var(--text); }
 .name-en { color: var(--muted); font-size: 11px; font-weight: 400; }
+/* 面包屑悬停复制(2026-10-20): 段落包一层 .crumb-item, 悬停显形 📋,
+ * 点一下复制该层的 tag 名 —— 省得划选文字再 Ctrl+C。 */
+.crumb-item { display: inline-flex; align-items: center; gap: 3px; }
+.crumb-copy {
+  border: none; background: transparent; cursor: pointer;
+  font-size: 11px; line-height: 1; padding: 2px 3px; border-radius: 4px;
+  color: var(--muted); opacity: 0;
+  transition: opacity var(--t-fast), color var(--t-fast), background var(--t-fast);
+}
+.crumb-item:hover .crumb-copy { opacity: 1; }
+.crumb-copy:hover { color: var(--accent); background: var(--panel2); }
 
 /* 键盘提示 */
 kbd {

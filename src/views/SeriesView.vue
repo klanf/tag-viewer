@@ -286,6 +286,13 @@ const crumb = computed(() => ({
   char: curChar.value?.name || '',
 }))
 
+/** 面包屑悬停复制: 复制该层的 tag 名(系列用英文 tag, 角色用名字) */
+function copyCrumb(text, label) {
+  if (!text) return
+  ui.copy(text)
+  ui.ok(`📋 已复制${label}: ${text}`, 'ok', 1400)
+}
+
 /** 来源变化: 系列/角色/图片全部重算 */
 async function onSourceChange() {
   if (view.value === 'series') return showSeriesList()
@@ -349,14 +356,28 @@ watch(() => route.query.series, async (name) => {
         <span class="link" @click="showSeriesList">全部系列</span>
         <template v-if="crumb.series">
           <span class="sep">&gt;</span>
-          <span class="link" @click="backToChars">
-            {{ crumb.seriesZh || crumb.series }}
-            <span v-if="crumb.seriesZh" class="name-en">{{ crumb.series }}</span>
+          <span class="crumb-item">
+            <span class="link" @click="backToChars">
+              {{ crumb.seriesZh || crumb.series }}
+              <span v-if="crumb.seriesZh" class="name-en">{{ crumb.series }}</span>
+            </span>
+            <button
+              class="crumb-copy"
+              :title="`复制系列名(${crumb.series})`"
+              @click="copyCrumb(crumb.series, '系列名')"
+            >📋</button>
           </span>
         </template>
         <template v-if="view === 'images' && crumb.char">
           <span class="sep">&gt;</span>
-          <span class="now">{{ crumb.char }}</span>
+          <span class="crumb-item">
+            <span class="now">{{ crumb.char }}</span>
+            <button
+              class="crumb-copy"
+              :title="`复制角色名(${crumb.char})`"
+              @click="copyCrumb(crumb.char, '角色名')"
+            >📋</button>
+          </span>
         </template>
       </div>
       <TvSourceChips
