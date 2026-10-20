@@ -289,7 +289,10 @@ const LOG_PATH = logFile()
 const READY_FLAG = readyFlag()
 
 function log(tag, msg) {
-  const line = `[${new Date().toISOString()}] [${tag}] ${msg}`
+  // 每行都带 uptime(2026-10-20): 启动时间线分析不用再手算时间戳差 ——
+  // 冷启动各阶段(模块加载/数据集解析/同步)的花费直接读列。uptime 是
+  // 进程真实运行秒数, 与首行相减即得"vbs spawn -> 第一行日志"这段最贵的黑箱。
+  const line = `[${new Date().toISOString()}] [+${process.uptime().toFixed(2)}s] [${tag}] ${msg}`
   try { fs.appendFileSync(LOG_PATH, line + '\n') } catch { /* 日志失败不能拖垮启动 */ }
   try { process.stdout.write(line + '\n') } catch { /* 无控制台时忽略 */ }
 }
@@ -311,7 +314,7 @@ function initLog() {
   // 大头(exe 加载 + require 链)发生在**第一行日志之前** —— 没有这列, 那段时间
   // 就是黑洞。process.uptime() 是进程真实运行秒数, 与文件时间戳相减即得
   // "vbs spawn -> 模块加载完成"这段(往往是冷启动最贵的一段)。
-  log('boot', `pid=${process.pid} v=${app.getVersion()} electron=${process.versions.electron} node=${process.versions.node} chrome=${process.versions.chrome} uptime=${process.uptime().toFixed(2)}s`)
+  log('boot', `pid=${process.pid} v=${app.getVersion()} electron=${process.versions.electron} node=${process.versions.node} chrome=${process.versions.chrome}`)
   log('boot', `argv=${JSON.stringify(process.argv.slice(1))}`)
   log('boot', `cwd=${process.cwd()}`)
   log('boot', `dev=${isDev} logDir=${LOG_DIR}`)
@@ -373,7 +376,7 @@ function createWindow() {
 
   win.once('ready-to-show', () => {
     win.show()
-    log('ok', `BOOT OK — 窗口已显示 uptime=${process.uptime().toFixed(2)}s`)
+    log('ok', 'BOOT OK — 窗口已显示')
     markReady('window-shown')
   })
 
@@ -664,7 +667,7 @@ app.on('second-instance', () => {
 
 app.whenReady().then(() => {
   if (!gotLock) return
-  log('ok', `app ready, userData=${app.getPath('userData')} uptime=${process.uptime().toFixed(2)}s`)
+  log('ok', `app ready, userData=${app.getPath('userData')}`)
 
   try {
     // defaultDataDir 由这里注入(workspace.js 不能 import electron, 见 core/paths.js 顶部):
