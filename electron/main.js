@@ -351,8 +351,45 @@ if (!gotLock) {
 }
 
 let win = null
+let splash = null
+
+/* 启动画面(2026-10-20): 纯内联 data:URL, 不读任何文件 —— renderer 冷加载
+ * 再慢(实测开机风暴期 137s)它也不受影响, 3 秒内必出, 用户知道"点着了"。
+ * 主窗口 ready-to-show 时关掉; 30s 兜底强制显示主窗口防止极端情况下永久启动画面。 */
+function closeSplash() {
+  if (splash && !splash.isDestroyed()) splash.close()
+  splash = null
+}
+
+function showSplash() {
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    body{margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+         height:140px;background:#f4f6fa;font-family:"Segoe UI","Microsoft YaHei",sans-serif;
+         user-select:none;-webkit-app-region:drag}
+    .spin{width:26px;height:26px;border:3px solid #d5dbe5;border-top-color:#3b82f6;
+          border-radius:50%;animation:r 0.8s linear infinite;margin-bottom:14px}
+    @keyframes r{to{transform:rotate(360deg)}}
+    .t{font-size:14px;color:#1f2733;font-weight:600;margin-bottom:6px}
+    .s{font-size:12px;color:#7a8494}
+  </style></head><body>
+    <div class="spin"></div><div class="t">WD14 标签看板</div>
+    <div class="s">正在启动, 冷启动可能需要一点时间…</div>
+  </body></html>`
+  splash = new BrowserWindow({
+    width: 360, height: 140, frame: false, resizable: false,
+    minimizable: false, maximizable: false,
+    alwaysOnTop: true, skipTaskbar: true, center: true, show: true,
+    backgroundColor: '#f4f6fa',
+    webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true },
+  })
+  splash.on('closed', () => { splash = null })
+  splash.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  log('ok', 'splash shown')
+  markReady('splash-shown')
+}
 
 function createWindow() {
+  showSplash()
   log('ok', 'createWindow')
   win = new BrowserWindow({
     width: 1560,
@@ -375,30 +412,37 @@ function createWindow() {
   })
 
   win.once('ready-to-show', () => {
-    clearTimeout(fallbackShowTimer)
+    clearTimeout(forceShowTimer)
+    closeSplash()
     win.show()
     log('ok', 'BOOT OK — 窗口已显示')
     markReady('window-shown')
   })
 
-  /* 冷启动兜底显示(2026-10-20 实测): 开机后首启 ready-to-show 要 23 秒
-   * (renderer 冷加载 + 杀软实扫 dist/), 期间窗口 show:false —— 用户面对
-   * "点了没反应"的桌面, 正是"点好几次图标"的直接诱因。3 秒兜底先 show
-   * 出背景色窗口: 内容还没好, 但任务栏图标和窗口立刻出现, 用户知道点着了。
-   * ready-to-show 到达后再正常 show(幂等, 不闪)。 */
-  const fallbackShowTimer = setTimeout(() => {
+  /* 最后的保底(2026-10-20): 有启动画面兜底后, 主窗口不再抢 3 秒的早期 show
+   * (否则风暴期启动画面 3 秒就被空白主窗口顶掉, 等于白做)。极端情况
+   * ready-to-show 一直不来时, 30 秒强制显示主窗口, 至少有东西可见。 */
+  const forceShowTimer = setTimeout(() => {
     if (win && !win.isDestroyed() && !win.isVisible()) {
+      closeSplash()
       win.show()
-      log('ok', '兜底显示窗口(ready-to-show 超 3s, renderer 冷加载中)')
+      log('warn', 'ready-to-show 超 30s, 强制显示主窗口(可能空白)')
       markReady('fallback-shown')
     }
-  }, 3000)
+  }, 30000)
 
   // 渲染进程崩溃 / 加载失败都要留痕, 否则用户只看到白屏或没反应
-  win.webContents.on('render-process-gone', (_e, d) => log('fatal', `render-process-gone: ${JSON.stringify(d)}`))
-  win.webContents.on('did-fail-load', (_e, code, desc, url) =>
-    log('fatal', `did-fail-load code=${code} desc=${desc} url=${url}`),
-  )
+  // (同时关启动画面 + 显示主窗口, 别让人对着转圈看永恒)
+  win.webContents.on('render-process-gone', (_e, d) => {
+    log('fatal', `render-process-gone: ${JSON.stringify(d)}`)
+    closeSplash()
+    if (win && !win.isDestroyed()) win.show()
+  })
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    log('fatal', `did-fail-load code=${code} desc=${desc} url=${url}`)
+    closeSplash()
+    if (win && !win.isDestroyed()) win.show()
+  })
   win.webContents.on('console-message', (...a) => {
     // Electron 35+ 传单个事件对象; 旧签名是 (event, level, message, line, sourceId)
     const d = a[0] && typeof a[0] === 'object' && 'message' in a[0]
@@ -670,6 +714,14 @@ function buildMenu() {
 }
 
 app.on('second-instance', () => {
+  // 还在启动画面阶段(主窗口未显示): 把启动画面带回前台, 别把空白主窗口 show 出来
+  if (splash && !splash.isDestroyed()) {
+    if (splash.isMinimized()) splash.restore()
+    splash.show()
+    splash.focus()
+    log('warn', 'second-instance 命中启动画面阶段, 已带回前台')
+    return
+  }
   if (win) {
     if (win.isMinimized()) win.restore()
     win.show()   // 双击启动器唤起: show 强制把隐藏/被遮的窗口拉回可见, 再聚焦
