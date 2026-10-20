@@ -25,7 +25,7 @@
  * 拿不到尺寸的图(老库没回填 / 文件头读不出来)按 9/16 参与排版, 与卡片自身的回落一致
  * —— 这样"新特性对老数据的行为不变"这条在布局层也成立。
  */
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, toValue } from 'vue'
 
 /** 拿不到尺寸时的回落比例 —— 与 TvImageCard / TvImage 的 '9 / 16' 保持一致 */
 const FALLBACK_RATIO = 9 / 16
@@ -97,7 +97,9 @@ export function buildRows(items, W, opt = {}) {
  *     (Vue 的 DOM 更新在微任务里冲掉), 所以用户看不到"空一帧"。
  *
  * @param {import('vue').Ref<Array>} itemsRef
- * @param {{base?:number, gap?:number}} [opt]
+ * @param {{base?:number|import('vue').Ref<number>, gap?:number}} [opt]
+ *        base 可以传 ref/computed(2026-10-20 Ctrl+滚轮缩放网格要用) —— buildRows
+ *        在 computed 求值时才取值, base 一变行高立刻跟着重排。传普通数字行为不变。
  */
 export function useJustifiedRows(itemsRef, opt = {}) {
   const wrapEl = ref(null)
@@ -105,7 +107,7 @@ export function useJustifiedRows(itemsRef, opt = {}) {
   let ro = null
   let rafId = 0
 
-  const rows = computed(() => buildRows(itemsRef.value, width.value, opt))
+  const rows = computed(() => buildRows(itemsRef.value, width.value, { ...opt, base: toValue(opt.base) }))
 
   /** 量一次宽度; 宽度没变就**不写**响应式状态(写了就会白白触发布局) */
   function measure() {

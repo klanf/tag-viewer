@@ -21,6 +21,7 @@ import TvImageCard from './TvImageCard.vue'
 import TvState from '../base/TvState.vue'
 import { useJustifiedRows } from '@/composables/useJustifiedRows.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import { readLS, writeLS, LS } from '@/utils/lskey.js'
 import { nfmt } from '@/utils/format.js'
 
 const props = defineProps({
@@ -59,7 +60,53 @@ const allHidden = computed(() => (
   !!props.results.length && !shown.value.length && safety.on
 ))
 
-const { wrapEl, rows } = useJustifiedRows(shown, { base: props.rowBase })
+/* ── Ctrl+滚轮缩放网格(2026-10-20, 与光箱缩放同一套手感) ─────────────────
+ * 调的是 useJustifiedRows 的行高基准(base × zoom), 不是 transform:scale ——
+ * 后者会把卡片糊掉且不重排; 前者是真·重新排版, 字号/留白比例都保持正常。
+ *
+ * 倍率范围由 buildRows 的行高上下限反推: targetH = base×16/9 被夹在 [120,600],
+ * base 默认 150 → 有效倍率 [0.45, 2.25], 超出只会"顶到底不再变化", 没必要放行。
+ * 步进 ×1.12 与光箱一致; 滚一档记一次 localStorage, 看板/标签/收藏/系列四个
+ * 页面共用同一份(它们本来就是同一张卡片同一套审美, 没理由各记各的)。
+ */
+const ZOOM_MIN = 0.45
+const ZOOM_MAX = 2.25
+const ZOOM_STEP = 1.12
+
+function clampZoom(v) {
+  const n = Number(v)
+  return (n >= ZOOM_MIN && n <= ZOOM_MAX) ? n : 1
+}
+const zoom = ref(clampZoom(readLS(LS.gridZoom.key)))
+const effRowBase = computed(() => props.rowBase * zoom.value)
+const { wrapEl, rows } = useJustifiedRows(shown, { base: effRowBase })
+
+/** 缩放时的提示徽标: 显示当前百分比, 停手 900ms 后淡出; 点击恢复 100% */
+const zoomFlash = ref(false)
+let flashTimer = null
+function flashZoom() {
+  zoomFlash.value = true
+  clearTimeout(flashTimer)
+  flashTimer = setTimeout(() => { zoomFlash.value = false }, 900)
+}
+function onGridWheel(e) {
+  if (!(e.ctrlKey || e.metaKey)) return    // 普通滚动照常滚列表
+  e.preventDefault()                       // 拦下 Electron 的页面级 Ctrl+滚轮缩放
+  const f = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP
+  const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(zoom.value * f * 100) / 100))
+  if (next !== zoom.value) {
+    zoom.value = next
+    writeLS(LS.gridZoom.key, next)
+  }
+  flashZoom()   // 顶到边界也给个反馈, 不然"没反应"像是坏了
+}
+function resetZoom() {
+  if (zoom.value === 1) return
+  zoom.value = 1
+  writeLS(LS.gridZoom.key, 1)
+  flashZoom()
+}
+onBeforeUnmount(() => clearTimeout(flashTimer))
 
 const sentinel = ref(null)
 let io = null
@@ -102,7 +149,16 @@ function onHover(payload) {
 </script>
 
 <template>
-  <div ref="wrapEl" class="wrap-grid">
+  <div ref="wrapEl" class="wrap-grid" @wheel="onGridWheel">
+    <!-- Ctrl+滚轮缩放提示徽标: 停手即淡出, 点击恢复 100% -->
+    <Transition name="zoomfade">
+      <div
+        v-if="zoomFlash"
+        class="zoom-badge"
+        title="Ctrl+滚轮缩放网格 · 点击恢复 100%"
+        @click="resetZoom"
+      >{{ Math.round(zoom * 100) }}%</div>
+    </Transition>
     <TvState v-if="error" state="error" :text="`加载失败: ${error}`" />
     <TvState
       v-else-if="!shown.length && loading"
@@ -173,4 +229,16 @@ function onHover(payload) {
   text-align: center; color: var(--muted); font-size: 12px;
   padding: 14px 0;
 }
+
+/* 缩放徽标: 底部居中的小药丸, 与光箱的缩放徽标同一套观感 */
+.zoom-badge {
+  position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+  z-index: 70;
+  background: rgba(10, 13, 18, .85); color: var(--text);
+  font-size: 12px; padding: 5px 13px; border-radius: 999px;
+  border: 1px solid var(--border);
+  cursor: pointer; user-select: none;
+}
+.zoomfade-enter-active, .zoomfade-leave-active { transition: opacity .18s ease; }
+.zoomfade-enter-from, .zoomfade-leave-to { opacity: 0; }
 </style>

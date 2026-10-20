@@ -74,4 +74,6 @@ export const LS = Object.freeze({
   sortTagImgs: { key: 'tv_sort_tagimgs' },
   /** 光箱复制过滤配置(2026-10-19) —— JSON 对象 { ban,char,view,safe,safe_level,replace,replace_set } */
   lbCopyFilters: { key: 'tv_lb_copy_filters' },
+  /** 图片网格缩放(2026-10-20 Ctrl+滚轮) —— 行高基准的倍率(0.45~2.25), 网格四个页面共用 */
+  gridZoom: { key: 'tv_grid_zoom' },
 })
