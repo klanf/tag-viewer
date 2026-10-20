@@ -375,10 +375,24 @@ function createWindow() {
   })
 
   win.once('ready-to-show', () => {
+    clearTimeout(fallbackShowTimer)
     win.show()
     log('ok', 'BOOT OK — 窗口已显示')
     markReady('window-shown')
   })
+
+  /* 冷启动兜底显示(2026-10-20 实测): 开机后首启 ready-to-show 要 23 秒
+   * (renderer 冷加载 + 杀软实扫 dist/), 期间窗口 show:false —— 用户面对
+   * "点了没反应"的桌面, 正是"点好几次图标"的直接诱因。3 秒兜底先 show
+   * 出背景色窗口: 内容还没好, 但任务栏图标和窗口立刻出现, 用户知道点着了。
+   * ready-to-show 到达后再正常 show(幂等, 不闪)。 */
+  const fallbackShowTimer = setTimeout(() => {
+    if (win && !win.isDestroyed() && !win.isVisible()) {
+      win.show()
+      log('ok', '兜底显示窗口(ready-to-show 超 3s, renderer 冷加载中)')
+      markReady('fallback-shown')
+    }
+  }, 3000)
 
   // 渲染进程崩溃 / 加载失败都要留痕, 否则用户只看到白屏或没反应
   win.webContents.on('render-process-gone', (_e, d) => log('fatal', `render-process-gone: ${JSON.stringify(d)}`))
@@ -417,6 +431,9 @@ function createWindow() {
 
   // ---- 6. 页面渲染出来之后才开始吃 CPU 的活 ----
   win.webContents.once('did-finish-load', () => {
+    // renderer 冷加载的二分点(2026-10-20): createWindow->这里 = HTML/JS 加载,
+    // 这里->ready-to-show = 首帧绘制。23s 的冷启动大头靠这两行日志定位。
+    log('ok', 'renderer did-finish-load')
     setTimeout(() => startLoad(), 60)
   })
 
