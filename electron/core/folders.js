@@ -415,15 +415,23 @@ export async function rescanFolder(raw = {}, onProgress = null) {
  * 没变化的夹在 5 分钟 TTL 内直接秒回), 把最新统计写回 stats_json。不动封面 ——
  * 封面挑选用时且已有快照, 没必要每次都换。
  *
+ * 也不写 last_scan_ms(2026-10-20): 列表按「最近扫的在前」排序, last_scan 是
+ * **用户动作**(打开/重扫/添加)的时间语义 —— 后台对账如果碰它, 每夹对账完
+ * 就插队到列表最前, 用户看到的就是"顺序一直在跳"(首次上线当天实测)。
+ *
  * 单夹失败不挡其他夹; refreshRunning 防重入(渲染端列表页每次进来都会叫一遍)。
+ * @param {Function|null} onProgress
+ * @param {{only?: string[]}} [opts] 只对账这些路径(从文件夹退回列表时只看刚退出的那个夹)
  */
 let statsRefreshRunning = false
-export async function refreshScanStats(onProgress = null) {
+export async function refreshScanStats(onProgress = null, opts = {}) {
   if (statsRefreshRunning) return { ok: true, skipped: true }
   statsRefreshRunning = true
   try {
     const db = openDb()
+    const only = Array.isArray(opts.only) && opts.only.length ? opts.only : null
     const rows = db.prepare('SELECT path, recursive FROM folders WHERE as_scan = 1 ORDER BY id').all()
+      .filter((rec) => !only || only.some((p) => normalizeImagePath(p) === rec.path))
     let done = 0
     for (const rec of rows) {
       try {
@@ -432,7 +440,7 @@ export async function refreshScanStats(onProgress = null) {
           upsertFolder(db, {
             path: rec.path,
             recursive: !!rec.recursive,
-            last_scan_ms: Date.now(),
+            // 不带 last_scan_ms —— 见函数注释, 对账不参与排序语义
             stats: statsOf(r),
           })
         }

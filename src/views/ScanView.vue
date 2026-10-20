@@ -251,10 +251,13 @@ async function loadFolders() {
 const statsRefresh = ref(null)        // { done, total } | null —— 列表工具栏的小字进度
 let statsReloadTimer = null
 let lastStatsKick = 0
-function kickStatsRefresh() {
-  if (Date.now() - lastStatsKick < 15000) return    // 防连点; 主进程另有防重入
+function kickStatsRefresh(onlyPaths) {
+  /* only(精准对账单个夹)不受 15s 节流: 连续进出多个夹是正常操作, 被节流挡掉的话
+   * 第二个夹退回来数字就不对; 单夹增量对账在 TTL 缓存内是秒回, 放行没代价。
+   * 全量兜底(进列表页/切回)照旧节流, 主进程另有防重入。 */
+  if (!onlyPaths && Date.now() - lastStatsKick < 15000) return
   lastStatsKick = Date.now()
-  api.refreshFolderStats().catch(() => { /* 主进程老版没这条通道就静默 */ })
+  api.refreshFolderStats(onlyPaths).catch(() => { /* 主进程老版没这条通道就静默 */ })
 }
 function onStatsPush(p) {
   if (level.value !== 'list') return
@@ -403,6 +406,10 @@ async function openFolder(f, { refresh = false } = {}) {  if (!f.exists) { ui.wa
 }
 
 function backToList() {
+  /* 置空前记住刚退出的夹: 回列表只对账这一个(2026-10-20) —— 全量对账虽然便宜,
+   * 但把所有夹都"活动"一遍没有任何必要, 用户诉求就是"只刷新退出的文件夹"。
+   * 两个返回入口(右下悬浮箭头 / 右上「← 返回」按钮)都走这里, 改一处即可。 */
+  const exited = cur.value?.path || null
   level.value = 'list'
   cur.value = null
   result.value = null
@@ -411,7 +418,7 @@ function backToList() {
   streaming.value = false            // 回列表后后台扫描的推送不再有落点(path 匹配挡住)
   streamInfo.value = null
   clearSel()
-  kickStatsRefresh()                 // 在夹里动过图(搬移/删除)回来, 卡片数字自动对账
+  kickStatsRefresh(exited ? [exited] : null)   // 在夹里动过图(搬移/删除)回来, 卡片数字自动对账
 }
 
 function openImage(it) { lb.open(it.path, { list: imgPaths.value }) }

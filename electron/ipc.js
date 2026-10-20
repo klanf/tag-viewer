@@ -898,8 +898,8 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'folders:open': safe((raw) => openFolder(raw, pushScanProgress, SCAN_STREAM_OPTS)),
     // 文件夹卡片统计的后台刷新(2026-10-20): 逐夹增量对账 + 重写 stats_json,
     // 每夹完成与全部完成都推 folders:stats, 渲染端重拉列表即可
-    'folders:refreshStats': safe(async () => {
-      const r = await refreshScanStats((p) => mainWindow()?.webContents.send('folders:stats', p))
+    'folders:refreshStats': safe(async (raw) => {
+      const r = await refreshScanStats((p) => mainWindow()?.webContents.send('folders:stats', p), { only: raw?.only })
       mainWindow()?.webContents.send('folders:stats', { done: true, total: r?.total || 0 })
       return r
     }),
