@@ -185,16 +185,27 @@ watch(() => lb.visible, (v) => {
   controlsOn.value = false   // 打开/关闭都从息屏态开局, 现形只归底部控件带管
 })
 
-/* ---------------- 滚轮翻页 ----------------
-   触控板一次滑动会连发几十个 wheel 事件(每个 deltaY 很小), 直接按事件切图会"飞"过去。
-   所以累计到阈值才切一次, 切完进冷却期 —— 与大多数看图软件的手感一致。 */
+/* ---------------- 滚轮: 翻页 / Ctrl+滚轮缩放(2026-10-20) ----------------
+   普通滚轮 = 翻页。触控板一次滑动会连发几十个 wheel 事件(每个 deltaY 很小),
+   直接按事件切图会"飞"过去 —— 所以累计到阈值才切一次, 切完进冷却期。
+   按住 Ctrl = 调整图片大小(transform scale, 中心为锚, 12% 步进 0.25~6 倍;
+   .prevent 已拦掉 Electron 的默认页面缩放)。切图自动复位, 双击图片也复位。 */
 const WHEEL_STEP = 55       // 累计到这么多像素算一次翻页
 const WHEEL_COOL = 190      // 两次翻页之间的最小间隔(ms)
 let wheelAcc = 0
 let wheelLock = 0
 let wheelTimer = null
 
+const zoom = ref(1)
+const zoomStyle = computed(() => (zoom.value === 1 ? null : { transform: `scale(${zoom.value})` }))
+watch(() => lb.path, () => { zoom.value = 1 })
+
 function onWheel(e) {
+  if (e.ctrlKey) {
+    const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
+    zoom.value = Math.min(6, Math.max(0.25, Math.round(zoom.value * f * 100) / 100))
+    return
+  }
   if (lb.count <= 1) return
   const now = Date.now()
   if (now < wheelLock) return
@@ -208,6 +219,11 @@ function onWheel(e) {
   wheelLock = now + WHEEL_COOL
   if (dir > 0) lb.next()
   else lb.prev()
+}
+
+/** 双击图片本体 = 复位缩放(点黑边关闭的单击逻辑不受影响) */
+function onImgDblClick(e) {
+  if (e.target.closest('img') && zoom.value !== 1) zoom.value = 1
 }
 
 /* ---------------- 键盘 ---------------- */
@@ -255,6 +271,7 @@ function preheat() {
           class="lb-img-wrap"
           :class="{ idle: !controlsOn }"
           @click="onImgAreaClick"
+          @dblclick="onImgDblClick"
           @wheel.prevent="onWheel"
           @contextmenu="ctxMenu.open($event, { path: lb.path, tags: lb.sortedTags, favable: true, favorited: lb.isFav })"
         >
@@ -273,15 +290,24 @@ function preheat() {
           @click.stop="lb.next()"
         >&rsaquo;</button>
 
-        <!-- 大图: width=0 -> 走 tv://file 原图, 流式返回, 支持 Range -->
-        <TvImage :path="lb.path" :width="0" ratio="auto" :alt="lb.path" contain @loaded="preheat" />
+        <!-- 缩放容器: transform scale 中心锚(点黑边关闭的命中测试按 getBoundingClientRect 算, 缩放后依然成立) -->
+        <div class="lb-zoom" :style="zoomStyle">
+          <!-- 大图: width=0 -> 走 tv://file 原图, 流式返回, 支持 Range -->
+          <TvImage :path="lb.path" :width="0" ratio="auto" :alt="lb.path" contain @loaded="preheat" />
+        </div>
 
           <div v-if="lb.inList" class="lb-pos" title="当前图片在列表中的位置" @click.stop>
             <span class="nav" :class="{ off: !lb.canPrev }" @click.stop="lb.prev()">&lsaquo;</span>
             <b>{{ lb.pos }}</b> / {{ lb.count }}
             <span class="nav" :class="{ off: !lb.canNext }" @click.stop="lb.next()">&rsaquo;</span>
           </div>
-          <div class="lb-hint">滚轮 / ← → 切换 · Del 删除 · 点击图片和侧栏以外区域关闭</div>
+          <div
+            v-if="zoom !== 1"
+            class="lb-zoom-badge"
+            title="恢复 100%(双击图片也行)"
+            @click.stop="zoom = 1"
+          >{{ Math.round(zoom * 100) }}%</div>
+          <div class="lb-hint">滚轮切换 · Ctrl+滚轮缩放 · Del 删除 · 点击图片和侧栏以外区域关闭</div>
         </div>
 
         <div class="lb-side" @click.stop>
@@ -488,7 +514,14 @@ function preheat() {
   position: relative;
   flex: 1 1 auto; min-width: 0;
   display: flex; align-items: center; justify-content: center;
+  overflow: hidden;   /* Ctrl+滚轮放大后超出图片区的部分裁掉, 不压到侧栏/箭头 */
   /* 2026-09-19: 点图片不再关闭(容易误关), 所以去掉原来的 zoom-out 光标 */
+}
+.lb-zoom { width: 100%; height: 100%; }
+.lb-zoom-badge {
+  position: absolute; top: 10px; left: 12px; z-index: 5;
+  font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  background: rgba(0, 0, 0, 0.55); color: #fff; cursor: pointer;
 }
 /* 大图不裁切、不撑破容器 */
 .lb-img-wrap :deep(.tv-img) {
