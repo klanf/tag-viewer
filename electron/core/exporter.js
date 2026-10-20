@@ -20,7 +20,7 @@ import { exportSegSort, sortTags, unwrapWeight } from './tagcats.js'
  */
 const tagKey = (t) => t.toLowerCase().replace(/[\s_]+/g, '_')
 
-export function buildExport(raw = {}) {
+function exportCore(raw = {}) {
   const t0 = Date.now()
   const p = parseQuery(raw)
   const withPath = raw.with_path === '1' || raw.with_path === true
@@ -65,7 +65,6 @@ export function buildExport(raw = {}) {
   const vm = stripView ? viewTagMatcher() : null
   const safeHit = safeOnly ? safetyExportStripper(String(raw.safe_level || '')) : null
 
-  const lines = []
   let blockedCount = 0
   let replacedCount = 0
   let bgAdded = 0
@@ -75,7 +74,10 @@ export function buildExport(raw = {}) {
   let appendAdded = 0
   let segStripped = 0
 
-  for (const r of results) {
+  /** 单条记录 -> 一行文本(副作用: 顺带累加各类计数)。
+   *  抽成闭包是给同步/分片异步两个包装共用同一套管线(2026-10-20) ——
+   *  自动导出之前整条管线同步占死主进程, 大库上几秒钟界面假死。 */
+  const processRecord = (r) => {
     let tags = r.tags
 
     if (stripChar) {
@@ -179,16 +181,14 @@ export function buildExport(raw = {}) {
 
     if (spaces) tags = tags.map((t) => t.replace(/_/g, ' '))
     const s = tags.join(', ')
-    lines.push(withPath ? `${r.path}: ${s}` : s)
+    return withPath ? `${r.path}: ${s}` : s
   }
 
   const nameCore = p.searchTags.length
     ? p.searchTags.map((t) => t.replace(/[<>:"/\\|?*]/g, '_')).join('+')
     : 'all'
 
-  return {
-    text: lines.join('\n') + (lines.length ? '\n' : ''),
-    count: lines.length,
+  const finish = () => ({
     blocked: blockedCount,
     replaced: replacedCount,
     bgAdded,
@@ -199,6 +199,41 @@ export function buildExport(raw = {}) {
     segStripped,
     ms: Date.now() - t0,
     suggestedName: `筛选_${nameCore}.txt`,
+  })
+
+  return { results, processRecord, finish }
+}
+
+/** 同步版(一次性跑完) —— 手动「另存为」预览等单次调用。 */
+export function buildExport(raw = {}) {
+  const c = exportCore(raw)
+  const lines = []
+  for (const r of c.results) lines.push(c.processRecord(r))
+  return {
+    ...c.finish(),
+    text: lines.join('\n') + (lines.length ? '\n' : ''),
+    count: lines.length,
+  }
+}
+
+/**
+ * 分片异步版(2026-10-20): 每 chunk 条让出一次事件循环(setImmediate),
+ * 大库上跑自动导出期间光箱翻页/缩略图/一切 IPC 都还活着 —— 与 readRecords
+ * 那套「分片让路」同一个思路。结果与 buildExport 完全一致(同一套管线)。
+ */
+export async function buildExportAsync(raw = {}, opts = {}) {
+  const chunk = Math.max(1, Number(opts.chunk) || 1000)
+  const c = exportCore(raw)
+  const lines = []
+  let i = 0
+  for (const r of c.results) {
+    lines.push(c.processRecord(r))
+    if (++i % chunk === 0) await new Promise((res) => setImmediate(res))
+  }
+  return {
+    ...c.finish(),
+    text: lines.join('\n') + (lines.length ? '\n' : ''),
+    count: lines.length,
   }
 }
 

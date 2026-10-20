@@ -29,7 +29,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { dataFile } from './workspace.js'
-import { buildExport } from './exporter.js'
+import { buildExportAsync } from './exporter.js'
 import { blacklistText } from './rules.js'
 import { status, whenReady } from './app-state.js'
 import { createScheduler, DELAY_OPTIONS, DEFAULT_DELAY_MS, normDelay } from './exportScheduler.js'
@@ -44,14 +44,9 @@ export { DELAY_OPTIONS }
 
 /* ------------------------------------------------------------ 写盘 */
 
-/**
- * 同步小睡 —— runPreset 是同步 API(IPC handler 直接返回值), 不能 await。
- * `Atomics.wait` 是主线程上唯一不烧 CPU 的同步等待。
- */
-const sleepBuf = new Int32Array(new SharedArrayBuffer(4))
-function sleepSync(ms) {
-  try { Atomics.wait(sleepBuf, 0, 0, ms) } catch { /* 不支持就算了, 只影响退避时长 */ }
-}
+/** 异步小睡(rename 退避重试用)。runPreset 已是 async(2026-10-20), 之前那套
+ *  `Atomics.wait` 同步睡会连同整条导出管线一起占死主进程, 已随之退役。 */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /**
  * 原子替换(临时文件 -> 目标名), 但在 Windows 上得**有耐心**。
@@ -70,7 +65,7 @@ function sleepSync(ms) {
  * 所以: 瞬时错误(EPERM/EACCES/EBUSY)退避重试几次(总计约 0.8s);
  * 仍然失败则清掉 .tmp(不留垃圾)再抛 —— 错误照旧记进预设的 lastError。
  */
-function replaceFileWithRetry(tmp, full, tries = 5) {
+async function replaceFileWithRetry(tmp, full, tries = 5) {
   for (let i = 0; i < tries; i++) {
     try {
       fs.renameSync(tmp, full)
@@ -81,7 +76,7 @@ function replaceFileWithRetry(tmp, full, tries = 5) {
         try { fs.unlinkSync(tmp) } catch { /* 清不掉也别把真正的错误盖掉 */ }
         throw e
       }
-      sleepSync(60 * (i + 1))     // 60/120/180/240ms
+      await sleep(60 * (i + 1))     // 60/120/180/240ms
     }
   }
 }
@@ -292,23 +287,25 @@ function patchRun(id, patch) {
 
 /**
  * 跑一个预设: 算 -> 原子写盘 -> 记录结果。
+ * 2026-10-20 起是 **async 分片管线**(buildExportAsync + promise 写盘): 大库上
+ * 几秒钟的导出不再占死主进程 —— 界面假死/一切 IPC 排队就是这条同步管线造成的。
  * 抛错时也会把错误写进预设的 lastError(界面上能看见"上次失败原因")。
  */
-export function runPreset(id, { trigger = 'manual' } = {}) {
+export async function runPreset(id, { trigger = 'manual' } = {}) {
   const store = readStore()
   const preset = store.presets.find((p) => p.id === id)
   if (!preset) throw new Error('预设不存在(可能已被删除)')
   try {
     if (!preset.dir) throw new Error('预设没有设置目标目录')
-    const r = buildExport(toExportQuery(preset.params))
+    const r = await buildExportAsync(toExportQuery(preset.params))
     fs.mkdirSync(preset.dir, { recursive: true })
     const full = path.join(preset.dir, preset.file)
     const tmp = `${full}.tmp${process.pid}`
-    fs.writeFileSync(tmp, r.text, 'utf8')
+    await fs.promises.writeFile(tmp, r.text, 'utf8')
     // 原子替换: 下游(ComfyUI 等)固定读这个文件, 不会读到半截。
     // 走 replaceFileWithRetry —— Windows 上刚写出的文件可能被扫描器/索引器短暂占住,
     // 一次 EPERM 就把整次导出丢掉(详见上面那个函数的注释)。
-    replaceFileWithRetry(tmp, full)
+    await replaceFileWithRetry(tmp, full)
     const bytes = Buffer.byteLength(r.text, 'utf8')
     patchRun(id, {
       lastRunAt: Date.now(), lastCount: r.count, lastBytes: bytes,
@@ -358,7 +355,10 @@ async function runAutoImpl() {
   const results = []
   for (const p of presets) {
     try {
-      results.push(runPreset(p.id, { trigger: 'auto' }))
+      // runPreset 已是分片异步(2026-10-20): 单个预设内部周期让路,
+      // 预设之间再让一次 —— 自动导出全程界面可交互
+      results.push(await runPreset(p.id, { trigger: 'auto' }))
+      await new Promise((r) => setImmediate(r))
     } catch (e) {
       // 单个预设失败不影响其它预设, 也不影响 ban
       results.push({ ok: false, id: p.id, name: p.name, error: e?.message || String(e), trigger: 'auto' })

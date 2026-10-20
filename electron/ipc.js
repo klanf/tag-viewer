@@ -31,7 +31,7 @@ import {
 import {
   historySummary, historyDetail, saveHistory, deleteHistory, renameHistory,
 } from './core/cart.js'
-import { buildExport, buildCartExport, filterTagsLikeExport } from './core/exporter.js'
+import { buildExportAsync, buildCartExport, filterTagsLikeExport } from './core/exporter.js'
 import {
   listPresets, savePreset, deletePreset, runPreset,
   blacklistFingerprint, afterBlacklistChange, setAutoNotifier, flushAuto,
@@ -681,13 +681,14 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'cart:preset:flushNow': safe(() => flushCartPendingNow()),
 
     // ---------------- 导出 ----------------
-    // 先算好, 再弹「另存为」; 用户取消时不会白算一遍
-    'export:preview': safe((raw) => {
-      const r = buildExport(raw)
+    // 先算好, 再弹「另存为」; 用户取消时不会白算一遍。
+    // 全部走 buildExportAsync 分片管线(2026-10-20): 大结果集上不再占死主进程
+    'export:preview': safe(async (raw) => {
+      const r = await buildExportAsync(raw)
       return { count: r.count, blocked: r.blocked, replaced: r.replaced, bgAdded: r.bgAdded, stripped: r.stripped || 0, ms: r.ms, suggestedName: r.suggestedName }
     }),
     'export:save': safe(async (raw) => {
-      const r = buildExport(raw)
+      const r = await buildExportAsync(raw)
       const dlg = await dialog.showSaveDialog(mainWindow(), {
         title: '导出筛选结果',
         defaultPath: path.join(path.dirname(getWorkspace().dataDir), r.suggestedName),
@@ -697,7 +698,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       await fs.promises.writeFile(dlg.filePath, r.text, 'utf8')
       return { ok: true, path: dlg.filePath, count: r.count, replaced: r.replaced, bytes: Buffer.byteLength(r.text, 'utf8') }
     }),
-    'export:text': safe((raw) => buildExport(raw)),
+    'export:text': safe((raw) => buildExportAsync(raw)),
 
     // ---------------- 导出预设(黑名单变更后自动导出) ----------------
     'export:preset:list': safe(() => ({ presets: listPresets() })),
