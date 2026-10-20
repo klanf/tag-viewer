@@ -307,7 +307,11 @@ function initLog() {
     fs.rmSync(READY_FLAG, { force: true })
     fs.mkdirSync(LOG_DIR, { recursive: true })
   } catch { /* ignore */ }
-  log('boot', `pid=${process.pid} v=${app.getVersion()} electron=${process.versions.electron} node=${process.versions.node} chrome=${process.versions.chrome}`)
+  // uptime 放进时间线(2026-10-20): 日志时间戳只差"日志行之间"的间隔, 冷启动的
+  // 大头(exe 加载 + require 链)发生在**第一行日志之前** —— 没有这列, 那段时间
+  // 就是黑洞。process.uptime() 是进程真实运行秒数, 与文件时间戳相减即得
+  // "vbs spawn -> 模块加载完成"这段(往往是冷启动最贵的一段)。
+  log('boot', `pid=${process.pid} v=${app.getVersion()} electron=${process.versions.electron} node=${process.versions.node} chrome=${process.versions.chrome} uptime=${process.uptime().toFixed(2)}s`)
   log('boot', `argv=${JSON.stringify(process.argv.slice(1))}`)
   log('boot', `cwd=${process.cwd()}`)
   log('boot', `dev=${isDev} logDir=${LOG_DIR}`)
@@ -369,7 +373,7 @@ function createWindow() {
 
   win.once('ready-to-show', () => {
     win.show()
-    log('ok', 'BOOT OK — 窗口已显示')
+    log('ok', `BOOT OK — 窗口已显示 uptime=${process.uptime().toFixed(2)}s`)
     markReady('window-shown')
   })
 
@@ -650,12 +654,17 @@ app.on('second-instance', () => {
     if (win.isMinimized()) win.restore()
     win.show()   // 双击启动器唤起: show 强制把隐藏/被遮的窗口拉回可见, 再聚焦
     win.focus()
+  } else {
+    // 冷启动窗口还没建时点击第二次图标会走到这里 —— 落空必须留痕(2026-10-20):
+    // 用户感知就是"点了没反应, 又点了好几次才出来"。窗口随后 always 会 show
+    // (ready-to-show), 所以不需要 pendingFocus 补偿; 但日志要能证明这个场景发生过。
+    log('warn', 'second-instance 时窗口尚未创建(冷启动中重复点击), 本次唤起落空')
   }
 })
 
 app.whenReady().then(() => {
   if (!gotLock) return
-  log('ok', `app ready, userData=${app.getPath('userData')}`)
+  log('ok', `app ready, userData=${app.getPath('userData')} uptime=${process.uptime().toFixed(2)}s`)
 
   try {
     // defaultDataDir 由这里注入(workspace.js 不能 import electron, 见 core/paths.js 顶部):
