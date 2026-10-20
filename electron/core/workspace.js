@@ -146,6 +146,10 @@ export function saveSettings(patch) {
   if (patch.groupedTags !== undefined) next.groupedTags = !!patch.groupedTags
   // showBannedTags: 光箱/详情页是否显示被 ban 的标签(2026-10-16)。默认开(与旧行为一致)。
   if (patch.showBannedTags !== undefined) next.showBannedTags = !!patch.showBannedTags
+  // lbTagSet: 光箱抽屉显示哪套标签(2026-10-20 双源)。'db'=标签库(反推) / 'meta'=图内元数据。
+  if (patch.lbTagSet !== undefined) next.lbTagSet = patch.lbTagSet === 'meta' ? 'meta' : 'db'
+  // lbMetaMode: 图内元数据集的显示模式(2026-10-20)。'cats'=分类段位 / 'raw'=原文整段。
+  if (patch.lbMetaMode !== undefined) next.lbMetaMode = patch.lbMetaMode === 'raw' ? 'raw' : 'cats'
   // wd14Prompt: WD14 安装横幅的记忆三态(2026-10-18 按需安装 v3)。
   // unset=可弹 / later=暂不(下会话可再弹) / never=永久静默(横幅不弹, 常驻入口仍在)。
   if (patch.wd14Prompt !== undefined) {

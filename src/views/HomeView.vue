@@ -591,6 +591,7 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
           :has-more="feed.hasMore.value"
           favable
           :is-fav="fav.isFav"
+          show-source
           @open="(it) => lb.open(it.path, { list: imgPaths })"
           @toggle-fav="toggleFav"
           @load-more="feed.loadMore"

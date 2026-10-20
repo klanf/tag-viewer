@@ -23,10 +23,16 @@
  * 提示词前面会挂一段垃圾。这里按 PNG 规范正确跳过 languageTag 与 translatedKeyword。
  */
 import fs from 'node:fs'
+import zlib from 'node:zlib'
 
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 export const SCAN_IMG_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'])
+
+/** zlib 解压(zTXt / 压缩 iTXt 的正文); 坏数据返回 null */
+function inflateOrNull(buf) {
+  try { return zlib.inflateSync(buf) } catch { return null }
+}
 
 /**
  * 读 PNG 的 tEXt / iTXt 文本块 -> { 关键字: 内容 }
@@ -55,7 +61,7 @@ export function readPngTextChunks(filePath, maxBytes = 8 << 20) {
       if (ctype === 'IDAT') break                       // 图像数据开始, 收工
       if (length > maxBytes || length < 0) break        // 异常长度, 防跑飞
 
-      if (ctype === 'tEXt' || ctype === 'iTXt') {
+      if (ctype === 'tEXt' || ctype === 'iTXt' || ctype === 'zTXt') {
         let buf = data
         if (length > data.length) buf = Buffer.alloc(length)
         const got = fs.readSync(fd, buf, 0, length, read)
@@ -67,12 +73,20 @@ export function readPngTextChunks(filePath, maxBytes = 8 << 20) {
             if (z > 0) {
               out[chunk.toString('latin1', 0, z)] = chunk.toString('utf8', z + 1)
             }
+          } else if (ctype === 'zTXt') {
+            // zTXt: keyword\0 compression_method(1字节, 0=zlib) 压缩数据。
+            // ComfyUI 的大块 workflow JSON 常用这种写入 —— 2026-10-20 起解压支持,
+            // 之前一律跳过, 外来图会"识别不出元数据"。
+            const z = chunk.indexOf(0)
+            if (z > 0 && chunk[z + 1] === 0) {
+              const raw = inflateOrNull(chunk.subarray(z + 2))
+              if (raw) out[chunk.toString('latin1', 0, z)] = raw.toString('utf8')
+            }
           } else {
             const z = chunk.indexOf(0)
             if (z <= 0) continue
             const key = chunk.toString('latin1', 0, z)
             const compFlag = chunk[z + 1]
-            if (compFlag !== 0) continue                 // zTXt 式压缩, 忽略(与原版一致)
             // iTXt: keyword\0 flag method langTag\0 translatedKeyword\0 text
             let p = z + 3
             const gt = chunk.indexOf(0, p)               // languageTag 结束
@@ -80,7 +94,13 @@ export function readPngTextChunks(filePath, maxBytes = 8 << 20) {
             p = gt + 1
             const gp = chunk.indexOf(0, p)               // translatedKeyword 结束
             if (gp < 0) continue
-            out[key] = chunk.toString('utf8', gp + 1)
+            if (compFlag === 0) {
+              out[key] = chunk.toString('utf8', gp + 1)
+            } else {
+              // 压缩 iTXt(压的是 translatedKeyword\0 之后的正文): 同样解压
+              const raw = inflateOrNull(chunk.subarray(gp + 1))
+              if (raw) out[key] = raw.toString('utf8')
+            }
           }
         } catch { /* 单个块坏了不影响其他块 */ }
       } else {

@@ -211,8 +211,9 @@ export function recomputeSafety() {
  * @param {string[]} rawTags 标签
  * @param {string} srcName 来源名
  * @param {{w:number,h:number}|null} [dims] 像素尺寸; 从 txt 建库时没有(留 0)
- * @param {string} [tagsSrc] 标签来源(meta=自带 / wd14=反推 / meta+wd14=历史合并 / legacy=手工) */
-function pushRecord(p, rawTags, srcName, dims = null, tagsSrc = '') {
+ * @param {string} [tagsSrc] 标签来源(meta=自带 / wd14=反推 / meta+wd14=历史合并 / legacy=手工)
+ * @param {string} [imgSrc] 图内元数据来源(comfyui/a1111/...); 卡片生成器徽章用 */
+function pushRecord(p, rawTags, srcName, dims = null, tagsSrc = '', imgSrc = '') {
   const tags = []
   const ltags = []
   for (const raw of rawTags) {
@@ -237,6 +238,9 @@ function pushRecord(p, rawTags, srcName, dims = null, tagsSrc = '') {
     // 回落到默认比例 —— 拿 0 算比例会得到 Infinity 或 0, 布局直接塌掉。
     px_w: Number(dims?.w) || 0,
     px_h: Number(dims?.h) || 0,
+    // 图内元数据来源('comfyui' 等): 卡片生成器徽章。与 records.source(看板
+    // 「来源名」)是两回事 —— 名字刻意错开, 别合并。
+    imgSrc: String(imgSrc || ''),
     unsafe,
   })
 }
@@ -328,7 +332,7 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
     let last = 0
     // readRecords 现在是 async(每块让出事件循环, 后台重载不再卡死光箱翻页) —— 必须 await
     await readRecords((rec) => {
-      pushRecord(rec.path, rec.tags, rec.source, { w: rec.px_w, h: rec.px_h }, rec.tagsSrc)
+      pushRecord(rec.path, rec.tags, rec.source, { w: rec.px_w, h: rec.px_h }, rec.tagsSrc, rec.imgSrc)
       const n = W.records.length
       if (n - last >= 5000) {
         last = n

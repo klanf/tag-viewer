@@ -584,27 +584,51 @@ function dbTagsByPath(p) {
   } catch { return null }
 }
 
+/** 图内元数据第二套标签(2026-10-20 光箱双源):
+ * 实时读一次 PNG 文本块(文件头、IDAT 即停, 毫秒级)。v3 覆盖语义后反推会覆盖
+ * 库里的 meta, 所以图内原始提示词**只能现场读盘**, 库里没有。
+ * @returns {{meta_prompt:string, meta_tags:string[], meta_source:string}} */
+function metaInfoFor(p) {
+  try {
+    if (!fs.existsSync(p)) return { meta_prompt: '', meta_tags: [], meta_source: '' }
+    const { text, source } = extractImagePrompt(p)
+    return {
+      meta_prompt: String(text || ''),
+      meta_tags: text ? promptToTags(text) : [],
+      meta_source: String(source || ''),
+    }
+  } catch { return { meta_prompt: '', meta_tags: [], meta_source: '' } }
+}
+
 /** lightbox 用的结构化数据: 角色 / 系列 / 全部标签(已滤掉 Danbooru 分类噪声)
- *  2026-10-18: 附带 tags_src 供来源徽章(图片自带 / 反推入库 / 自带+反推 / 手工导入) */
+ *  2026-10-18: 附带 tags_src 供来源徽章(图片自带 / 反推入库 / 自带+反推 / 手工导入)
+ *  2026-10-20: 附带 meta_* 三件套 —— 光箱抽屉「标签库 | 图内元数据」双源切换 */
 export function getLightboxData(raw = {}) {
   const p = typeof raw.path === 'string' ? raw.path : ''
   if (!p) return { error: 'not found' }
 
   const rec = recordByPath(p)
   if (rec) {
-    return packLightbox(p, rec.tags, rec.tagsSrc)
+    return { ...packLightbox(p, rec.tags, rec.tagsSrc), ...metaInfoFor(p) }
   }
 
   // 兜底①: 库内记录但来源被隐藏(见 dbTagsByPath 注释)
   const dbTags = dbTagsByPath(p)
-  if (dbTags) return packLightbox(p, dbTags.tags, dbTags.tagsSrc)
+  if (dbTags) return { ...packLightbox(p, dbTags.tags, dbTags.tagsSrc), ...metaInfoFor(p) }
 
   // 兜底②: 库外图片(「扫描文件夹」里的 AI 生成图) —— 直接读图片元数据。
   // 注意: 即使没有任何元数据也要回 200 语义, 否则前端拿不到结构, lightbox 直接空白。
   if (fs.existsSync(p)) {
     const { text, source } = extractImagePrompt(p)
     const tags = text ? promptToTags(text) : []
-    return { ...packLightbox(p, tags), external: true, prompt_source: source }
+    return {
+      ...packLightbox(p, tags),
+      external: true,
+      prompt_source: source,          // 旧字段, 「库外图片」徽章还在用
+      meta_prompt: String(text || ''),
+      meta_tags: tags,
+      meta_source: String(source || ''),
+    }
   }
   return { error: 'not found' }
 }

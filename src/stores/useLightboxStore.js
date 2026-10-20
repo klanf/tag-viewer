@@ -48,7 +48,8 @@ export const useLightboxStore = defineStore('lightbox', () => {
   const visible = ref(false)
   const loading = ref(false)
   const path = ref('')
-  const data = ref(null)          // { char_tags, series, all_tags, ban_map, needs_bg, bg_append, external, prompt_source }
+  const data = ref(null)          // { char_tags, series, all_tags, ban_map, needs_bg, bg_append, external, prompt_source,
+                                  //   meta_prompt, meta_tags, meta_source }  ← 2026-10-20 双源三件套
   const zhMap = ref({})
   const error = ref('')
 
@@ -165,6 +166,15 @@ export const useLightboxStore = defineStore('lightbox', () => {
           const m = await api.translate(tags)
           if (path.value === p) zhMap.value = m
         } catch { /* 没有翻译库也能用 */ }
+      }
+      // 图内元数据那套标签也送翻译(2026-10-20 双源): 只有切到「图内元数据·分类」
+      // 才消费, 这里先备好 —— 不额外加 IPC, 查表是内存操作。
+      const mtags = d.meta_tags || []
+      if (mtags.length) {
+        try {
+          const m = await api.translate(mtags)
+          if (path.value === p) zhMap.value = { ...zhMap.value, ...m }
+        } catch { /* 同上 */ }
       }
     } catch (e) {
       if (path.value === p) error.value = e.message

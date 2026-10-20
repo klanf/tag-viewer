@@ -136,6 +136,11 @@ const ADDITIVE_COLS = [
   //   展示端以 IPC 的 tags:cats 实时映射为准, 这列加速 SQL 侧按类查询 + 省重复计算。
   //   未回填的行是空串, ensureTagCats() 会补(见下)。
   ['tags', 'cat', "TEXT NOT NULL DEFAULT ''"],
+  // images 表: 图内元数据来源(2026-10-20) —— 'comfyui' / 'a1111' / 'novelai' /
+  //   'invokeai'，看板卡片左上角的生成器徽章用(与扫描页同一套判定, png.js)。
+  //   NULL = 还没回填过(老行, 每轮同步分批补); '' = 读过了、图内确实没有。
+  //   注意与 tags_src(标签来源)和 records.source(看板「来源名」)都不是一回事。
+  ['images', 'img_src', 'TEXT'],
 ]
 
 /** v2 给 images 补的列: [列名, 定义]。缺哪个补哪个, 已有则跳过(幂等)。
@@ -925,7 +930,8 @@ export async function readRecords(onRecord, onProgress = () => {}) {
     : ''
   const chunk = db.prepare(`
     SELECT i.id AS id, i.path AS path, i.src_id AS src_id, i.folder_id AS folder_id,
-           i.tags AS tags, i.tags_src AS tags_src, i.px_w AS px_w, i.px_h AS px_h
+           i.tags AS tags, i.tags_src AS tags_src, i.px_w AS px_w, i.px_h AS px_h,
+           i.img_src AS img_src
     FROM images i WHERE i.id > ? AND i.gone = 0${vis} ORDER BY i.id LIMIT ?
   `)
   let lastId = 0
@@ -961,6 +967,9 @@ export async function readRecords(onRecord, onProgress = () => {}) {
         // 不要拿 0 或猜测值凑一个比例出来。
         px_w: r.px_w === null || r.px_w === undefined ? 0 : Number(r.px_w),
         px_h: r.px_h === null || r.px_h === undefined ? 0 : Number(r.px_h),
+        // 图内元数据来源('comfyui' 等): 卡片生成器徽章。NULL(还没回填)与 ''(读过、
+        // 没有)都给空串 —— 前端只认"非空才显示徽章"。
+        imgSrc: String(r.img_src || ''),
       })
       n++
     }

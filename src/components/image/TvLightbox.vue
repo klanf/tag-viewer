@@ -72,6 +72,25 @@ const series = computed(() => lb.data?.series || [])
 const external = computed(() => !!lb.data?.external)
 const promptSource = computed(() => lb.data?.prompt_source || '')
 
+/* ── 双 tag 集(2026-10-20): 标签库(反推) | 图内元数据(作者原始提示词) ─────
+ * v3 覆盖语义后库里只有反推结果, 图内原始串只能主进程现场读盘(lb.data.meta_*)。
+ * 只有图内真有元数据时才出切换; 选择/显示模式记进 settings.json 跨会话生效。
+ * meta 模式: 复制走自己的按钮(底部那排过滤复制永远作用于标签库), 无 ban/无跳转。 */
+const META_SRC_LABEL = { comfyui: 'ComfyUI', a1111: 'A1111 / Forge', novelai: 'NovelAI', invokeai: 'InvokeAI' }
+const hasMeta = computed(() => !!lb.data?.meta_source)
+const metaTags = computed(() => lb.data?.meta_tags || [])
+const metaPrompt = computed(() => lb.data?.meta_prompt || '')
+const metaSrcLabel = computed(() => META_SRC_LABEL[lb.data?.meta_source] || lb.data?.meta_source || '')
+const tagSet = computed(() => (hasMeta.value && app.settings.lbTagSet === 'meta') ? 'meta' : 'db')
+function setTagSet(v) { app.setSetting('lbTagSet', v) }
+const metaMode = computed(() => (app.settings.lbMetaMode === 'raw') ? 'raw' : 'cats')
+function setMetaMode(v) { app.setSetting('lbMetaMode', v) }
+async function copyMetaPrompt() { await ui.copy(metaPrompt.value); ui.ok('✅ 已复制图内原始提示词') }
+async function copyMetaTags() {
+  await ui.copy(metaTags.value.join(', '))
+  ui.ok(`✅ 已复制图内标签 ${metaTags.value.length} 个`)
+}
+
 /* 点图片区: 点在**图片本体**上不关(2026-09-19 定的, 防误关);
  * 点在四周黑边(letterbox)上算空白 -> 关(2026-09-19 追加: 关闭区域太小)。
  * img 是 object-fit: contain —— 元素盒子铺满整个图片区, 但可见内容只占中间
@@ -366,20 +385,20 @@ function preheat() {
             <span v-if="external" class="badge" title="这张图不在标签库里, 标签是从图片元数据(PNG tEXt / A1111 / ComfyUI)现场解析的">
               库外图片 · {{ promptSource || '未知来源' }}
             </span>
-            <span v-if="lb.needBg" class="badge warn" title="该图缺背景/场景标签, 复制时会自动追加背景标签">
+            <span v-if="lb.needBg && tagSet === 'db'" class="badge warn" title="该图缺背景/场景标签, 复制时会自动追加背景标签">
               🌄 缺背景 · 复制时补 {{ lb.bgAppend.join('/') }}
             </span>
             <!-- ban 命中数: 明确区分「没适配」和「这张图确实没有黑名单词」;
-                 旁边挂 显示/隐藏 开关(只在本图有命中时出现) -->
+                 旁边挂 显示/隐藏 开关(只在本图有命中时出现)。meta 集没有 ban 体系, 切走就藏 -->
             <span
-              v-if="!lb.loading && lb.bannedTags.length"
+              v-if="tagSet === 'db' && !lb.loading && lb.bannedTags.length"
               class="badge ban"
               :title="`命中黑名单: ${lb.bannedTags.join(', ')}`"
             >
               🚫 命中黑名单 {{ lb.bannedTags.length }} 个 · 点标签上的 🚫 可单条取消
             </span>
             <label
-              v-if="!lb.loading && lb.bannedTags.length"
+              v-if="tagSet === 'db' && !lb.loading && lb.bannedTags.length"
               class="ban-vis"
               :title="showBanned ? '隐藏被 ban 的标签' : '显示被 ban 的标签'"
             >
@@ -387,7 +406,7 @@ function preheat() {
               <span class="sw"></span>显示被 ban 标签
             </label>
             <span
-              v-else-if="!lb.loading && lb.sortedTags.length"
+              v-else-if="tagSet === 'db' && !lb.loading && lb.sortedTags.length"
               class="badge dim"
               title="已按 export_blacklist.txt 逐条比对, 本图没有任何标签命中(不是没适配)"
             >
@@ -395,9 +414,53 @@ function preheat() {
             </span>
           </div>
 
+          <!-- 双 tag 源切换(2026-10-20): 只在图内真有元数据时出现。
+               底部那排「复制」永远作用于标签库; meta 集在自己的小节里复制 -->
+          <div v-if="!lb.loading && hasMeta" class="lb-src-row">
+            <div class="seg" role="tablist">
+              <button :class="{ on: tagSet === 'db' }" title="反推入库的规范化 Danbooru 标签(tags.db)" @click="setTagSet('db')">标签库</button>
+              <button :class="{ on: tagSet === 'meta' }" :title="`作者写在图里的原始提示词(${metaSrcLabel})`" @click="setTagSet('meta')">图内元数据</button>
+            </div>
+            <template v-if="tagSet === 'meta'">
+              <div class="seg sub" role="tablist">
+                <button :class="{ on: metaMode === 'cats' }" title="切成分标签并按段位归类(纯 tag 写法最好看)" @click="setMetaMode('cats')">分类</button>
+                <button :class="{ on: metaMode === 'raw' }" title="一字不动展示原始提示词(自然语言/混合写法用)" @click="setMetaMode('raw')">原始</button>
+              </div>
+              <span class="src-name">{{ metaSrcLabel }}</span>
+            </template>
+          </div>
+
           <TvState v-if="lb.loading" state="loading" size="sm" text="加载标签..." inline />
           <TvState v-else-if="lb.error" state="error" size="sm" :text="lb.error" inline />
 
+          <!-- 图内元数据模式 -->
+          <template v-else-if="tagSet === 'meta'">
+            <TvTagList
+              v-if="metaMode === 'cats' && metaTags.length"
+              class="lb-tags"
+              :tags="metaTags"
+              :zh-map="lb.zhMap"
+              copyable
+              :grouped="app.settings.groupedTags !== false"
+              action="copy"
+              size="sm"
+              empty-text="图内元数据里没解析出标签"
+              @copy="copyTag"
+              @hover="({ zh, event }) => ui.showTip(zh, event)"
+              @leave="ui.hideTip()"
+              @mousemove="ui.moveTip($event)"
+            />
+            <div v-else-if="metaMode === 'cats'" class="lb-nometa">(图内元数据里没解析出标签)</div>
+            <div v-else class="raw-wrap">
+              <div class="raw-bar">
+                <span class="raw-hint">作者原始提示词 · 一字未动</span>
+                <TvButton size="sm" @click="copyMetaPrompt">📋 复制原文</TvButton>
+              </div>
+              <pre class="raw-prompt">{{ metaPrompt || '(空)' }}</pre>
+            </div>
+          </template>
+
+          <!-- 标签库模式(默认, 与改动前一致) -->
           <template v-else>
             <!-- 角色 / 系列 -->
             <div v-if="!noMeta" class="lb-meta">
@@ -649,6 +712,37 @@ a.badge.hint:hover { border-color: var(--accent); }
 .lb-meta-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .lb-meta-label { font-size: 11px; color: var(--muted); flex: 0 0 auto; }
 .lb-nometa { font-size: 11px; color: var(--muted); }
+
+/* 双 tag 源切换(2026-10-20): 一排分段按钮, 与设置页开关同一套观感 */
+.lb-src-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.seg {
+  display: inline-flex; border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; flex: 0 0 auto;
+}
+.seg button {
+  border: none; background: transparent; color: var(--muted);
+  font-size: 12px; padding: 4px 11px; cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--accent-soft, rgba(59, 130, 246, .15)); color: var(--accent); font-weight: 500; }
+.seg.sub button { padding: 3px 9px; font-size: 11px; }
+.src-name { font-size: 11px; color: var(--muted); }
+
+/* 原始模式: 等宽整段展示, 一字未动 */
+.raw-wrap { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.raw-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.raw-hint { font-size: 11px; color: var(--muted); }
+.raw-prompt {
+  margin: 0; padding: 10px 12px;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+  font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+  overflow: auto; min-height: 0; flex: 1 1 auto;
+  user-select: text; cursor: text;
+}
 
 .lb-tags {
   flex: 1 1 auto; min-height: 0;

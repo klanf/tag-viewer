@@ -115,6 +115,15 @@ const footText = computed(() => {
   return shortPath(path.value)
 })
 
+/* 来源角标文案(2026-10-20 看板接入): 两类调用方字段名不同 ——
+ *   · 扫描页 item.source = 图内元数据来源('comfyui' 等);
+ *   · 看板记录 item.source 被「来源名」占用, 元数据来源在 item.imgSrc。
+ * 有 imgSrc 字段就用它(看板; '' = 读过没元数据, 不显示), 没有就回退旧的
+ * item.source(扫描页等老调用方一行不用改)。 */
+const srcBadge = computed(() => (
+  props.item.imgSrc !== undefined ? String(props.item.imgSrc || '') : String(props.item.source || '')
+))
+
 const hasTags = computed(() => tags.value.length > 0)
 
 /* 右键菜单: 复制图片/标签/路径、打开所在位置、详情页、收藏(主进程弹原生菜单) */
@@ -162,7 +171,7 @@ function onCtx(e) {
     <TvImage v-if="!isMissing" :path="path" :width="thumbWidth" :ratio="fill ? 'auto' : ratio" :alt="item.name || path" />
     <span v-else class="tv-img gone-ph" :style="{ aspectRatio: fill ? 'auto' : ratio }" />
 
-    <span v-if="showSource && item.source" class="src">{{ item.source }}</span>
+    <span v-if="showSource && srcBadge" class="src" :title="`图内元数据来源: ${srcBadge}`">{{ srcBadge }}</span>
 
     <!-- 标签区 -->
     <div v-if="tagMode === 'keys'" class="tags keys">
