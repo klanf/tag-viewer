@@ -26,12 +26,12 @@ import TvTagSuggestInput from '@/components/tag/TvTagSuggestInput.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvChip from '@/components/base/TvChip.vue'
 import TvState from '@/components/base/TvState.vue'
-import TvSourceChips from '@/components/filter/TvSourceChips.vue'
+import TvSourceScanBar from '@/components/filter/TvSourceScanBar.vue'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import { useTagFavStore } from '@/stores/useTagFavStore.js'
-import { useSourceStore } from '@/stores/useSourceStore.js'
+import { useSourceScanFilter } from '@/composables/useSourceScanFilter.js'
 import { api } from '@/utils/api.js'
 import { readLS, writeLS, LS } from '@/utils/lskey.js'
 import { nfmt } from '@/utils/format.js'
@@ -40,7 +40,6 @@ const ui = useUiStore()
 const router = useRouter()
 const safety = useSafetyStore()
 const tagFav = useTagFavStore()
-const srcStore = useSourceStore()   // 只借它的 list/totalImages(数据), 选择是本页自己的
 
 const kw = ref('')
 const BATCH = 300
@@ -51,41 +50,23 @@ const loading = ref(false)
 const error = ref('')
 const hideBanned = ref(readLS(LS.tagsHideBanned.key) !== '0')   // 默认隐藏
 
-/* ---------------- 来源 / 扫描夹筛选(2026-10-21) ----------------
- * 两条筛选各自独立记忆(localStorage), 语义互斥:
- *   · 来源 = 标签库的来源名(as_source 文件夹) —— 走 allTags 的 source 参数,
- *     服务端按 srcSet 过滤, total 是筛后的真实数
- *   · 扫描夹 = 扫描页登记的文件夹(as_scan) —— 走 tags:scanList, 数据源是
- *     扫描的持久缓存(scan_cache.json, tags 在扫描时就已 promptToTags 规范化),
- *     纯内存聚合不读图片。**选了扫描夹就按扫描夹出列表**(来源条灰掉) ——
- *     扫描夹的图不进库, 两套口径没有交集, 混着筛只会让人迷惑。
- */
-const splitLS = (k) => (readLS(k) || '').split(',').map((s) => s.trim()).filter(Boolean)
-const srcSel = ref(splitLS(LS.tagsSources.key))
-const scanSel = ref(splitLS(LS.tagsScanFolders.key))
-function persistSels() {
-  writeLS(LS.tagsSources.key, srcSel.value.join(','))
-  writeLS(LS.tagsScanFolders.key, scanSel.value.join(','))
-}
-const scanMode = computed(() => scanSel.value.length > 0)
-
-/** 扫描夹筛选条( chips ): 来自 folders 登记表, count 用夹的图片数 */
-const scanChips = ref([])          // [{name, images, value: path}]
-async function loadScanFolders() {
-  try {
-    const d = await api.folders()
-    scanChips.value = (d.folders || [])
-      .filter((f) => f.as_scan)
-      .map((f) => ({ name: f.name || f.label || f.path, images: f.images || 0, value: f.path }))
-      .sort((a, b) => b.images - a.images)
-  } catch { /* 扫描服务没起也不挡标签页 */ }
-}
-const scanTotalImages = computed(() => scanChips.value.reduce((s, f) => s + (f.images || 0), 0))
+/* ---------------- 来源 / 扫描夹筛选(2026-10-21 重构) ----------------
+ * 旧版两条筛选行并排铺开、靠"灰掉另一条"表达互斥 —— 用户反馈"看不懂怎么个
+ * 互斥法, UI 也丑", 点名改成「(来源|扫描) 胶囊开关, 点击切换下面的文件夹就换,
+ * 图片也跟着切」。照办: 状态与档位收进 useSourceScanFilter(模块级单例,
+ * **标签图片页共用同一份**, 从列表跳进子页筛选不断档), 本页只接数据管线:
+ *   · source 档 -> allTags({source})  服务端按 srcSet 过滤, total 是筛后真实数
+ *   · scan 档   -> tags:scanList, 数据源是扫描的持久缓存(scan_cache.json,
+ *     tags 在扫描时就已 promptToTags 规范化), 纯内存聚合不读图片
+ * 两套口径没有交集(扫描夹的图不进库), 所以一次只有一个档生效 —— 这就是
+ * "互斥"的本意, 现在由分段开关替用户表达, 不再靠灰掉。 */
+const f = useSourceScanFilter()
 /** 扫描模式的缓存情况提示(来自 scanTagList 的回执) */
 const scanNote = ref(null)         // { images, withTags, missing: [] }
+const scanMode = f.isScan
 
-watch(srcSel, () => { persistSels(); reload() })
-watch(scanSel, () => { persistSels(); reload() })
+/* 档位 / 任一档的选择变了都重拉(切档换数据源, 点胶囊换筛选) */
+watch(() => [f.mode.value, f.srcSel.value.slice(), f.scanSel.value.slice()], () => reload())
 
 /* ---------------- ★ 只看收藏(2026-10-08) ----------------
  * 收藏在**前端 localStorage**(useTagFavStore), 服务端不知道 —— 所以「只看收藏」
@@ -170,8 +151,8 @@ async function loadMore(force = false) {
     }
     // 两种模式同一个返回形状(total/tags/bannedHidden), 下面的装配逻辑不分家
     const d = scanMode.value
-      ? await api.scanTagList({ ...base, paths: scanSel.value.join(',') })
-      : await api.allTags({ ...base, source: srcSel.value.length ? srcSel.value.join(',') : undefined })
+      ? await api.scanTagList({ ...base, paths: f.scanSel.value.join(',') })
+      : await api.allTags({ ...base, source: f.srcSel.value.length ? f.srcSel.value.join(',') : undefined })
     total.value = d.total || 0
     bannedHidden.value = d.bannedHidden || 0
     scanNote.value = d.scan || null
@@ -244,8 +225,6 @@ async function toggleBan(tag) {
 onMounted(() => {
   safety.ensureLoaded()
   loadMore()
-  srcStore.load()          // 来源条的数据(list/totalImages), 选择是本页自己的
-  loadScanFolders()        // 扫描夹条的数据(folders 登记表)
   if (favOnly.value) loadFavRows()   // 开关记忆是开的: 首屏就要收藏列表
 })
 </script>
@@ -298,20 +277,8 @@ onMounted(() => {
         <TvSafetyToggle />
       </div>
 
-      <!-- 筛选行: 来源(标签库口径) + 扫描夹(扫描缓存口径), 互斥 —— 选了扫描夹按扫描夹出列表 -->
-      <TvSourceChips
-        v-model="srcSel"
-        :sources="srcStore.list"
-        :total="srcStore.totalImages"
-        :class="{ dim: scanMode }"
-        :title="scanMode ? '正在按扫描文件夹筛选, 清空「扫描夹」后这里生效' : ''"
-      />
-      <TvSourceChips
-        v-model="scanSel"
-        label="📁 扫描夹:"
-        :sources="scanChips"
-        :total="scanTotalImages"
-      />
+      <!-- 筛选行: (来源|扫描夹) 分段开关 + 当档 chips —— 点哪边哪边生效, 列表跟着换数据源 -->
+      <TvSourceScanBar class="filter-row" />
 
       <div ref="scrollEl" class="scroll" @scroll="loadMore">
         <TvState v-if="favActive && favLoading" state="loading" text="加载收藏..." />
@@ -359,9 +326,8 @@ onMounted(() => {
 .faint { color: var(--faint); }
 .scroll { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 4px; }
 .more-hint { color: var(--faint); font-size: 11px; text-align: center; padding: 10px 0 4px; }
-/* 筛选行与工具栏的间距; 来源条在扫描夹模式下灰掉(不可点, 语义互斥) */
+/* 筛选行与工具栏的间距; .dim 只剩「只看收藏」在扫描档下灰掉时用 */
 .filter-row { flex: 0 0 auto; }
-.filter-row + .filter-row { margin-top: -4px; }
 .dim { opacity: .45; pointer-events: none; }
 .scan-hint { color: var(--accent2, var(--muted)); }
 </style>

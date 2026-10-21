@@ -27,6 +27,8 @@ import { useUiStore } from '@/stores/useUiStore.js'
 import { usePrefsStore } from '@/stores/usePrefsStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
+import TvSourceScanBar from '@/components/filter/TvSourceScanBar.vue'
+import { useSourceScanFilter } from '@/composables/useSourceScanFilter.js'
 import { nfmt } from '@/utils/format.js'
 
 const route = useRoute()
@@ -43,17 +45,42 @@ const imgSort = ref(prefs.sortTagImgs)
 const imgPageSize = ref(60)
 const feed = useImageFeed({ infinite: true, pageSize: 60 })
 
+/* ---------------- 来源 | 扫描夹 筛选(2026-10-21 用户需求) ----------------
+ * 「筛选应该放到 tag 跳转这里」—— 标签列表页有的筛选, 跳进某个标签的图片页
+ * 也要有, 否则 9 万张图里想只看某个来源的还得回列表。状态是 useSourceScanFilter
+ * 的模块级单例, **与标签列表页共用同一份**: 在那边选了 新世界, 跳进来还是 新世界。
+ * 数据管线(与列表页不同):
+ *   · source 档 -> search({source})  库内按来源筛, 后端已有
+ *   · scan 档   -> search({under})   按**文件夹路径前缀**筛库内图片 ——
+ *     扫描缓存里只有"夹里有哪些标签", 没有标签->图的倒排, 图还得从库里出;
+ *     前缀匹配由 doSearch 的 under 参数在缓存结果上过滤(见 core/query.js)
+ */
+const f = useSourceScanFilter()
+
 /** 当前图片流顺序 —— 传给大图预览做「上一张 / 下一张」 */
 const shownResults = computed(() => safety.filterItems(feed.results.value))
 const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boolean))
 watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
 
 function imgQuery() {
-  return { q: tag.value, match: 'contains', sort: imgSort.value }
+  const base = { q: tag.value, match: 'contains', sort: imgSort.value }
+  if (f.mode.value === 'scan') {
+    if (f.scanSel.value.length) base.under = f.scanSel.value.join(',')
+  } else if (f.srcSel.value.length) {
+    base.source = f.srcSel.value.join(',')
+  }
+  return base
 }
 
 /* 排序改了就记下来(不用重新点一遍); 重查由模板上的 @change="load()" 负责 */
 watch(imgSort, (v) => { prefs.sortTagImgs = v })
+
+/* 筛选(档位/选择)变了就重查 —— 本视图在 keep-alive 白名单里, 在标签列表页
+ * 改筛选时组件还活着, 必须**判当前路由**再动, 不然会给上一个标签偷偷发查询 */
+watch(() => [f.mode.value, f.srcSel.value.slice(), f.scanSel.value.slice()], () => {
+  if (route.name !== 'tag-images') return
+  load()
+})
 
 async function load() {
   feed.setPageSize(imgPageSize.value)
@@ -177,6 +204,9 @@ function copyTag(t) {
         <TvButton size="sm" variant="secondary" @click="backToTags">← 返回标签列表</TvButton>
       </div>
 
+      <!-- (来源|扫描夹) 分段筛选: 与标签列表页共用同一份档位/选择, 点标签跳进来不断档 -->
+      <TvSourceScanBar class="filter-row" />
+
       <div class="scroll">
         <TvImageGrid
           :results="feed.results.value"
@@ -223,6 +253,8 @@ function copyTag(t) {
 
 .body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px; }
 .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; flex: 0 0 auto; }
+/* 筛选行: 夹在工具栏和图片流之间, 不随滚动 */
+.filter-row { flex: 0 0 auto; margin-bottom: 10px; }
 .hint { color: var(--muted); font-size: 12px; }
 .cnt { color: var(--accent); font-size: 16px; }
 .faint { color: var(--faint); }

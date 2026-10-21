@@ -106,7 +106,24 @@ export function doSearch(raw = {}) {
     frozenKey(p.srcSet), p.favs.length ? p.favs.slice().sort().join('|') : '',
   )
   if (nameQ) results = results.filter((r) => r.path.toLowerCase().indexOf(nameQ) >= 0)
-  const seedKey = [p.searchTags.join(','), p.mode, p.match, p.sort, nameQ].join('|')
+  // 文件夹路径前缀过滤(2026-10-21): 标签图片页按扫描夹筛图。under = 逗号分隔的
+  // 文件夹路径, 命中"图片路径在该文件夹(含子目录)下"。与 nameQ 一样在**缓存结果上**
+  // 过滤 —— searchCached 的 key 不含 under, 把它塞进 records 会让不同前缀共享同一份
+  // 缓存条目, 结果直接错; 放在缓存之后过滤则天然正确, total 也跟着变小(口径一致)。
+  // 路径比较统一 / 分隔 + 小写(Windows 不区分大小写), 前缀补尾部 / 防止
+  // "D:/ai" 误吞 "D:/ai2/..." 这种同前缀兄弟目录。
+  const underRaw = String(raw.under || '').trim()
+  if (underRaw) {
+    const prefixes = underRaw.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+      .map((p) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() + '/')
+    if (prefixes.length) {
+      results = results.filter((r) => {
+        const np = String(r.path).replace(/\\/g, '/').toLowerCase()
+        return prefixes.some((pf) => np.startsWith(pf))
+      })
+    }
+  }
+  const seedKey = [p.searchTags.join(','), p.mode, p.match, p.sort, nameQ, underRaw].join('|')
   applySort(results, p.sort, seedKey, p.seed)
 
   let page = results.slice(offset, offset + limit)

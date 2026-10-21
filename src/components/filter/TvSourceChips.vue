@@ -33,6 +33,12 @@ const props = defineProps({
    * 改成标题行右侧一个小入口, 二者互不干扰 —— 胶囊继续筛, 入口负责跳。
    */
   manage: { type: Boolean, default: false },
+  /**
+   * 平嵌模式(2026-10-21): 去掉自己的卡片壳(边框/底色/内边距), 让调用方把
+   * 分段开关和 chips 行装进**同一张卡片** —— 标签页的「来源|扫描夹」组合条
+   * 就是这个用法。独立成条时不传, 外观与从前完全一致。
+   */
+  flat: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue', 'change', 'manage'])
 
@@ -88,7 +94,7 @@ onBeforeUnmount(() => ro?.disconnect())
 </script>
 
 <template>
-  <div class="src-bar">
+  <div class="src-bar" :class="{ flat }">
     <span class="lb">{{ label }}</span>
     <div
       ref="chipsEl"
@@ -132,6 +138,15 @@ onBeforeUnmount(() => ro?.disconnect())
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
+}
+/* 平嵌: 卡片壳交给外层组合条, 这里只留一行 chips */
+.src-bar.flat {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .lb { color: var(--muted); font-size: 12px; margin-right: 2px; flex: 0 0 auto; }
 /* 滚动容器: 单行, 溢出横向滚; 细滚动条(悬停才显形一点) */
