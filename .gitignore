@@ -27,18 +27,22 @@ tutorial-video/node_modules/
 tutorial-video/out/
 
 # ---------------- 数据目录 ----------------
-# data/ 是**用户自己的数据**，一律不进仓库：
+# data/ 默认不进仓库：
 #   · 用户数据(绝不出机器): 黑名单 / 替换规则 / 背景补全 / 收藏备注 / 购物车历史 /
 #     扫描文件夹记录 / 缩略图缓存      —— 里面全是本机文件路径
 #   · 可再生派生物: tags.db(由标签 txt 同步生成) / scan_cache.json(重扫即可重建)
-#   · 知识类: local_translations.json / character_library.json / weilin_data*/
-#     内容是标签翻译与系列角色映射(不含图片)。
-#     WeiLin 翻译库(2026-10-02)已随仓库内置在 knowledge/ —— data/ 下这份是本机
-#     副本(优先级更高)，仍不进仓库免得两份漂移；另外两个 json 是用户自己的
-#     补译/映射，不进仓库。来源与授权现状见 knowledge/README.md
-# 只放行 *.example.json 模板 —— 用 data/* 而不是 data/，这样否定规则才生效
+#   · 大体积模型: models/(4GB, ONNX tagger 模型, 用户首跑时自行下载)
+#   · 知识类放行(2026-10-20 起随仓库分发, 给用户开箱即用的翻译/角色库):
+#     - local_translations.json   标签中文翻译(WeiLin 合并 + AI 补译, ~9000 条)
+#     - character_library.json    角色库(名称/系列/别名映射)
+#     - user_meta.json            角色分类
+#     三者均为"知识"而非本机路径, 不含用户隐私; 后续更新随正常提交走
+# 只放行 *.example.json 模板与上述三个知识文件 —— 用 data/* 而不是 data/，这样否定规则才生效
 data/*
 !data/*.example.json
+!data/character_library.json
+!data/local_translations.json
+!data/user_meta.json
 
 # 测试夹具的产物（图片由 test-fixtures/make_scan_test.py 生成）
 test-fixtures/scan-test/
