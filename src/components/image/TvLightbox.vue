@@ -480,7 +480,7 @@ function preheat() {
               <button
                 class="meta-hit"
                 type="button"
-                :title="`看库里和这张图最像的: 按「重合词条数」降序排列; 单个词条直接点下面的标签`"
+                :title="`剔掉角色/机位词后, 库内全含这些词条的图; 全命中没有时给重合最接近的`"
                 @click="jumpMetaHits"
               >库内命中 {{ metaHitCount }}/{{ metaTags.length }} →</button>
             </div>

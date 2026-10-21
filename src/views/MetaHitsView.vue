@@ -37,10 +37,13 @@ const ui = useUiStore()
 const safety = useSafetyStore()
 
 const srcPath = ref('')
-/** 后端随页带回来的匹配概况(工具栏那句「图内 n · 命中 m」的来路) */
-const info = ref({ hitTags: [], metaCount: 0, maxHits: 0, over: [], grand: 0 })
-/** 重合档位: 只看重合 >= minHits 词的图(0=全部)。
- * any 语义下总数≈全库(99k), 页面价值在排序; 档位让"最像的几百张"一眼可点。 */
+/** 后端随页带回来的匹配概况: fallback=false 是全命中(剔角色/机位后 usedCount
+ * 词全含); fallback=true 是全命中 0 张的降级态 —— 按重合度排最接近的 + 档位。 */
+const info = ref({
+  hitTags: [], metaCount: 0, maxHits: 0, over: [], grand: 0,
+  usedCount: 0, stripChar: 0, stripView: 0, allTotal: 0, fallback: false,
+})
+/** 重合档位: 降级态下只看重合 >= minHits 词的图(0=全部)。 */
 const minHits = ref(0)
 
 const feed = useImageFeed({
@@ -49,12 +52,17 @@ const feed = useImageFeed({
   fetcher: async (p) => {
     const d = await api.metaSimilar({ ...p, path: srcPath.value })
     if (d?.error) throw new Error(d.error)   // 后端异常别静默成 0 张(2026-10-21)
-    info.value = { hitTags: d.hitTags || [], metaCount: d.metaCount || 0, maxHits: d.maxHits || 0, over: d.over || [], grand: d.grand || 0 }
+    info.value = {
+      hitTags: d.hitTags || [], metaCount: d.metaCount || 0, maxHits: d.maxHits || 0,
+      over: d.over || [], grand: d.grand || 0, usedCount: d.usedCount || 0,
+      stripChar: d.stripChar || 0, stripView: d.stripView || 0,
+      allTotal: d.allTotal || 0, fallback: !!d.fallback,
+    }
     return d
   },
 })
 
-/** 档位 chips: 从降序分布里挑 ~4 档(最高 / 3/4 / 1/2 / 1/4), 去重后展示 */
+/** 档位 chips(降级态): 从降序分布里挑 ~4 档(最高 / 3/4 / 1/2 / 1/4), 去重后展示 */
 const levels = computed(() => {
   const over = info.value.over || []
   if (!over.length) return []
@@ -132,18 +140,23 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     <div class="panel body">
       <div class="bar">
         <b class="cnt">{{ nfmt(feed.total.value) }}</b>
-        <span class="hint">张与这张图重合最多排最前<template v-if="minHits">（≥{{ minHits }} 词）</template></span>
-        <span v-if="levels.length" class="lvs">
-          <button
-            v-for="lv in levels"
-            :key="lv.min"
-            :class="['lv', { on: minHits === lv.min }]"
-            :title="`只看重合 ≥ ${lv.min} 个词条的图`"
-            @click="minHits = lv.min"
-          >≥{{ lv.min }} 词 · {{ nfmt(lv.count) }}</button>
-          <button :class="['lv', { on: !minHits }]" title="不过滤: 任一共同词条都算" @click="minHits = 0">全部 · {{ nfmt(info.grand) }}</button>
-        </span>
-        <span v-if="info.metaCount" class="hint faint">图内 {{ info.metaCount }} 个词条 · 命中库内 {{ info.hitTags.length }} 个</span>
+        <template v-if="!info.fallback">
+          <span class="hint">张全命中 · 剔角色 {{ info.stripChar }} / 机位 {{ info.stripView }} 后 {{ info.usedCount }} 词全含</span>
+        </template>
+        <template v-else>
+          <span class="hint warn">全命中 0 张 · 以下是重合最接近的(最高 {{ info.maxHits }}/{{ info.usedCount }} 词)</span>
+          <span v-if="levels.length" class="lvs">
+            <button
+              v-for="lv in levels"
+              :key="lv.min"
+              :class="['lv', { on: minHits === lv.min }]"
+              :title="`只看重合 ≥ ${lv.min} 个词条的图`"
+              @click="minHits = lv.min"
+            >≥{{ lv.min }} 词 · {{ nfmt(lv.count) }}</button>
+            <button :class="['lv', { on: !minHits }]" title="不过滤: 任一共同词条都算" @click="minHits = 0">全部 · {{ nfmt(info.grand) }}</button>
+          </span>
+        </template>
+        <span v-if="info.metaCount" class="hint faint">图内 {{ info.metaCount }} · 参与匹配 {{ info.usedCount }} · 命中库内 {{ info.hitTags.length }}</span>
         <span class="spacer" />
         <TvSafetyToggle :counts="feed.unsafe.value" />
         <TvButton
@@ -214,6 +227,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px; }
 .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; flex: 0 0 auto; }
 .hint { color: var(--muted); font-size: 12px; }
+.warn { color: var(--warning, #b8860b); }
 .cnt { color: var(--accent); font-size: 16px; }
 .faint { color: var(--faint); }
 .lvs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
