@@ -361,6 +361,7 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
         :total="stats?.total_images ?? src.totalImages"
         :loading="statsLoading"
         manage
+        wrap
         @change="withSource"
         @manage="goSources"
       />

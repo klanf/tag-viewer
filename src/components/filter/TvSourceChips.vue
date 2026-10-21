@@ -39,6 +39,13 @@ const props = defineProps({
    * 就是这个用法。独立成条时不传, 外观与从前完全一致。
    */
   flat: { type: Boolean, default: false },
+  /**
+   * 折行模式(2026-10-21): 放不下就折行铺开, 不横滚。给**窄容器**用的 ——
+   * 看板把本组件塞在 372px 侧栏里, 横滚一屏只露得出「全部 + 一颗」,
+   * 其余全藏进滚动区(用户反馈"来源太短了"); 来源就几个, 折两行全部可见。
+   * 宽顶栏(标签页/系列页)维持横滚不变, 两种模式互不影响。
+   */
+  wrap: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue', 'change', 'manage'])
 
@@ -76,10 +83,11 @@ function measure() {
 
 function onScroll() { measure() }
 
-/** 滚轮悬停直接横滚(纵向滚轮映射到横向; 已到头时放行给页面滚动) */
+/** 滚轮悬停直接横滚(纵向滚轮映射到横向; 已到头时放行给页面滚动)。
+ * 折行模式下没有横向滚动区, 直接放行 —— 不然侧栏里滚轮会被吃掉。 */
 function onWheel(e) {
   const el = chipsEl.value
-  if (!el || el.scrollWidth <= el.clientWidth || !e.deltaY) return
+  if (props.wrap || !el || el.scrollWidth <= el.clientWidth || !e.deltaY) return
   const before = el.scrollLeft
   el.scrollLeft += e.deltaY
   if (el.scrollLeft !== before) e.preventDefault()
@@ -99,7 +107,7 @@ onBeforeUnmount(() => ro?.disconnect())
     <div
       ref="chipsEl"
       class="chips"
-      :class="{ 'fade-l': overflow && !atStart, 'fade-r': overflow && !atEnd }"
+      :class="{ wrap, 'fade-l': !wrap && overflow && !atStart, 'fade-r': !wrap && overflow && !atEnd }"
       @scroll="onScroll"
       @wheel="onWheel"
     >
@@ -159,6 +167,12 @@ onBeforeUnmount(() => ro?.disconnect())
   padding: 1px 0;                       /* 给 chip 聚焦态描边留 1px, 不被 overflow 裁掉 */
 }
 .chips > * { flex: 0 0 auto; }
+/* 折行模式: 放不下就换行铺开, 全部可见 —— 渐隐/横滚逻辑整体不参与 */
+.chips.wrap {
+  flex-wrap: wrap;
+  overflow: visible;
+  row-gap: 6px;
+}
 /* 两端渐隐: 只在真有内容被裁掉的那一侧显形(不是常驻, 免得内容贴边时被误糊) */
 .chips.fade-l {
   mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 100%);
