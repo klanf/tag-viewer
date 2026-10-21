@@ -106,7 +106,7 @@ export function getMetaSimilar(raw = {}) {
   const results = searchCached(
     records, p.searchTags, p.mode, p.match, p.excludeTags, p.excludeMatch, false,
     frozenKey(p.srcSet), p.favs.length ? p.favs.slice().sort().join(' | ') : '',
-  )
+  ).filter((r) => r.path !== srcPath)   // 剔掉源图自己: 库内反推词与原提示词几乎一致, 自己永远排第一(2026-10-21)
 
   // 逐图数重合: 真词条出现在 ltags(全量小写标签)里记一票。
   // searchCached 命中缓存时返回的是**同一批记录对象**(数组是副本、对象不是),
