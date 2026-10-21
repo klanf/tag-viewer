@@ -45,6 +45,7 @@ const feed = useImageFeed({
   pageSize: 60,
   fetcher: async (p) => {
     const d = await api.metaSimilar({ ...p, path: srcPath.value })
+    if (d?.error) throw new Error(d.error)   // 后端异常别静默成 0 张(2026-10-21)
     info.value = { hitTags: d.hitTags || [], metaCount: d.metaCount || 0, maxHits: d.maxHits || 0 }
     return d
   },

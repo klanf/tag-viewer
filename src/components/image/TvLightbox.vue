@@ -117,9 +117,10 @@ function metaJump(tag) {
  *  命中的图片** —— 落 MetaHitsView, 按「与源图重合词条数」降序, 第一屏
  *  就是库里和这张最像的图。src 传当前图路径(query 传, 免 Windows 路径转义)。 */
 function jumpMetaHits() {
-  if (!metaHitCount.value || !lb.path) return
+  const p = lb.path          // 先取路径: close() 会把 path 清空, 先关后读 src 永远是 ''(2026-10-21 踩)
+  if (!metaHitCount.value || !p) return
   lb.close()
-  router.push({ name: 'meta-hits', query: { src: lb.path } })
+  router.push({ name: 'meta-hits', query: { src: p } })
 }
 async function copyMetaPrompt() { await ui.copy(metaPrompt.value); ui.ok('✅ 已复制图内原始提示词') }
 async function copyMetaTags() {
