@@ -21,6 +21,15 @@ export function useImageFeed(opts = {}) {
 
   const infinite = ref(!!opts.infinite)
   const pageSize = ref(opts.pageSize || 60)
+  /**
+   * 自定义取数器(2026-10-21): 默认走 api.search(库内); 传了就按它取。
+   * 标签图片页的扫描档用它换到 scan:tagImages —— 纯扫描夹的图不进库,
+   * 返回形状与 search 对齐({total, results, unsafe}), 分页/加载更多全不用改。
+   * **传函数而不是传静态配置**: 档位(来源|扫描夹)是运行时切的, 每次调用
+   * 现场决定走哪条管线。
+   */
+  const fetcher = typeof opts.fetcher === 'function' ? opts.fetcher : null
+  const doFetch = (p) => (fetcher ? fetcher(p) : api.search(p))
 
   const results = shallowRef([])
   const total = ref(0)
@@ -95,7 +104,7 @@ export function useImageFeed(opts = {}) {
     loading.value = true
     error.value = ''
     try {
-      const d = await api.search(params(0))
+      const d = await doFetch(params(0))
       results.value = d.results || []
       total.value = d.total || 0
       unsafe.value = d.unsafe || { core: 0, edge: 0 }
@@ -126,7 +135,7 @@ export function useImageFeed(opts = {}) {
     loading.value = true
     error.value = ''
     try {
-      const d = await api.search(params(offset.value))
+      const d = await doFetch(params(offset.value))
       results.value = d.results || []
       total.value = d.total || 0
       unsafe.value = d.unsafe || { core: 0, edge: 0 }
@@ -145,7 +154,7 @@ export function useImageFeed(opts = {}) {
     const next = offset.value + fetched.value
     loading.value = true
     try {
-      const d = await api.search(params(next))
+      const d = await doFetch(params(next))
       results.value = [...results.value, ...(d.results || [])]
       fetched.value += (d.results || []).length
       total.value = d.total || 0

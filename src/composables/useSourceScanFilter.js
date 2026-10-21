@@ -39,16 +39,33 @@ function persist() {
   writeLS(LS.tagsScanFolders.key, scanSel.value.join(','))
 }
 
-/** 拉一次扫描夹登记表(两个页面共用, 拉过就不再拉; 失败不挡页面) */
+/** 拉一次扫描夹登记表(两个页面共用, 拉过就不再拉; 失败不挡页面)。
+ * 计数不用登记表的 images —— 那是另一条链路写的, 纯扫描夹常常跟不上
+ * (实测日期夹全显示 0, 缓存里明明有图, 用户拿这个报过"扫描很多都是 0")。
+ * 这里对每个夹直接数缓存(scan:folderStats), 与筛选口径同源。 */
 async function ensureScanChips() {
   if (scanLoaded.value) return
   scanLoaded.value = true
   try {
     const d = await api.folders()
-    scanChips.value = (d.folders || [])
+    const scans = (d.folders || [])
       .filter((f) => f.as_scan)
       .map((f) => ({ name: f.name || f.label || f.path, images: f.images || 0, value: f.path }))
       .sort((a, b) => b.images - a.images)
+    scanChips.value = scans
+    // 缓存概况晚一步到也没关系: chips 先出, 数字随后修正
+    api.scanFolderStats(scans.map((f) => f.value)).then((sts) => {
+      const m = new Map((sts || []).map((s) => [s.path, s]))
+      for (const c of scans) {
+        const st = m.get(c.value)
+        if (st) {
+          c.images = st.images
+          c.hit = st.hit
+        }
+      }
+      scans.sort((a, b) => b.images - a.images)
+      scanChips.value = [...scans]      // 换新引用触发响应式更新
+    }).catch(() => { /* 老主进程没这条通道就沿用登记表数字 */ })
   } catch { /* 扫描服务没起也不挡页面 */ }
 }
 

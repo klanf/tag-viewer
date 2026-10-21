@@ -19,7 +19,7 @@ import { extractImagePrompt } from './png.js'
 import { promptToTags, dedupeTags } from './prompt.js'
 import { openDb } from './store.js'
 import { reloadCharLib } from './charlib.js'
-import { aggregateScanFolderTags } from './scan.js'
+import { aggregateScanFolderTags, collectScanFolderImages } from './scan.js'
 
 // ---------------------------------------------------------------- 统计
 
@@ -572,10 +572,8 @@ export function getScanTagList(raw = {}) {
   const paths = String(raw.paths || '')
     .split(',').map((s) => s.trim()).filter(Boolean)
 
-  if (!paths.length) {
-    return { total: 0, offset, returned: 0, tags: [], bannedHidden: 0, scan: { images: 0, withTags: 0 } }
-  }
-
+  // paths 为空 = 「全部」档: 聚合整个缓存(aggregateScanFolderTags 内部处理),
+  // 原来直接返回 0 —— 「全部 37,492」的胶囊下标签列表却是空的, 名不副实
   const { counts, images, withTags, missing } = aggregateScanFolderTags(paths)
   const tr = translateMap()
   const bl = blacklistMatcher()
@@ -595,6 +593,49 @@ export function getScanTagList(raw = {}) {
   return {
     total, offset, returned: page.length, tags: page, bannedHidden: bannedCount,
     scan: { images, withTags, missing },
+  }
+}
+
+/**
+ * 扫描缓存里的「标签 -> 图片」(2026-10-21) —— 标签图片页扫描档的后端。
+ *
+ * 纯扫描夹的图不进库, doSearch 怎么筛都是 0(实测: 选 26_10_14 得 0 条匹配)
+ * —— 图只能从扫描缓存出: 条目 {path -> {m,s,t,src}}, t 是扫描时 promptToTags
+ * 规范化好的标签。命中语义与库搜索的 contains/any 一致, 返回形状与 doSearch
+ * 对齐({total, offset, returned, results, unsafe}), useImageFeed 换个 fetcher
+ * 就能跑。results 条目 {path, m, s, tags} —— 卡片/光箱与扫描页同款通用
+ * (无像素尺寸, 卡片比例回落 9/16, 与扫描页一致)。
+ */
+export function getScanTagImages(raw = {}) {
+  const offset = clampInt(raw.offset, 0, 0, 10_000_000)
+  const limit = clampInt(raw.limit, 60, 1, 2000)
+  const qTags = String(raw.q || '')
+    .split(/[,，]/).map((t) => t.trim().toLowerCase()).filter(Boolean)
+  const paths = String(raw.paths || raw.under || '')
+    .split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+  // paths 为空 = 「全部」档: collectScanFolderImages 内部聚合整个缓存
+  const items = collectScanFolderImages(paths, qTags)
+  const sort = ['time', 'random'].includes(raw.sort) ? raw.sort : 'path'
+  if (sort === 'time') {
+    items.sort((a, b) => b.m - a.m)
+  } else if (sort === 'random') {
+    // 确定性洗牌: 同一 seed 同一顺序, 翻页/加载更多不跳
+    let seed = Number(raw.seed) || 1
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 }
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1))
+      ;[items[i], items[j]] = [items[j], items[i]]
+    }
+  } else {
+    items.sort((a, b) => a.path.toLowerCase().localeCompare(b.path.toLowerCase()))
+  }
+
+  return {
+    total: items.length,
+    offset,
+    returned: Math.min(limit, Math.max(0, items.length - offset)),
+    results: items.slice(offset, offset + limit),
+    unsafe: { core: 0, edge: 0 },   // 安全模式在渲染层按 tags 过滤(与扫描页同款)
   }
 }
 

@@ -149,16 +149,50 @@ export function purgeScanCachePaths(paths) {
 
 /* ---------------------------------------------------------------- 枚举 / stat */
 
+/* ---------------------------------------------------------------- 缓存聚合 */
+
+/**
+ * 「folder 之下」的缓存条目游标(2026-10-21 重写匹配规则)。
+ * 两条命中路径, 命中其一即收:
+ *   1) 夹键前缀 —— 这个夹**自己被扫过**(bucket 键 = normKeyPath(folder)+'|...'),
+ *      快路径, bucket 内整桶收;
+ *   2) 文件路径前缀 —— 夹自己没扫过, 但**递归扫过的父夹**的 bucket 里躺着它的图
+ *      (实测: 日期夹全没单独扫过, 图都在「ai图|1」这个父夹 bucket 里 —— 只按夹键
+ *      匹配, 子夹永远 0 命中, 用户拿这个报过"扫描很多都是 0/没有命中")。
+ * 同一文件可能同时落在两个 bucket(父夹递归 + 子夹自扫), 调用方按文件路径去重。
+ */
+function* iterEntries(P, folder) {
+  const bucketPfx = normKeyPath(folder) + '|'
+  const filePfx = normKeyPath(folder) + path.sep
+  for (const [fk, bucket] of Object.entries(P.folders)) {
+    const byKey = fk.startsWith(bucketPfx)
+    for (const [fp, e] of Object.entries(bucket?.entries || {})) {
+      if (byKey || fp.startsWith(filePfx)) yield [fp, e]
+    }
+  }
+}
+
+/** 全缓存条目游标 —— paths 为空的「全部」档用, 逐 bucket 汇总 + 文件路径去重 */
+function* iterAllEntries(P) {
+  const seen = new Set()
+  for (const [, bucket] of Object.entries(P.folders)) {
+    for (const [fp, e] of Object.entries(bucket?.entries || {})) {
+      if (!seen.has(fp)) { seen.add(fp); yield [fp, e] }
+    }
+  }
+}
+
 /**
  * 聚合若干扫描文件夹缓存里的规范化标签 -> Map(tag -> 出现图数)(2026-10-21)。
  *
  * 扫描的持久缓存(scan_cache.json)每个条目已经存了 promptToTags 规范化后的
  * tags 数组 —— 标签页「按扫描夹筛选」直接在这里聚合, 不重读任何 PNG。
- * 父夹(递归)与子夹各自扫描会有重叠, 按文件规范化路径去重, 一张图只计一次。
+ * paths 为空 = 「全部」档, 聚合整个缓存(原来是直接返回 0, 「全部 37,492」
+ * 的胶囊名不副实)。父夹(递归)与子夹各自扫描会有重叠, 按文件路径去重。
  *
- * @param {string[]} paths 文件夹绝对路径(不必规范化, 内部归一)
+ * @param {string[]} paths 文件夹绝对路径(不必规范化, 内部归一); 空 = 全部缓存
  * @returns {{ counts: Map<string,number>, images: number, withTags: number, missing: string[] }}
- *          missing = 缓存里没有的文件夹(从未扫过/被清了), 调用方好提示
+ *          missing = 缓存里一张图都没有的文件夹(从未扫过/被清了), 调用方好提示
  */
 export function aggregateScanFolderTags(paths) {
   const P = loadPersist()
@@ -167,29 +201,89 @@ export function aggregateScanFolderTags(paths) {
   let images = 0
   let withTags = 0
   const missing = []
-  for (const p of paths || []) {
-    // 持久缓存的文件夹键 = normKeyPath + '|' + 递归标志(scanFolder 的缓存键),
-    // 同一路径可能同时存在递归/非递归两份 —— 前缀匹配把两份都收进来,
-    // 条目本身按文件路径去重, 不会重复计数。
-    const prefix = normKeyPath(p) + '|'
-    let any = false
-    for (const [fk, bucket] of Object.entries(P.folders)) {
-      if (!fk.startsWith(prefix)) continue
-      any = true
-      for (const [fp, e] of Object.entries(bucket?.entries || {})) {
-        if (seen.has(fp)) continue
-        seen.add(fp)
-        images++
-        // 条目形状 { m: mtime, s: size, t: tags[], src: 来源 } —— tags 在 t 里
-        const tags = Array.isArray(e?.t) ? e.t : []
-        if (!tags.length) continue
-        withTags++
-        for (const t of tags) counts.set(t, (counts.get(t) || 0) + 1)
-      }
+  const add = (fp, e) => {
+    if (seen.has(fp)) return
+    seen.add(fp)
+    images++
+    // 条目形状 { m: mtime, s: size, t: tags[], src: 来源 } —— tags 在 t 里
+    const tags = Array.isArray(e?.t) ? e.t : []
+    if (!tags.length) return
+    withTags++
+    for (const t of tags) counts.set(t, (counts.get(t) || 0) + 1)
+  }
+  if (Array.isArray(paths) && paths.length) {
+    for (const p of paths) {
+      let any = false
+      for (const [fp, e] of iterEntries(P, p)) { any = true; add(fp, e) }
+      if (!any) missing.push(p)
     }
-    if (!any) missing.push(p)
+  } else {
+    for (const [fp, e] of iterAllEntries(P)) add(fp, e)
   }
   return { counts, images, withTags, missing }
+}
+
+/**
+ * 每个扫描文件夹自己的缓存概况(2026-10-21)。
+ *
+ * 文件夹登记表的 images/stats_json 是另一条链路写的, 纯扫描夹常常跟不上
+ * (实测日期夹全是 0, 缓存里明明有图) —— 「扫描夹」chips 的计数直接在这里
+ * 数缓存, 是筛选口径的真实数字。hit=false 表示缓存里一张图都没有
+ * (从未扫过/被清了), 调用方好给"去扫描一次"的提示。
+ *
+ * @param {string[]} paths 文件夹绝对路径
+ * @returns {{path:string, hit:boolean, images:number, withTags:number}[]}
+ */
+export function scanFolderStats(paths) {
+  const P = loadPersist()
+  const out = []
+  for (const p of paths || []) {
+    const seen = new Set()
+    let hit = false
+    let images = 0
+    let withTags = 0
+    for (const [fp, e] of iterEntries(P, p)) {
+      if (seen.has(fp)) continue
+      seen.add(fp)
+      hit = true
+      images++
+      const tags = Array.isArray(e?.t) ? e.t : []
+      if (tags.length) withTags++
+    }
+    out.push({ path: p, hit, images, withTags })
+  }
+  return out
+}
+
+/**
+ * 收集若干扫描文件夹缓存里、标签命中 q 的**图片条目**(2026-10-21)。
+ *
+ * 标签图片页的扫描档用: 纯扫描夹的图不进库, doSearch 的 under 前缀筛库必然
+ * 0 命中 —— 图只能从缓存出。条目 {path, m, s, t}, 命中语义与 searchRecords 的
+ * contains/any 一致: q 的任一子串出现在任一标签里即命中(q 空 = 全部)。
+ * paths 为空 = 全部缓存。父夹/子夹重叠照旧按文件路径去重。
+ *
+ * @param {string[]} paths 文件夹绝对路径; 空 = 全部缓存
+ * @param {string[]} qTags 已小写的搜索词
+ * @returns {{path:string, m:number, s:number, tags:string[]}[]}
+ */
+export function collectScanFolderImages(paths, qTags) {
+  const P = loadPersist()
+  const seen = new Set()
+  const out = []
+  const add = (fp, e) => {
+    if (seen.has(fp)) return
+    seen.add(fp)
+    const tags = Array.isArray(e?.t) ? e.t : []
+    if (qTags.length && !qTags.some((n) => tags.some((t) => String(t).toLowerCase().indexOf(n) >= 0))) return
+    out.push({ path: fp, m: Number(e?.m) || 0, s: Number(e?.s) || 0, tags })
+  }
+  if (Array.isArray(paths) && paths.length) {
+    for (const p of paths) for (const [fp, e] of iterEntries(P, p)) add(fp, e)
+  } else {
+    for (const [fp, e] of iterAllEntries(P)) add(fp, e)
+  }
+  return out
 }
 
 export async function listImages(folder, recursive) {

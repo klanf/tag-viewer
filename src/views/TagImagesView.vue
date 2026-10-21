@@ -29,6 +29,7 @@ import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import TvSourceScanBar from '@/components/filter/TvSourceScanBar.vue'
 import { useSourceScanFilter } from '@/composables/useSourceScanFilter.js'
+import { api } from '@/utils/api.js'
 import { nfmt } from '@/utils/format.js'
 
 const route = useRoute()
@@ -43,17 +44,22 @@ const safety = useSafetyStore()
 const tag = ref('')
 const imgSort = ref(prefs.sortTagImgs)
 const imgPageSize = ref(60)
-const feed = useImageFeed({ infinite: true, pageSize: 60 })
+const feed = useImageFeed({
+  infinite: true,
+  pageSize: 60,
+  // 档位现场分叉: source 档走库内 search, scan 档走扫描缓存 scan:tagImages
+  fetcher: (p) => (f.mode.value === 'scan' ? api.scanTagImages(p) : api.search(p)),
+})
 
 /* ---------------- 来源 | 扫描夹 筛选(2026-10-21 用户需求) ----------------
  * 「筛选应该放到 tag 跳转这里」—— 标签列表页有的筛选, 跳进某个标签的图片页
  * 也要有, 否则 9 万张图里想只看某个来源的还得回列表。状态是 useSourceScanFilter
  * 的模块级单例, **与标签列表页共用同一份**: 在那边选了 新世界, 跳进来还是 新世界。
- * 数据管线(与列表页不同):
- *   · source 档 -> search({source})  库内按来源筛, 后端已有
- *   · scan 档   -> search({under})   按**文件夹路径前缀**筛库内图片 ——
- *     扫描缓存里只有"夹里有哪些标签", 没有标签->图的倒排, 图还得从库里出;
- *     前缀匹配由 doSearch 的 under 参数在缓存结果上过滤(见 core/query.js)
+ * 数据管线(与列表页不同, 按档位在 fetcher 里现场分叉):
+ *   · source 档 -> search({source})   库内按来源筛, 后端已有
+ *   · scan 档   -> scan:tagImages     **从扫描缓存出图** —— 纯扫描夹的图不进库
+ *     (实测选 26_10_14 得 0 条匹配), doSearch 的 under 前缀筛库是死路; 缓存条目
+ *     {path, m, s, t} 自带规范化 tags, 缩略图/光箱与扫描页同款通用
  */
 const f = useSourceScanFilter()
 
@@ -63,11 +69,13 @@ const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boo
 watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
 
 function imgQuery() {
-  const base = { q: tag.value, match: 'contains', sort: imgSort.value }
+  const base = { q: tag.value, sort: imgSort.value }
   if (f.mode.value === 'scan') {
-    if (f.scanSel.value.length) base.under = f.scanSel.value.join(',')
-  } else if (f.srcSel.value.length) {
-    base.source = f.srcSel.value.join(',')
+    // scan:tagImages 固定 contains/any 语义(与库搜索一致), 不需要 match 参数
+    base.paths = f.scanSel.value.join(',')
+  } else {
+    base.match = 'contains'
+    if (f.srcSel.value.length) base.source = f.srcSel.value.join(',')
   }
   return base
 }

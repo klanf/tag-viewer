@@ -53,6 +53,8 @@ const CHANNELS = new Set([
   'export:preset:state', 'export:preset:delay', 'export:preset:flushNow',
   // 扫描
   'scan:pickFolder', 'scan:folder',
+  // 扫描缓存查询(2026-10-21): 标签图片页扫描档出图 + 筛选 chips 真实计数
+  'scan:tagImages', 'scan:folderStats',
   // 增量入库(磁盘 <-> tags.db 对齐)
   'ingest:status', 'ingest:run', 'ingest:pause',
   // WD14 反推(消费 tag_queue) + 无角色/系列补识别

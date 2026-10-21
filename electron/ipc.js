@@ -19,7 +19,7 @@ import { getWorkspace, getSettings, saveSettings, dataFile, applyTaggerEnv } fro
 import { bootstrap, status, whenReady } from './core/app-state.js'
 import {
   getStats, doSearch, getSeries, getCharacters, getSeriesMeta, postSeriesMeta,
-  getSuggest, getAllTags, getScanTagList, getTagsForPath, getLightboxData, getTranslations,
+  getSuggest, getAllTags, getScanTagList, getScanTagImages, getTagsForPath, getLightboxData, getTranslations,
   getCoverCandidates, setCover,
 } from './core/query.js'
 import {
@@ -41,7 +41,7 @@ import {
   cartPresetState, saveCartPreset, runCartPreset, notifyCartChanged,
   flushCartPendingNow, setCartNotifier,
 } from './core/cartPreset.js'
-import { scanFolder, scanCacheStats, purgeScanCachePaths } from './core/scan.js'
+import { scanFolder, scanCacheStats, purgeScanCachePaths, scanFolderStats } from './core/scan.js'
 import { previewTagEdit, applyTagEdit } from './core/tagedit.js'
 import { openDb } from './core/store.js'
 import { loadCats, reloadCats, catOf } from './core/tagcats.js'
@@ -557,6 +557,11 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'tags:all': safe((raw) => getAllTags(raw)),
     // 扫描文件夹的标签列表(2026-10-21): 数据源是扫描的持久缓存, 纯内存聚合
     'tags:scanList': safe((raw) => getScanTagList(raw)),
+    // 扫描缓存里的「标签 -> 图片」(2026-10-21): 标签图片页扫描档 —— 纯扫描夹的图
+    // 不进库, doSearch 筛不到, 从缓存出。不依赖数据集, 故不进 DATA_CHANNELS
+    'scan:tagImages': safe((raw) => getScanTagImages(raw)),
+    // 每个扫描文件夹自己的缓存概况(2026-10-21): 筛选 chips 的真实计数
+    'scan:folderStats': safe((raw) => scanFolderStats(raw?.paths || [])),
     // tag 查重(2026-10-17): 两阶段相似度分组, 纯内存 2s 左右, 不落库。
     // 阈值走参数, 结果 { scanned, candidates, ignoredPairs, groups:[{score,shared,items}], elapsedMs }
     'dup:scan': safe((raw) => {

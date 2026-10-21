@@ -120,6 +120,11 @@ export const api = {
   allTags: (q) => call('tags:all', q),
   // 扫描文件夹的标签列表(2026-10-21): paths=逗号分隔文件夹路径, 其余参数同 allTags
   scanTagList: (q) => call('tags:scanList', q),
+  // 扫描缓存里的「标签 -> 图片」(2026-10-21): 标签图片页扫描档 —— 纯扫描夹的图
+  // 不进库, 从缓存出。{q, paths, offset, limit, sort} -> {total, results:[{path,m,s,tags}]}
+  scanTagImages: (q) => call('scan:tagImages', q),
+  // 每个扫描文件夹自己的缓存概况(2026-10-21): [{path, hit, images, withTags}]
+  scanFolderStats: (paths) => call('scan:folderStats', { paths }),
   tagsCats: () => call('tags:cats'),
   dupScan: (opts) => call('dup:scan', opts),
   dupIgnoreAdd: (pairs) => call('dup:ignore:add', { pairs }),
