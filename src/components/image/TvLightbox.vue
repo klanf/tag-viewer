@@ -467,7 +467,6 @@ function preheat() {
                 <button :class="{ on: metaMode === 'cats' }" title="切成分标签并按段位归类(纯 tag 写法最好看)" @click="setMetaMode('cats')">分类</button>
                 <button :class="{ on: metaMode === 'raw' }" title="一字不动展示原始提示词(自然语言/混合写法用)" @click="setMetaMode('raw')">原始</button>
               </div>
-              <span class="src-name">{{ metaSrcLabel }}</span>
             </template>
           </div>
 
@@ -485,7 +484,6 @@ function preheat() {
                 :title="`把 ${metaHitCount} 个命中的库内词条整批带去看板筛图(任一命中); 单个词条直接点下面的标签`"
                 @click="jumpMetaHits"
               >库内命中 {{ metaHitCount }}/{{ metaTags.length }} →</button>
-              <span class="meta-hit-hint">点这去看板筛图 · 单个词条点下面的标签</span>
             </div>
             <TvTagList
               v-if="metaMode === 'cats' && metaTags.length"
@@ -798,7 +796,6 @@ a.badge.hint:hover { border-color: var(--accent); }
   transition: background var(--t-fast), border-color var(--t-fast);
 }
 .meta-hit:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: var(--accent); }
-.meta-hit-hint { font-size: 11px; color: var(--muted); }
 
 /* 原始模式: 等宽整段展示, 一字未动 */
 .raw-wrap { display: flex; flex-direction: column; gap: 6px; min-height: 0; }

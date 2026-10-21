@@ -24,7 +24,7 @@ const CHANNELS = new Set([
   // 自定义封面(2026-10-06): 系列卡/角色卡 ⚙️ 挑封面
   'covers:candidates', 'covers:set',
   // 标签
-  'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'tags:filterCopy', 'translate:get', 'tags:scanList', 'tags:matchMeta',
+  'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'tags:filterCopy', 'translate:get', 'tags:scanList', 'tags:matchMeta', 'tags:metaSimilar',
   'tags:edit:preview', 'tags:edit:apply',
   // 标签分类映射(2026-10-16 展示分组用)
   'tags:cats',

@@ -123,6 +123,10 @@ export const api = {
   // 图内元数据词条 -> 标签库命中匹配(2026-10-21): 光箱 meta 模式跳转用。
   // tags=[原始词条] -> {hits: {原始词条: {tag: 库内真词条, count: 库内图数}}}
   matchMetaTags: (tags) => call('tags:matchMeta', { tags }),
+  // 库内「命中相似图」(2026-10-21): 光箱「库内命中 n/m」徽章的落点。
+  // {path, offset, limit} -> {total, results, hitTags, metaCount, maxHits, unsafe}
+  // 按「与源图的重合词条数」降序, 第一屏就是库里与这张最像的图
+  metaSimilar: (q) => call('tags:metaSimilar', q),
   // 扫描缓存里的「标签 -> 图片」(2026-10-21): 标签图片页扫描档 —— 纯扫描夹的图
   // 不进库, 从缓存出。{q, paths, offset, limit, sort} -> {total, results:[{path,m,s,tags}]}
   scanTagImages: (q) => call('scan:tagImages', q),

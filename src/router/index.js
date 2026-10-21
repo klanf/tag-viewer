@@ -22,6 +22,7 @@ const Sources = () => import('@/views/SourceView.vue')
 const Cart = () => import('@/views/CartView.vue')
 const Detail = () => import('@/views/DetailView.vue')
 const Favs = () => import('@/views/FavView.vue')
+const MetaHits = () => import('@/views/MetaHitsView.vue')
 
 export const routes = [
   { path: '/', name: 'home', component: Home, meta: { title: '看板' } },
@@ -43,6 +44,7 @@ export const routes = [
   { path: '/cart', name: 'cart', component: Cart, meta: { title: '角色购物车' } },
   { path: '/favs', name: 'favs', component: Favs, meta: { title: '收藏' } },
   { path: '/detail', name: 'detail', component: Detail, meta: { title: '图片详情' } },
+  { path: '/meta-hits', name: 'meta-hits', component: MetaHits, meta: { title: '库内命中相似图' } },
   { path: '/:rest(.*)*', redirect: '/' },
 ]
 
