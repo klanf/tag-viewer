@@ -38,7 +38,10 @@ const safety = useSafetyStore()
 
 const srcPath = ref('')
 /** 后端随页带回来的匹配概况(工具栏那句「图内 n · 命中 m」的来路) */
-const info = ref({ hitTags: [], metaCount: 0, maxHits: 0 })
+const info = ref({ hitTags: [], metaCount: 0, maxHits: 0, over: [], grand: 0 })
+/** 重合档位: 只看重合 >= minHits 词的图(0=全部)。
+ * any 语义下总数≈全库(99k), 页面价值在排序; 档位让"最像的几百张"一眼可点。 */
+const minHits = ref(0)
 
 const feed = useImageFeed({
   infinite: true,
@@ -46,9 +49,23 @@ const feed = useImageFeed({
   fetcher: async (p) => {
     const d = await api.metaSimilar({ ...p, path: srcPath.value })
     if (d?.error) throw new Error(d.error)   // 后端异常别静默成 0 张(2026-10-21)
-    info.value = { hitTags: d.hitTags || [], metaCount: d.metaCount || 0, maxHits: d.maxHits || 0 }
+    info.value = { hitTags: d.hitTags || [], metaCount: d.metaCount || 0, maxHits: d.maxHits || 0, over: d.over || [], grand: d.grand || 0 }
     return d
   },
+})
+
+/** 档位 chips: 从降序分布里挑 ~4 档(最高 / 3/4 / 1/2 / 1/4), 去重后展示 */
+const levels = computed(() => {
+  const over = info.value.over || []
+  if (!over.length) return []
+  const top = over[0].min
+  const pick = []
+  for (const f of [1, 0.75, 0.5, 0.25]) {
+    const t = Math.max(2, Math.round(top * f))
+    const e = over.find((o) => o.min <= t)
+    if (e && !pick.some((p) => p.min === e.min)) pick.push(e)
+  }
+  return pick
 })
 
 /** 当前图片流顺序 —— 传给大图预览做「上一张 / 下一张」 */
@@ -61,9 +78,14 @@ watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
 watch(() => route.query.src, (v) => {
   if (route.name !== 'meta-hits') return
   srcPath.value = v ? String(v) : ''
-  if (srcPath.value) feed.search({})
+  if (srcPath.value) feed.search({ min: minHits.value })
   else feed.reset()
 }, { immediate: true })
+
+/* 切档位: 带着当前 min 重搜(后端过滤后分页, 排序不变) */
+watch(minHits, () => {
+  if (route.name === 'meta-hits' && srcPath.value) feed.search({ min: minHits.value })
+})
 
 /** 返回: 有上一页就 back(通常是光箱所在页), 深链直进则回看板 */
 function back() {
@@ -110,7 +132,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     <div class="panel body">
       <div class="bar">
         <b class="cnt">{{ nfmt(feed.total.value) }}</b>
-        <span class="hint">张库内图与这张图有共同词条 · 重合越多排越前</span>
+        <span class="hint">张与这张图重合最多排最前<template v-if="minHits">（≥{{ minHits }} 词）</template></span>
+        <span v-if="levels.length" class="lvs">
+          <button
+            v-for="lv in levels"
+            :key="lv.min"
+            :class="['lv', { on: minHits === lv.min }]"
+            :title="`只看重合 ≥ ${lv.min} 个词条的图`"
+            @click="minHits = lv.min"
+          >≥{{ lv.min }} 词 · {{ nfmt(lv.count) }}</button>
+          <button :class="['lv', { on: !minHits }]" title="不过滤: 任一共同词条都算" @click="minHits = 0">全部 · {{ nfmt(info.grand) }}</button>
+        </span>
         <span v-if="info.metaCount" class="hint faint">图内 {{ info.metaCount }} 个词条 · 命中库内 {{ info.hitTags.length }} 个</span>
         <span class="spacer" />
         <TvSafetyToggle :counts="feed.unsafe.value" />
@@ -184,5 +216,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .hint { color: var(--muted); font-size: 12px; }
 .cnt { color: var(--accent); font-size: 16px; }
 .faint { color: var(--faint); }
+.lvs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.lv {
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+.lv:hover { border-color: var(--accent); color: var(--text); }
+.lv.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .scroll { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 4px; }
 </style>
