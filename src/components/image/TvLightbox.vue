@@ -163,6 +163,9 @@ function gotoTag(tag) {
   router.push({ name: 'tag-images', params: { tag } })
   if (external) {
     ui.toast(`「${tag}」· 这张图不在标签库中, 下面是库里含该标签的图`, 'info', 2800)
+  } else if (tagSet.value === 'meta') {
+    // meta 模式的标签来自作者原文, 未必是库里的规范化 tag —— 跳过去可能空列表
+    ui.toast(`「${tag}」来自图内元数据 · 库里没有该标签时列表会是空的`, 'info', 2800)
   }
 }
 
@@ -440,12 +443,16 @@ function preheat() {
               class="lb-tags"
               :tags="metaTags"
               :zh-map="lb.zhMap"
+              :ban-map="lb.data?.ban_map || {}"
+              show-ban
               copyable
               :grouped="app.settings.groupedTags !== false"
-              action="copy"
+              action="filter"
               size="sm"
               empty-text="图内元数据里没解析出标签"
+              @click="({ tag }) => gotoTag(tag)"
               @copy="copyTag"
+              @ban="lb.toggleBan"
               @hover="({ zh, event }) => ui.showTip(zh, event)"
               @leave="ui.hideTip()"
               @mousemove="ui.moveTip($event)"
