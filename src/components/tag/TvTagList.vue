@@ -50,6 +50,14 @@ const props = defineProps({
   charsFirst: { type: Boolean, default: false },
   /** 空态文案 */
   emptyText: { type: String, default: '' },
+  /**
+   * 元数据->库内命中表(2026-10-21 光箱 meta 模式): key=图内原始词条,
+   * value={tag, count}=库内命中(由后端 matchMetaTags 算出)。传入后:
+   *   · 命中的 pill 显示库内图片数、点击语义 filter —— 跳 /tags/库里真词条
+   *   · 未命中的 pill 灰化(虚线)、点击语义退回 copy
+   * 命中与否的分流在调用方 @click 里做(这里只管外观与 title)。
+   */
+  hitMap: { type: Object, default: null },
   gap: { type: String, default: '5px' },
   /** 每行高度上限, 超出滚动 */
   maxHeight: { type: String, default: '' },
@@ -71,13 +79,15 @@ const items = computed(() => {
       }
     }
     const b = props.banMap[t] || {}
+    const hit = props.hitMap ? props.hitMap[t] : undefined
     return {
       tag: t,
       zh: props.zhMap[t] || '',
-      count: null,
+      count: hit ? hit.count : null,
       banned: !!b.banned,
       banRule: b.rule || '',
       cat: app.catOf(t),
+      noHit: !!props.hitMap && !hit,
     }
   })
   if (props.hideBanned) out = out.filter((it) => !it.banned)
@@ -157,9 +167,10 @@ const groups = computed(() => {
           :in-cart="cartTags.includes(it.tag)"
           :favable="favable"
           :in-fav="favTags.includes(it.tag)"
-          :show-count="showCount && it.count !== null"
+          :show-count="(showCount || !!hitMap) && it.count !== null"
           :show-zh="showZh"
-          :action="action"
+          :action="hitMap ? (it.noHit ? 'copy' : 'filter') : action"
+          :dim="hitMap ? it.noHit : false"
           :size="size"
           @click="(p) => emit('click', p)"
           @ban="(t) => emit('ban', t)"
@@ -187,9 +198,10 @@ const groups = computed(() => {
         :in-cart="cartTags.includes(it.tag)"
         :favable="favable"
         :in-fav="favTags.includes(it.tag)"
-        :show-count="showCount && it.count !== null"
+        :show-count="(showCount || !!hitMap) && it.count !== null"
         :show-zh="showZh"
-        :action="action"
+        :action="hitMap ? (it.noHit ? 'copy' : 'filter') : action"
+        :dim="hitMap ? it.noHit : false"
         :size="size"
         @click="(p) => emit('click', p)"
         @ban="(t) => emit('ban', t)"

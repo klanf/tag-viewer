@@ -120,6 +120,9 @@ export const api = {
   allTags: (q) => call('tags:all', q),
   // 扫描文件夹的标签列表(2026-10-21): paths=逗号分隔文件夹路径, 其余参数同 allTags
   scanTagList: (q) => call('tags:scanList', q),
+  // 图内元数据词条 -> 标签库命中匹配(2026-10-21): 光箱 meta 模式跳转用。
+  // tags=[原始词条] -> {hits: {原始词条: {tag: 库内真词条, count: 库内图数}}}
+  matchMetaTags: (tags) => call('tags:matchMeta', { tags }),
   // 扫描缓存里的「标签 -> 图片」(2026-10-21): 标签图片页扫描档 —— 纯扫描夹的图
   // 不进库, 从缓存出。{q, paths, offset, limit, sort} -> {total, results:[{path,m,s,tags}]}
   scanTagImages: (q) => call('scan:tagImages', q),

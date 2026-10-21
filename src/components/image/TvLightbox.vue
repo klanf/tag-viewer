@@ -85,6 +85,32 @@ const tagSet = computed(() => (hasMeta.value && app.settings.lbTagSet === 'meta'
 function setTagSet(v) { app.setSetting('lbTagSet', v) }
 const metaMode = computed(() => (app.settings.lbMetaMode === 'raw') ? 'raw' : 'cats')
 function setMetaMode(v) { app.setSetting('lbMetaMode', v) }
+
+/* ── meta 词条 -> 标签库命中(2026-10-21) ─────────────────────────
+ * 跑图提示词的写法和库内规范化词条对不上(权重括号被剥/空格转下划线/
+ * 转义差异), 拿原始词条直接跳 /tags/:xxx 大多落空。打开图片时把 meta
+ * 词条整批丢给后端 matchMetaTags(精确 + 骨架两级匹配), 命中的 pill
+ * 显示库内图片数、点击跳 /tags/库里真词条(复用现有筛选页); 未命中的
+ * 灰化、点击退回复制 —— 多张图各查各的, 竞态用序号防串图。 */
+const metaHits = ref({})
+let metaHitSeq = 0
+watch(() => lb.data?.meta_tags, async (tags) => {
+  tags = tags || []
+  if (!tags.length) { metaHits.value = {}; return }
+  const seq = ++metaHitSeq
+  try {
+    const d = await api.matchMetaTags(tags)
+    if (seq === metaHitSeq) metaHits.value = d.hits || {}
+  } catch { if (seq === metaHitSeq) metaHits.value = {} }
+}, { immediate: true })
+const metaHitCount = computed(() => Object.keys(metaHits.value).length)
+
+function metaJump(tag) {
+  const h = metaHits.value[tag]
+  if (h?.tag) { gotoTag(h.tag, true); return }
+  /* 未命中: pill 是 copy 动作, 点了就复制(与 title 承诺一致) */
+  ui.copy(tag).then(() => ui.ok('📋 已复制 · 库内没有这个标签', 'info', 1600))
+}
 async function copyMetaPrompt() { await ui.copy(metaPrompt.value); ui.ok('✅ 已复制图内原始提示词') }
 async function copyMetaTags() {
   await ui.copy(metaTags.value.join(', '))
@@ -155,7 +181,7 @@ watch(() => lb.visible, async (v) => {
  *   · 库外图片(扫描夹/收藏里那些没进过库的)要打个招呼: 它们自己不在结果里,
  *     跳过去看到的是"标签库中含有这个名字的图", 不说一句会以为是跳错了
  */
-function gotoTag(tag) {
+function gotoTag(tag, hit = false) {
   if (!tag) return
   const external = !!lb.data?.external
   lb.rememberJump(tag)   // 返回键要恢复光箱(定位到这张图 + 翻页列表), 先记下
@@ -163,7 +189,7 @@ function gotoTag(tag) {
   router.push({ name: 'tag-images', params: { tag } })
   if (external) {
     ui.toast(`「${tag}」· 这张图不在标签库中, 下面是库里含该标签的图`, 'info', 2800)
-  } else if (tagSet.value === 'meta') {
+  } else if (tagSet.value === 'meta' && !hit) {
     // meta 模式的标签来自作者原文, 未必是库里的规范化 tag —— 跳过去可能空列表
     ui.toast(`「${tag}」来自图内元数据 · 库里没有该标签时列表会是空的`, 'info', 2800)
   }
@@ -430,6 +456,11 @@ function preheat() {
                 <button :class="{ on: metaMode === 'raw' }" title="一字不动展示原始提示词(自然语言/混合写法用)" @click="setMetaMode('raw')">原始</button>
               </div>
               <span class="src-name">{{ metaSrcLabel }}</span>
+              <span
+                v-if="metaHitCount"
+                class="meta-hit"
+                :title="`库内命中的词条已点亮并标出图片数, 点击直接跳到该标签的图片页; 灰色虚线的是库里没有的`"
+              >库内命中 {{ metaHitCount }}/{{ metaTags.length }}</span>
             </template>
           </div>
 
@@ -447,10 +478,10 @@ function preheat() {
               show-ban
               copyable
               :grouped="app.settings.groupedTags !== false"
-              action="filter"
+              :hit-map="metaHits"
               size="sm"
               empty-text="图内元数据里没解析出标签"
-              @click="({ tag }) => gotoTag(tag)"
+              @click="({ tag }) => metaJump(tag)"
               @copy="copyTag"
               @ban="lb.toggleBan"
               @hover="({ zh, event }) => ui.showTip(zh, event)"
@@ -736,6 +767,12 @@ a.badge.hint:hover { border-color: var(--accent); }
 .seg button.on { background: var(--accent-soft, rgba(59, 130, 246, .15)); color: var(--accent); font-weight: 500; }
 .seg.sub button { padding: 3px 9px; font-size: 11px; }
 .src-name { font-size: 11px; color: var(--muted); }
+/* 库内命中统计(2026-10-21): meta 模式工具行右侧的小徽章 */
+.meta-hit {
+  font-size: 11px; color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 999px; padding: 1px 8px; white-space: nowrap;
+}
 
 /* 原始模式: 等宽整段展示, 一字未动 */
 .raw-wrap { display: flex; flex-direction: column; gap: 6px; min-height: 0; }

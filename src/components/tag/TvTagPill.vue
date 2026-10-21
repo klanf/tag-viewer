@@ -63,6 +63,8 @@ const props = defineProps({
   inFav: { type: Boolean, default: false },
   size: { type: String, default: 'md' },        // sm | md
   active: { type: Boolean, default: false },
+  /** 灰化(2026-10-21 光箱 meta 模式): 库内无此标签, 不可跳转 —— 点击退回复制 */
+  dim: { type: Boolean, default: false },
   /** 长标签: 超出宽度省略 */
   clip: { type: Boolean, default: false },
 })
@@ -158,7 +160,7 @@ function onCtxMenu(e) {
 
 <template>
   <span
-    :class="['pill', colorCls, `s-${size}`, { banned, active, clip }]"
+    :class="['pill', colorCls, `s-${size}`, { banned, active, clip, dim }]"
     :title="pillTitle"
     :data-tag="tag"
     @click="onClick"
@@ -222,6 +224,10 @@ function onCtxMenu(e) {
 .pill.s-sm { padding: 3px 8px; font-size: 11px; gap: 5px; }
 .pill:hover { border-color: var(--accent); }
 .pill.clip { max-width: 320px; }
+/* 灰化(2026-10-21): meta 模式库里没有的词条 —— 降透明度 + 虚线边,
+ * 悬停不给 accent 反馈(点了也是复制, 不跳) */
+.pill.dim { opacity: .55; border-style: dashed; }
+.pill.dim:hover { border-color: var(--border); }
 .en { white-space: nowrap; }
 .clip .en { overflow: hidden; text-overflow: ellipsis; }
 .zh {

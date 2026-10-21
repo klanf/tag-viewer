@@ -506,6 +506,61 @@ export function getSuggest(raw = {}) {
   return { suggestions: out }
 }
 
+// --------------------------------------- 图内元数据 -> 标签库命中匹配(2026-10-21)
+
+/**
+ * 图内元数据标签在标签库(tag.db)里的命中匹配。
+ *
+ * 背景: 光箱「图内元数据」模式点了就跳 /tags/:tag, 但跑图提示词的词条和
+ * 库内规范化词条不是一套写法 —— 权重括号被当强调剥掉(promptToTags)、
+ * 空格转下划线、角色括号还有转义/不转义之分, 拿原始词条直接跳大多落空。
+ * 「怎么找」收进后端, 匹配链先精确后骨架:
+ *   1. 精确键: 库里有没有这个词条本身(小写归一);
+ *   2. 骨架键: 双方都剥掉 - _ ( ) \ . 空格等符号只留字母数字再比 ——
+ *     'ganyu_genshin_impact'(提示词括号被剥) 与 'ganyu_(genshin_impact)'
+ *     (库内角色 tag) 骨架同为 ganyugenshinimpact, 一击命中;
+ *     同骨架多候选取 count 最高的(最常用写法)。
+ * 命中返回库内真 tag + 库内图片数(前端 pill 直接展示, 跳过去的列表不空);
+ * 未命中不硬凑 —— 宁可不跳也不跳错。
+ *
+ * @param {{tags: string[]}} raw key=原始元数据词条
+ * @returns {{hits: Record<string, {tag: string, count: number}>}}
+ */
+let _skelCache = null   // { ref: 全量 statsMap, idx: Map(骨架 -> [tag, count]) }
+function libSkeletonIdx() {
+  const [statsMap] = statsFor(null)     // 全部来源, 与标签库口径一致
+  if (_skelCache && _skelCache.ref === statsMap) return _skelCache.idx
+  const idx = new Map()
+  for (const [t, c] of statsMap) {
+    const s = String(t).toLowerCase().replace(/[^a-z0-9]/g, '')
+    if (!s) continue
+    const arr = idx.get(s)
+    if (arr) { if (c > arr[1]) { arr[0] = t; arr[1] = c } }
+    else idx.set(s, [t, c])
+  }
+  _skelCache = { ref: statsMap, idx }   // statsMap 换代(重扫/入库)自动重建
+  return idx
+}
+
+export function matchMetaTags(raw = {}) {
+  const tags = (Array.isArray(raw.tags) ? raw.tags : [])
+    .map((t) => String(t || '').trim()).filter(Boolean).slice(0, 300)
+  const hits = {}
+  if (!tags.length) return { hits }
+  const [statsMap] = statsFor(null)
+  for (const t of tags) {
+    if (hits[t]) continue
+    const low = t.toLowerCase()
+    const c = statsMap.get(low) ?? statsMap.get(t)
+    if (c !== undefined) { hits[t] = { tag: low, count: c }; continue }
+    const sk = low.replace(/[^a-z0-9]/g, '')
+    if (!sk) continue
+    const cand = libSkeletonIdx().get(sk)
+    if (cand) hits[t] = { tag: cand[0], count: cand[1] }
+  }
+  return { hits }
+}
+
 // ---------------------------------------------------------------- 标签浏览
 
 export function getAllTags(raw = {}) {

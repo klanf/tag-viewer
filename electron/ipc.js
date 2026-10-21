@@ -19,7 +19,7 @@ import { getWorkspace, getSettings, saveSettings, dataFile, applyTaggerEnv } fro
 import { bootstrap, status, whenReady } from './core/app-state.js'
 import {
   getStats, doSearch, getSeries, getCharacters, getSeriesMeta, postSeriesMeta,
-  getSuggest, getAllTags, getScanTagList, getScanTagImages, getTagsForPath, getLightboxData, getTranslations,
+  getSuggest, getAllTags, getScanTagList, getScanTagImages, getTagsForPath, getLightboxData, getTranslations, matchMetaTags,
   getCoverCandidates, setCover,
 } from './core/query.js'
 import {
@@ -557,6 +557,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'tags:all': safe((raw) => getAllTags(raw)),
     // 扫描文件夹的标签列表(2026-10-21): 数据源是扫描的持久缓存, 纯内存聚合
     'tags:scanList': safe((raw) => getScanTagList(raw)),
+    'tags:matchMeta': safe((raw) => matchMetaTags(raw)),
     // 扫描缓存里的「标签 -> 图片」(2026-10-21): 标签图片页扫描档 —— 纯扫描夹的图
     // 不进库, doSearch 筛不到, 从缓存出。不依赖数据集, 故不进 DATA_CHANNELS
     'scan:tagImages': safe((raw) => getScanTagImages(raw)),
