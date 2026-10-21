@@ -112,16 +112,14 @@ function metaJump(tag) {
   ui.copy(tag).then(() => ui.ok('📋 已复制 · 库内没有这个标签', 'info', 1600))
 }
 
-/** 「库内命中 n/m」徽章点击(2026-10-21): 命中的词条整批带去看板筛图。
- *  走路由深链(?q=a,b,c&mode=any&match=exact), 看板那边复用现成的搜索 ——
- *  mode=any(任一命中, 42 个词全含的图基本没有, all 会白屏), match=exact
- *  (命中的已是库内真词条, contains 会把 blue_eyes 拽上 blue_eyes_v2)。 */
+/** 「库内命中 n/m」徽章点击(2026-10-21 三版定稿): 跳命中图片页 /meta-hits。
+ *  v1 跳看板塞词条被否(任一命中=全库, 等于没筛); v2 用户澄清要**直接看
+ *  命中的图片** —— 落 MetaHitsView, 按「与源图重合词条数」降序, 第一屏
+ *  就是库里和这张最像的图。src 传当前图路径(query 传, 免 Windows 路径转义)。 */
 function jumpMetaHits() {
-  const tags = Object.values(metaHits.value).map((h) => h.tag)
-  if (!tags.length) return
+  if (!metaHitCount.value || !lb.path) return
   lb.close()
-  router.push({ name: 'home', query: { q: tags.join(','), mode: 'any', match: 'exact' } })
-  ui.toast(`已按 ${tags.length} 个库内词条在看板筛选(任一命中)`, 'info', 2600)
+  router.push({ name: 'meta-hits', query: { src: lb.path } })
 }
 async function copyMetaPrompt() { await ui.copy(metaPrompt.value); ui.ok('✅ 已复制图内原始提示词') }
 async function copyMetaTags() {
@@ -476,12 +474,12 @@ function preheat() {
           <!-- 图内元数据模式 -->
           <template v-else-if="tagSet === 'meta'">
             <!-- 库内命中独立一行(2026-10-21 用户反馈: 挤在工具行里看不清):
-                 点徽章 = 把命中的词条整批带去看板筛图(任一命中+精确匹配) -->
+                 点徽章 = 打开命中图片页(按重合词条数排序) -->
             <div v-if="metaMode === 'cats' && metaHitCount" class="meta-hit-row">
               <button
                 class="meta-hit"
                 type="button"
-                :title="`把 ${metaHitCount} 个命中的库内词条整批带去看板筛图(任一命中); 单个词条直接点下面的标签`"
+                :title="`看库里和这张图最像的: 按「重合词条数」降序排列; 单个词条直接点下面的标签`"
                 @click="jumpMetaHits"
               >库内命中 {{ metaHitCount }}/{{ metaTags.length }} →</button>
             </div>
@@ -783,7 +781,7 @@ a.badge.hint:hover { border-color: var(--accent); }
 .seg button.on { background: var(--accent-soft, rgba(59, 130, 246, .15)); color: var(--accent); font-weight: 500; }
 .seg.sub button { padding: 3px 9px; font-size: 11px; }
 .src-name { font-size: 11px; color: var(--muted); }
-/* 库内命中行(2026-10-21): 独立一行不跟工具行挤; 徽章是按钮 —— 点了整批带去看板筛图 */
+/* 库内命中行(2026-10-21): 独立一行不跟工具行挤; 徽章是按钮 —— 点了进命中图片页 */
 .meta-hit-row {
   display: flex; align-items: center; gap: 8px;
   flex: 0 0 auto; padding: 2px 0;
