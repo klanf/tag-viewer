@@ -13,13 +13,16 @@
  * (`bb_(fate/extra)` 这类真的存在), 解析回来仍是原标签名 —— 这一点实测验证过,
  * 别改成自己拼字符串。
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import TvImageGrid from '@/components/image/TvImageGrid.vue'
+import TvBatchBar from '@/components/image/TvBatchBar.vue'
+import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
 import TvTagEditModal from '@/components/tag/TvTagEditModal.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvSelect from '@/components/base/TvSelect.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
+import { useBatchOps } from '@/composables/useBatchOps.js'
 import { useFloatBack } from '@/composables/useFloatBack.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useFavStore } from '@/stores/useFavStore.js'
@@ -149,6 +152,26 @@ function toggleFav(item) {
   ui.ok(added ? '★ 已收藏' : '已取消收藏', 'info', 1200)
 }
 
+/* ---------------- 批量选择(2026-10-21): 勾选 -> 批量移动/复制/删除 ----------------
+ * 与看板/扫描页同款交互(useBatchOps)。items 传 feed.results 的**原始顺序**
+ * (网格内部的安全模式过滤只藏不排, 区间选仍与视觉顺序一致)。
+ * 键盘守卫判 route.name: 本页在 KeepAlive 白名单里, 切走后监听器还在。 */
+const {
+  selectMode, selected, moving, copying, moveOpen, copyOpen, folders: moveFolders,
+  toggleSelectMode, toggleSelect, selectAll, invertSel, clearSel,
+  onCardClick, batchDelete, openMove, openCopy, doMove, doCopy, onKey: batchKey,
+} = useBatchOps({
+  items: () => feed.results.value,
+  openImage: (it) => lb.open(it.path, { list: imgPaths.value }),
+})
+
+function onTagImagesKey(e) {
+  if (route.name !== 'tag-images') return
+  batchKey(e)
+}
+onMounted(() => window.addEventListener('keydown', onTagImagesKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onTagImagesKey))
+
 /* ---------------- 标签编辑(改名/删除) ----------------
  * 弹窗里执行完主进程会自动重载数据集(app:reloaded 推回来)。
  * 改名: 跳到新标签的页面(路由参数变化 -> watch 重查); 删除: 回标签列表。 */
@@ -189,6 +212,12 @@ function copyTag(t) {
         <span class="hint faint">点大图里的标签可以继续往下跳 · 悬停标签点 📋 只复制这一个</span>
         <span class="spacer" />
         <TvSafetyToggle :counts="feed.unsafe.value" />
+        <TvButton
+          size="sm"
+          variant="ghost"
+          title="批量选择: 勾选后批量移动/复制/删除(浏览状态下 Ctrl+点击也可直接勾)"
+          @click="toggleSelectMode"
+        >☑ 选择</TvButton>
         <TvSelect
           v-model="imgSort"
           size="sm"
@@ -215,6 +244,21 @@ function copyTag(t) {
       <!-- (来源|扫描夹) 分段筛选: 与标签列表页共用同一份档位/选择, 点标签跳进来不断档 -->
       <TvSourceScanBar class="filter-row" />
 
+      <!-- 批量操作条: 选择模式下出现, 钉在滚动区外 -->
+      <TvBatchBar
+        v-if="selectMode"
+        :count="selected.size"
+        :moving="moving"
+        :copying="copying"
+        @sel-all="selectAll"
+        @sel-invert="invertSel"
+        @sel-clear="clearSel"
+        @exit="toggleSelectMode"
+        @move="openMove"
+        @copy="openCopy"
+        @del="batchDelete"
+      />
+
       <div class="scroll">
         <TvImageGrid
           :results="feed.results.value"
@@ -225,7 +269,10 @@ function copyTag(t) {
           :has-more="feed.hasMore.value"
           favable
           :is-fav="fav.isFav"
-          @open="(it) => lb.open(it.path, { list: imgPaths })"
+          :selectable="selectMode"
+          :selected-tags="selected"
+          @open="onCardClick"
+          @toggle-select="toggleSelect"
           @toggle-fav="toggleFav"
           @load-more="feed.loadMore"
           @hover="({ text, event }) => ui.showTip(text, event)"
@@ -242,6 +289,9 @@ function copyTag(t) {
       @renamed="onTagRenamed"
       @deleted="onTagDeleted"
     />
+
+    <MoveTargetModal v-model="moveOpen" :count="selected.size" :folders="moveFolders" :busy="moving" @pick="doMove" />
+    <MoveTargetModal v-model="copyOpen" mode="copy" :count="selected.size" :folders="moveFolders" :busy="copying" @pick="doCopy" />
   </div>
 </template>
 

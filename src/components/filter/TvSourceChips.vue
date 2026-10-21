@@ -102,7 +102,7 @@ onBeforeUnmount(() => ro?.disconnect())
 </script>
 
 <template>
-  <div class="src-bar" :class="{ flat }">
+  <div class="src-bar" :class="{ flat, stacked: wrap && !flat }">
     <span class="lb">{{ label }}</span>
     <div
       ref="chipsEl"
@@ -173,6 +173,17 @@ onBeforeUnmount(() => ro?.disconnect())
   overflow: visible;
   row-gap: 6px;
 }
+/*
+ * 堆叠形态(折行 + 独立成条): 竖排里 label 悬在 chips 中间、管理键飘在右侧
+ * 都很怪(用户截图反馈"这么堆文件夹太丑了") —— 重排成两行:
+ *   第一行: 📂 来源 ……(推到最右)…… 🗄️ 管理
+ *   第二行: chips 整行折行铺开
+ * 用 order + flex-basis 纯 CSS 换位, DOM 不动。
+ */
+.src-bar.stacked { flex-wrap: wrap; row-gap: 8px; }
+.src-bar.stacked .lb { flex: 1 1 auto; order: 0; }
+.src-bar.stacked .manage { order: 1; margin-left: auto; }
+.src-bar.stacked .chips { order: 2; flex: 1 1 100%; }
 /* 两端渐隐: 只在真有内容被裁掉的那一侧显形(不是常驻, 免得内容贴边时被误糊) */
 .chips.fade-l {
   mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 100%);

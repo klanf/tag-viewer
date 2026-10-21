@@ -76,7 +76,9 @@ const selectedSet = computed(() => {
 
 function isSelected(item) {
   const s = selectedSet.value
-  return s ? s.has(item.tag) : false
+  if (!s) return false
+  // 图片条目按 path 勾选(批量移动/删除); 也认 item.tag —— 预留给非图片条目的选择场景
+  return s.has(item.path) || s.has(item.tag)
 }
 
 function itemKey(item, i) {
@@ -140,6 +142,9 @@ function onHover(payload) {
             class="jcell"
             :style="{ width: `${c.w}px`, '--img-h': `${row.h}px` }"
           >
+            <!-- open/toggle-select 把原生事件带出去(2026-10-21): 批量选择要读
+                 ctrlKey(浏览态 Ctrl+点=勾选)与 shiftKey(区间选); 旧调用方只收
+                 第一个参数, 不受影响 -->
             <TvImageCard
               :item="c.item"
               fill
@@ -151,9 +156,9 @@ function onHover(payload) {
               :footnote="footnote"
               :selectable="selectable"
               :selected="isSelected(c.item)"
-              @open="(it) => emit('open', it)"
+              @open="(it, e) => emit('open', it, e)"
               @toggle-fav="(p) => emit('toggle-fav', p)"
-              @toggle-select="(it) => emit('toggle-select', it)"
+              @toggle-select="(it, e) => emit('toggle-select', it, e)"
               @hover="onHover"
               @move="(e) => emit('move', e)"
               @leave="emit('leave')"

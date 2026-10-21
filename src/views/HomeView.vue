@@ -13,7 +13,7 @@
  *     旧版踩过坑: 只在当前页过滤会导致结果空掉
  *   · 导出时剔除黑名单、应用替换规则、按需补背景标签(都由主进程完成)
  */
-import { ref, computed, watch, onMounted, onActivated, onDeactivated } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
 import { useRouter } from 'vue-router'
 import TvSourceChips from '@/components/filter/TvSourceChips.vue'
 import TvWd14Banner from '@/components/board/TvWd14Banner.vue'
@@ -26,11 +26,14 @@ import TvCheckbox from '@/components/base/TvCheckbox.vue'
 import TvInput from '@/components/base/TvInput.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvImageGrid from '@/components/image/TvImageGrid.vue'
+import TvBatchBar from '@/components/image/TvBatchBar.vue'
+import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
 import TvRulesEditorModal from '@/components/rules/TvRulesEditorModal.vue'
 import TvExportPresetsModal from '@/components/export/TvExportPresetsModal.vue'
 import TvDupPanel from '@/components/dup/TvDupPanel.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
 import { useSearchHistory } from '@/composables/useSearchHistory.js'
+import { useBatchOps } from '@/composables/useBatchOps.js'
 import { LS } from '@/utils/lskey.js'
 import { useAppStore } from '@/stores/useAppStore.js'
 import { useSourceStore } from '@/stores/useSourceStore.js'
@@ -155,6 +158,26 @@ const homeActive = ref(true)
 onActivated(() => { homeActive.value = true })
 onDeactivated(() => { homeActive.value = false })
 watch(imgPaths, (arr) => { if (homeActive.value && lb.visible) lb.setList(arr) })
+
+/* ---------------- 批量选择(2026-10-21): 勾选 -> 批量移动/复制/删除 ----------------
+ * 用户场景: 按来源筛出一批图, 勾掉不要的直接搬走/删掉。逻辑在 useBatchOps
+ * (与扫描页选择模式同款交互), 网格剔卡走 useImageFeed 订阅的 tv:moved/tv:trashed。
+ * 键盘守卫用 homeActive: 本页在 KeepAlive 白名单里, 休眠时不能抢别的页的按键。 */
+const {
+  selectMode, selected, moving, copying, moveOpen, copyOpen, folders: moveFolders,
+  toggleSelectMode, toggleSelect, selectAll, invertSel, clearSel,
+  onCardClick, batchDelete, openMove, openCopy, doMove, doCopy, onKey: batchKey,
+} = useBatchOps({
+  items: () => shownResults.value,
+  openImage: (it) => lb.open(it.path, { list: imgPaths.value }),
+})
+
+function onHomeKey(e) {
+  if (!homeActive.value) return
+  batchKey(e)
+}
+onMounted(() => window.addEventListener('keydown', onHomeKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onHomeKey))
 
 /** 组装查询参数 —— 与后端 parseQuery 的字段名一一对应 */
 function buildQuery(offset = 0) {
@@ -365,6 +388,12 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
         @change="withSource"
         @manage="goSources"
       />
+
+      <!-- 页面分工说明(2026-10-21 用户反馈: 新用户分不清看板/扫描各干什么) -->
+      <div class="page-tip">
+        💡 <b>看板</b> = 浏览<b>已入库</b>的图片(「来源」目录), 做标签搜索 / 组词 / 导出标签;
+        按<b>磁盘文件夹</b>整理文件(含未入库的图)去「扫描」页
+      </div>
 
       <div class="panel">
         <h2>筛选</h2>
@@ -578,9 +607,30 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
           @enter="applyNameFilter"
         />
         <TvSafetyToggle :counts="feed.unsafe.value" />
+        <TvButton
+          size="sm"
+          variant="ghost"
+          title="批量选择: 勾选后批量移动/复制/删除(浏览状态下 Ctrl+点击也可直接勾)"
+          @click="toggleSelectMode"
+        >☑ 选择</TvButton>
         <span class="spacer" />
         <span class="muted nowrap">已加载 {{ nfmt(shownResults.length) }} / 共 {{ nfmt(feed.total.value) }} 张 · 滚到底自动加载</span>
       </div>
+
+      <!-- 批量操作条: 选择模式下出现, 钉在滚动区外 -->
+      <TvBatchBar
+        v-if="selectMode"
+        :count="selected.size"
+        :moving="moving"
+        :copying="copying"
+        @sel-all="selectAll"
+        @sel-invert="invertSel"
+        @sel-clear="clearSel"
+        @exit="toggleSelectMode"
+        @move="openMove"
+        @copy="openCopy"
+        @del="batchDelete"
+      />
 
       <div class="grid-wrap">
         <TvImageGrid
@@ -593,7 +643,10 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
           favable
           :is-fav="fav.isFav"
           show-source
-          @open="(it) => lb.open(it.path, { list: imgPaths })"
+          :selectable="selectMode"
+          :selected-tags="selected"
+          @open="onCardClick"
+          @toggle-select="toggleSelect"
           @toggle-fav="toggleFav"
           @load-more="feed.loadMore"
           @hover="({ text, event }) => ui.showTip(text, event)"
@@ -613,6 +666,8 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 
     <TvRulesEditorModal v-model="showBlacklist" kind="blacklist" @saved="doSearch" />
     <TvRulesEditorModal v-model="showReplace" kind="replace" @saved="doSearch" />
+    <MoveTargetModal v-model="moveOpen" :count="selected.size" :folders="moveFolders" :busy="moving" @pick="doMove" />
+    <MoveTargetModal v-model="copyOpen" mode="copy" :count="selected.size" :folders="moveFolders" :busy="copying" @pick="doCopy" />
     <TvDupPanel v-model="showDup" />
     <TvExportPresetsModal
       v-model="showPresets"
@@ -640,6 +695,10 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 }
 
 .panel h2 { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+
+/* 页面分工说明: 一行小字, 解释看板/扫描的边界(新用户反馈过困惑) */
+.page-tip { font-size: 11px; color: var(--faint); padding: 0 2px; line-height: 1.6; }
+.page-tip b { color: var(--muted); }
 
 .bars-panel { padding: 12px 14px 14px; }
 .bars-box { margin-top: 10px; }
