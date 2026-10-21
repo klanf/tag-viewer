@@ -21,7 +21,7 @@
  * 可点击快速取消); 内联静态图标只留给已 ban(取消 ban 的非悬停入口)。
  * 内联图标与角标双层同显会叠在一起(2026-10-17 用户截图实测), 已删除。
  */
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { hasSeriesSuffix, isCharTag, subHueNo } from '@/utils/format.js'
 
 const props = defineProps({
@@ -130,32 +130,6 @@ const banTitle = computed(() => {
 const copyTitle = computed(() => `复制这个标签: ${props.tag}`)
 const cartTitle = computed(() => props.inCart ? `移出购物车: ${props.tag}` : `加入购物车: ${props.tag}`)
 const favTitle = computed(() => props.inFav ? `取消收藏标签: ${props.tag}` : `收藏这个标签: ${props.tag}`)
-
-/**
- * 悬停动作浮层只在**右侧动作区**才显形(2026-10-21 用户实测 bug 的根治)。
- *
- * 事故: 浮层是绝对定位盖在 pill 右段上的, 一旦 `pointer-events: auto`,
- * 它就把 pill 本体的点击**吃掉**了 —— 实测 pill 宽 67px、浮层宽 55px,
- * 光标停在 pill 正中间时 elementFromPoint 命中的是浮层里的图标,
- * 于是"点标签跳转"无声地变成了"复制/ban"(光箱里点了像没反应)。
- * 短标签(2~4 字母)几乎整颗被盖住, 越短越点不动。
- *
- * 修法不是去掉浮层(那是刻意的防抖设计: 浮层不占布局 -> 永不重排),
- * 而是:
- *   · 只有光标进入右侧的动作区才显形 —— 想点本体时浮层根本不出现;
- *   · 浮层背景 pointer-events: none(见 .acts 样式), 只有 13px 图标本身
- *     可点, 缝隙照样穿透到 pill;
- *   · pill 太窄(<44px)时整个不显形 —— 放不下也不该抢点击。
- */
-const actsOn = ref(false)
-function onPointerMove(e) {
-  const r = e.currentTarget?.getBoundingClientRect?.()
-  if (!r) return
-  const zone = Math.min(64, Math.max(28, r.width * 0.5))
-  const on = r.width >= 44 && e.clientX >= r.right - zone
-  if (on !== actsOn.value) actsOn.value = on
-}
-function onPointerLeave() { actsOn.value = false }
 
 function onClick(e) {
   emit('click', { tag: props.tag, event: e })
@@ -316,11 +290,7 @@ function onCtxMenu(e) {
   transform: translateX(6px);   /* 从右侧轻滑入, 保留"右扩展"的动效感 */
   transition: transform .18s ease-out, opacity .18s ease-out, visibility .18s;
 }
-/* 显形条件收窄(2026-10-21): 不再是"悬停 pill 就显形", 而是"光标进入右侧
- * 动作区(.acts.on)才显形" —— 否则浮层 pointer-events:auto 会把 pill 本体
- * 的点击吃掉, "点标签跳转"无声变成"复制/ban"(pill 宽 67px、浮层宽 55px,
- * 短标签几乎整颗被盖住)。键盘聚焦(:focus-within)保留原行为。 */
-.acts.on, .pill:focus-within .acts {
+.pill:hover .acts, .pill:focus-within .acts {
   opacity: 1; visibility: visible; pointer-events: auto;
   transform: translateX(0);
 }
