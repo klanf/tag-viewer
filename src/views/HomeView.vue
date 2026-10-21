@@ -14,7 +14,7 @@
  *   · 导出时剔除黑名单、应用替换规则、按需补背景标签(都由主进程完成)
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import TvSourceChips from '@/components/filter/TvSourceChips.vue'
 import TvWd14Banner from '@/components/board/TvWd14Banner.vue'
 import TvTagBars from '@/components/tag/TvTagBars.vue'
@@ -48,6 +48,7 @@ import { nfmt } from '@/utils/format.js'
 
 const src = useSourceStore()
 const router = useRouter()
+const route = useRoute()
 const app = useAppStore()
 const fav = useFavStore()
 const prefs = usePrefsStore()
@@ -348,11 +349,27 @@ function toggleFav(item) {
 
 /* ---------------- 生命周期 ---------------- */
 /**
+ * 深链(2026-10-21): 光箱「库内命中 n/m」徽章把命中的词条整批带过来筛
+ * (?q=a,b,c&mode=any&match=exact)。只认显式带 q 的路由 —— 普通切页
+ * (query 为空)不动现有筛选; q/mode/match 有就覆盖表单再搜。
+ */
+function applyRouteQuery() {
+  const qv = String(route.query.q || '').trim()
+  if (!qv) return
+  q.value = qv.split(/[,，]/).map((s) => s.trim()).filter(Boolean).join(',')
+  if (route.query.mode === 'any' || route.query.mode === 'all') mode.value = route.query.mode
+  if (route.query.match === 'exact' || route.query.match === 'contains') match.value = route.query.match
+}
+// 光箱跳过来时看板多半已挂载(KeepAlive), 靠 watch 接; 冷启动直落此路由靠 initHome 接
+watch(() => route.fullPath, () => { if (route.name === 'home') applyRouteQuery() })
+
+/**
  * 初始加载。两步都单独兜错 —— 任一失败都不能把另一步带下水
  * (踩过一次: await src.load() 抛了, 后面的 doSearch 就再也没执行, 首页空着)。
  */
 async function initHome() {
   rndSeed.value = Date.now()
+  applyRouteQuery()
   await Promise.allSettled([
     src.load().catch((e) => ui.err('来源统计加载失败: ' + e.message)),
     loadStats(),

@@ -111,6 +111,18 @@ function metaJump(tag) {
   /* 未命中: pill 是 copy 动作, 点了就复制(与 title 承诺一致) */
   ui.copy(tag).then(() => ui.ok('📋 已复制 · 库内没有这个标签', 'info', 1600))
 }
+
+/** 「库内命中 n/m」徽章点击(2026-10-21): 命中的词条整批带去看板筛图。
+ *  走路由深链(?q=a,b,c&mode=any&match=exact), 看板那边复用现成的搜索 ——
+ *  mode=any(任一命中, 42 个词全含的图基本没有, all 会白屏), match=exact
+ *  (命中的已是库内真词条, contains 会把 blue_eyes 拽上 blue_eyes_v2)。 */
+function jumpMetaHits() {
+  const tags = Object.values(metaHits.value).map((h) => h.tag)
+  if (!tags.length) return
+  lb.close()
+  router.push({ name: 'home', query: { q: tags.join(','), mode: 'any', match: 'exact' } })
+  ui.toast(`已按 ${tags.length} 个库内词条在看板筛选(任一命中)`, 'info', 2600)
+}
 async function copyMetaPrompt() { await ui.copy(metaPrompt.value); ui.ok('✅ 已复制图内原始提示词') }
 async function copyMetaTags() {
   await ui.copy(metaTags.value.join(', '))
@@ -456,11 +468,6 @@ function preheat() {
                 <button :class="{ on: metaMode === 'raw' }" title="一字不动展示原始提示词(自然语言/混合写法用)" @click="setMetaMode('raw')">原始</button>
               </div>
               <span class="src-name">{{ metaSrcLabel }}</span>
-              <span
-                v-if="metaHitCount"
-                class="meta-hit"
-                :title="`库内命中的词条已点亮并标出图片数, 点击直接跳到该标签的图片页; 灰色虚线的是库里没有的`"
-              >库内命中 {{ metaHitCount }}/{{ metaTags.length }}</span>
             </template>
           </div>
 
@@ -469,6 +476,17 @@ function preheat() {
 
           <!-- 图内元数据模式 -->
           <template v-else-if="tagSet === 'meta'">
+            <!-- 库内命中独立一行(2026-10-21 用户反馈: 挤在工具行里看不清):
+                 点徽章 = 把命中的词条整批带去看板筛图(任一命中+精确匹配) -->
+            <div v-if="metaMode === 'cats' && metaHitCount" class="meta-hit-row">
+              <button
+                class="meta-hit"
+                type="button"
+                :title="`把 ${metaHitCount} 个命中的库内词条整批带去看板筛图(任一命中); 单个词条直接点下面的标签`"
+                @click="jumpMetaHits"
+              >库内命中 {{ metaHitCount }}/{{ metaTags.length }} →</button>
+              <span class="meta-hit-hint">点这去看板筛图 · 单个词条点下面的标签</span>
+            </div>
             <TvTagList
               v-if="metaMode === 'cats' && metaTags.length"
               class="lb-tags"
@@ -767,12 +785,20 @@ a.badge.hint:hover { border-color: var(--accent); }
 .seg button.on { background: var(--accent-soft, rgba(59, 130, 246, .15)); color: var(--accent); font-weight: 500; }
 .seg.sub button { padding: 3px 9px; font-size: 11px; }
 .src-name { font-size: 11px; color: var(--muted); }
-/* 库内命中统计(2026-10-21): meta 模式工具行右侧的小徽章 */
+/* 库内命中行(2026-10-21): 独立一行不跟工具行挤; 徽章是按钮 —— 点了整批带去看板筛图 */
+.meta-hit-row {
+  display: flex; align-items: center; gap: 8px;
+  flex: 0 0 auto; padding: 2px 0;
+}
 .meta-hit {
   font-size: 11px; color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  border-radius: 999px; padding: 1px 8px; white-space: nowrap;
+  border-radius: 999px; padding: 2px 10px; white-space: nowrap;
+  background: transparent; cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
 }
+.meta-hit:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: var(--accent); }
+.meta-hit-hint { font-size: 11px; color: var(--muted); }
 
 /* 原始模式: 等宽整段展示, 一字未动 */
 .raw-wrap { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
