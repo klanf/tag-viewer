@@ -19,7 +19,7 @@ import { getWorkspace, getSettings, saveSettings, dataFile, applyTaggerEnv } fro
 import { bootstrap, status, whenReady } from './core/app-state.js'
 import {
   getStats, doSearch, getSeries, getCharacters, getSeriesMeta, postSeriesMeta,
-  getSuggest, getAllTags, getTagsForPath, getLightboxData, getTranslations,
+  getSuggest, getAllTags, getScanTagList, getTagsForPath, getLightboxData, getTranslations,
   getCoverCandidates, setCover,
 } from './core/query.js'
 import {
@@ -44,7 +44,7 @@ import {
 import { scanFolder, scanCacheStats, purgeScanCachePaths } from './core/scan.js'
 import { previewTagEdit, applyTagEdit } from './core/tagedit.js'
 import { openDb } from './core/store.js'
-import { loadCats, catOf } from './core/tagcats.js'
+import { loadCats, reloadCats, catOf } from './core/tagcats.js'
 import { findDuplicateGroups } from './core/dupcheck.js'
 import { loadIgnorePairs, addIgnorePairs, clearIgnorePairs } from './core/dupignore.js'
 import { copyImageWithNotice, openWithDialog } from './core/clipboardImage.js'
@@ -54,6 +54,7 @@ import {
 import {
   runTagger, taggerStatus, pauseTagger, taggerConfig, taggerState,
 } from './core/tagger.js'
+import { orphanStats, requeueOrphans } from './core/orphans.js'
 import {
   listFolders, addFolder, removeFolder, updateFolder, rescanFolder, openFolder, pruneMissing,
   purgeFolder, exportFoldersJson, refreshScanStats,
@@ -119,7 +120,7 @@ const DATA_CHANNELS = new Set([
   'stats:get', 'search:do',
     'series:get', 'characters:get',
     'covers:candidates',
-  'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'translate:get',
+  'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'translate:get', 'tags:scanList',
   'export:preview', 'export:save', 'export:text', 'export:cart',
   'scan:folder',
   'folders:open', 'folders:rescan',
@@ -554,6 +555,8 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     // ---------------- 标签 ----------------
     'suggest:get': safe((raw) => getSuggest(raw)),
     'tags:all': safe((raw) => getAllTags(raw)),
+    // 扫描文件夹的标签列表(2026-10-21): 数据源是扫描的持久缓存, 纯内存聚合
+    'tags:scanList': safe((raw) => getScanTagList(raw)),
     // tag 查重(2026-10-17): 两阶段相似度分组, 纯内存 2s 左右, 不落库。
     // 阈值走参数, 结果 { scanned, candidates, ignoredPairs, groups:[{score,shared,items}], elapsedMs }
     'dup:scan': safe((raw) => {
@@ -835,6 +838,28 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     }),
     'tagger:pause': safe(() => pauseTagger()),
 
+    /* 无角色/系列图片补识别(2026-10-21):
+     * 先预览(只统计), 用户确认后再入队并立刻开跑。
+     * 写回语义在 tagger.js applyTags: 可覆盖来源整体覆盖, legacy 只追加角色/系列。 */
+    'tagger:orphans': safe((raw = {}) => orphanStats({
+      includeLegacy: !!raw.includeLegacy,
+      folderId: Number(raw.folderId) || 0,
+    })),
+    'tagger:requeue-orphans': safe(async (raw = {}) => {
+      if (taggerState.running) return { ok: false, error: '已有反推在跑, 等它结束再补识别' }
+      const r = requeueOrphans({
+        includeLegacy: !!raw.includeLegacy,
+        folderId: Number(raw.folderId) || 0,
+      })
+      if (!r.queued) return { ok: false, error: '没有需要补识别的图片' }
+      runTagger({ onProgress: pushTaggerProgress, onlyOrphans: true })
+        .then((x) => {
+          if (x && !x.skipped) onTaggerDone?.(x)
+        })
+        .catch((e) => flog('tagger-err', `${e?.stack || e}`))
+      return { ok: true, started: true, ...r }
+    }),
+
     // ---------------- 设置弹窗(2026-10-15): 加速探测 / 偏好写入 / 检查更新 ----------------
     // 'tagger:accel': 探测当前反推解释器的 onnxruntime 加速能力(进程内有缓存 ——
     //   装包不会在会话中途变, 反复打开弹窗不重复跑子进程; 换了解释器则重探)。
@@ -852,9 +877,14 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
         usedProvider: taggerStatus().provider || '',
       }
     }),
-    // 'app:settings:set': 渲染层写反推偏好(provider 覆盖 / 阈值), 白名单在 workspace.saveSettings
+    // 'app:settings:set': 渲染层写反推偏好(provider 覆盖 / 阈值 / 模型预设), 白名单在 workspace.saveSettings
     'app:settings:set': safe((patch) => {
+      const prevModel = String(getSettings().taggerModel || '')
       const next = saveSettings(patch || {})
+      // 换了反推模型就立刻换分类词表(角色/系列索引), 不用等下一轮反推把服务拉起来。
+      if (patch && patch.taggerModel !== undefined && String(next.taggerModel || '') !== prevModel) {
+        try { reloadCats() } catch (e) { flog('tagger', `切换模型后分类重载失败: ${e?.message || e}`) }
+      }
       const env = applyTaggerEnv()
       return { settings: next, env }
     }),

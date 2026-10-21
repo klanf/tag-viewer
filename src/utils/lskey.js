@@ -72,8 +72,16 @@ export const LS = Object.freeze({
   sortScan: { key: 'tv_sort_scan' },
   sortSeries: { key: 'tv_sort_series' },
   sortTagImgs: { key: 'tv_sort_tagimgs' },
+  /** 系列页角色卡排序(名字/图片数) —— 与图片层 sortSeries 分开存 */
+  sortSeriesChars: { key: 'tv_sort_series_chars' },
+  /** 系列页图片每页数量(60/120/240) */
+  seriesImgPageSize: { key: 'tv_series_img_page_size' },
   /** 光箱复制过滤配置(2026-10-19) —— JSON 对象 { ban,char,view,safe,safe_level,replace,replace_set } */
   lbCopyFilters: { key: 'tv_lb_copy_filters' },
   /** 图片网格缩放(2026-10-20 Ctrl+滚轮) —— 行高基准的倍率(0.45~2.25), 网格四个页面共用 */
   gridZoom: { key: 'tv_grid_zoom' },
+  /** 标签页来源筛选(2026-10-21) —— 逗号分隔来源名, 空 = 全部 */
+  tagsSources: { key: 'tv_tags_sources' },
+  /** 标签页扫描文件夹筛选(2026-10-21) —— 逗号分隔文件夹路径, 空 = 不按扫描夹筛 */
+  tagsScanFolders: { key: 'tv_tags_scan_folders' },
 })

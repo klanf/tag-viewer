@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import {
   ds, statsFor, recordsFor, firstPathMap, recordByPath,
   seriesName, isCharacterTag, isCopyrightTag, charShortName, CATEGORY_LABELS, guessCategory,
+  rebuildSeriesIndex,
 } from './dataset.js'
 import { loadUserMeta, patchUserMeta } from './meta.js'
 import { loadSafetyState, hiddenAt } from './safety.js'
@@ -17,6 +18,8 @@ import { parseQuery, scopeRecords, searchCached, applySort, frozenKey } from './
 import { extractImagePrompt } from './png.js'
 import { promptToTags, dedupeTags } from './prompt.js'
 import { openDb } from './store.js'
+import { reloadCharLib } from './charlib.js'
+import { aggregateScanFolderTags } from './scan.js'
 
 // ---------------------------------------------------------------- 统计
 
@@ -182,10 +185,49 @@ function coverIdx(ids) {
   return best < 0 ? 0 : best
 }
 
+/** user_meta.hidden_chars 的小写集合 */
+function hiddenCharSet(meta) {
+  return new Set((meta.hidden_chars || []).map((t) => String(t).toLowerCase()))
+}
+
+/**
+ * custom_chars 按**有效系列**分组。
+ * 平时就是登记键; 一旦 char_series 把这个 tag 挪走, 归目标系列 —— 于是
+ * 「补出来的角色(包括 0 图)挪系列」只改纠正层, 不动 custom_chars, 撤销也干净。
+ */
+function customCharsBySeries(meta) {
+  const out = new Map()
+  const ov = meta.char_series || {}
+  for (const [series, list] of Object.entries(meta.custom_chars || {})) {
+    if (!Array.isArray(list)) continue
+    for (const raw of list) {
+      const t = String(raw || '').trim()
+      if (!t) continue
+      const target = ov[t.toLowerCase()] || series
+      let arr = out.get(target)
+      if (!arr) { arr = []; out.set(target, arr) }
+      if (!arr.includes(t)) arr.push(t)
+    }
+  }
+  return out
+}
+
+/** 卡片显示名: char_names 优先(按组的每个写法找), 否则回退短名 */
+function displayNameOf(meta, tags, fallback) {
+  const names = meta.char_names || {}
+  for (const t of tags) {
+    const v = names[String(t).toLowerCase()]
+    if (v) return v
+  }
+  return fallback
+}
+
 export function getSeries(raw = {}) {
   const p = parseQuery(raw)
   const srcSet = p.srcSet
   const meta = loadUserMeta()
+  const hidden = hiddenCharSet(meta)
+  const customBySeries = customCharsBySeries(meta)
   /** 「显示无本地图的角色」开关: 关(默认)时 0 图补全角色不计角色数、纯 0 图系列不出现 */
   const withZero = !!raw.withZero
   const cats = meta.categories
@@ -216,6 +258,7 @@ export function getSeries(raw = {}) {
     const groups = mergeCharVariants(ds.seriesChars.get(name) || new Map())
     const groupsShown = new Map()
     for (const [short, g] of groups) {
+      if (g.tags.some((t) => hidden.has(t.toLowerCase()))) continue
       let ids = g.ids
       if (srcSet) {
         ids = new Set()
@@ -224,9 +267,10 @@ export function getSeries(raw = {}) {
       }
       groupsShown.set(short, ids.size)
     }
-    // 合并 custom_chars 里该系列下的补充角色 —— 不算上的话, 列表页的角色数/图片数
-    // 会和该系列详情页对不上
-    const extraAll = (meta.custom_chars[name] || []).filter((t) => !groups.has(charShortName(t)))
+    // 合并补充角色 —— 按"有效系列"取(被 char_series 挪过来的也算),
+    // 不算上的话列表页的角色数/图片数会和详情页对不上
+    const extraAll = (customBySeries.get(name) || [])
+      .filter((t) => !hidden.has(t.toLowerCase()) && !groups.has(charShortName(t)))
     // 开关关(默认): 0 图的补全角色不计入角色数 —— 与 getCharacters 的过滤同一口径,
     // 不然列表页写 20 个角色、点进详情页只有 6 张卡(老坑, 见 mergeCharVariants 注释)
     const extra = withZero ? extraAll : extraAll.filter((t) => (tagCounter.get(t) || 0) > 0)
@@ -245,10 +289,10 @@ export function getSeries(raw = {}) {
   }
 
   // 自定义系列(不在系列索引里, 但用户在元数据里手动加过角色的)
-  const extraNames = Object.keys(meta.custom_chars).filter((n) => !seen.has(n))
+  const extraNames = [...customBySeries.keys()].filter((n) => !seen.has(n))
   const fpm = extraNames.length ? firstPathMap(srcSet) : null
   for (const name of extraNames) {
-    const tags = meta.custom_chars[name]
+    const tags = (customBySeries.get(name) || []).filter((t) => !hidden.has(t.toLowerCase()))
     const shownTags = withZero ? tags : tags.filter((t) => (tagCounter.get(t) || 0) > 0)
     // 开关关且该系列一个有图的角色都没有 -> 整个系列跳过(纯补全系列默认不出现)
     if (!shownTags.length) continue
@@ -329,6 +373,8 @@ export function getCharacters(raw = {}) {
   /** 「显示无本地图的角色」开关: 默认隐藏 images===0 的补全角色(与 getSeries 同参数同口径) */
   const withZero = !!raw.withZero
   const ccov = meta.custom_covers?.chars || {}
+  const hidden = hiddenCharSet(meta)
+  const customBySeries = customCharsBySeries(meta)
   const chars = ds.seriesChars.get(series) || new Map()
   const items = []
   const okCache = new Map()
@@ -340,6 +386,7 @@ export function getCharacters(raw = {}) {
   }
 
   for (const [, g] of mergeCharVariants(chars)) {
+    if (g.tags.some((t) => hidden.has(t.toLowerCase()))) continue
     let ids = g.ids
     if (srcSet) {
       ids = new Set()
@@ -350,18 +397,19 @@ export function getCharacters(raw = {}) {
     items.push({
       tag: rep,
       alt,
-      name: charShortName(rep),
+      name: displayNameOf(meta, g.tags, charShortName(rep)),
       images: ids.size,
       // 自定义封面优先(用户在卡片 ⚙️ 里挑的); 没设才走自动挑选(安全感知)
       thumb: ccov[rep] || ds.records[coverIdx(ids)].path,
     })
   }
 
-  // 用户手动补的角色(库里可能没有这个标签 -> 0 张图)
+  // 用户手动补的角色(库里可能没有这个标签 -> 0 张图), 按有效系列取
   const [tagCounter, , ] = statsFor(srcSet)
   const recs = recordsFor(srcSet)
   const groups = mergeCharVariants(chars)
-  for (const tag of meta.custom_chars[series] || []) {
+  for (const tag of customBySeries.get(series) || []) {
+    if (hidden.has(tag.toLowerCase())) continue
     // 跟"合并后"的组比, 不是跟原始 chars 比 —— 否则用户补的 `frieren` 会跟
     // 合并组(代表 tag = frieren_(sousou_no_frieren)) 又撞出一张重复卡
     if (groups.has(charShortName(tag))) continue
@@ -372,7 +420,10 @@ export function getCharacters(raw = {}) {
         if (rec.tags.includes(tag)) { thumb = rec.path; break }
       }
     }
-    items.push({ tag, alt: [], name: charShortName(tag), images: c, thumb: ccov[tag] || thumb })
+    items.push({
+      tag, alt: [], name: displayNameOf(meta, [tag], charShortName(tag)),
+      images: c, thumb: ccov[tag] || thumb,
+    })
   }
 
   const shown = withZero ? items : items.filter((it) => it.images > 0)
@@ -382,9 +433,17 @@ export function getCharacters(raw = {}) {
 
 export function getSeriesMeta() { return loadUserMeta() }
 
-export function postSeriesMeta(body) {
+export async function postSeriesMeta(body) {
+  const before = loadUserMeta()
   const r = patchUserMeta(body)
   if (r.ok === false) return { error: '保存失败' }
+  // 影响"角色 -> 系列"的字段变了才重建索引: 补/挪/屏蔽角色都要让系列页立刻变,
+  // 但只改分类/封面/显示名时不该白等一次 85k 条重建。
+  const sig = (m) => JSON.stringify([m.custom_chars, m.char_series, m.hidden_chars])
+  if (sig(before) !== sig(r.meta)) {
+    reloadCharLib()
+    await rebuildSeriesIndex()
+  }
   return r.meta
 }
 
@@ -453,6 +512,16 @@ export function getAllTags(raw = {}) {
 
   // ban 标记打在**全量**上再切页: hide_banned 的 total / bannedHidden 才算得对
   // (原来只标记返回页 —— 一万条 exact-Set 查找是微秒级, 不差这点)
+  const bannedCount = markBanAndZh(items, bl, tr)
+  const visible = hideBanned ? items.filter((it) => !it.banned) : items
+  const total = visible.length
+  const page = limit > 0 ? visible.slice(offset, offset + limit) : visible
+
+  return { total, offset, returned: page.length, tags: page, bannedHidden: bannedCount }
+}
+
+/** 给 [{tag,count}] 打 ban 标记 + 挂中文 —— getAllTags / getScanTagList 共用 */
+function markBanAndZh(items, bl, tr) {
   let bannedCount = 0
   for (const it of items) {
     const tl = it.tag.toLowerCase()
@@ -467,11 +536,49 @@ export function getAllTags(raw = {}) {
     const zh = tr.get(tl)
     if (zh) it.zh = zh
   }
+  return bannedCount
+}
+
+/**
+ * 扫描文件夹的标签列表(2026-10-21) —— 标签页「按扫描夹筛选」的后端。
+ *
+ * 数据源是扫描的持久增量缓存(scan_cache.json): 每个条目在扫描时就用
+ * promptToTags 规范化过了, 这里纯内存聚合, 不读任何图片文件。
+ * 入参/返回形状与 getAllTags 对齐(q/offset/limit/hide_banned), 前端一套
+ * 加载逻辑跑两种模式, 不用分支维护两份渲染。
+ */
+export function getScanTagList(raw = {}) {
+  const offset = clampInt(raw.offset, 0, 0, 10_000_000)
+  const limit = clampInt(raw.limit, 120, 0, 1_000_000)
+  const kw = String(raw.q || '').trim().toLowerCase()
+  const hideBanned = raw.hide_banned === '1' || raw.hide_banned === 1 || raw.hide_banned === true
+  const paths = String(raw.paths || '')
+    .split(',').map((s) => s.trim()).filter(Boolean)
+
+  if (!paths.length) {
+    return { total: 0, offset, returned: 0, tags: [], bannedHidden: 0, scan: { images: 0, withTags: 0 } }
+  }
+
+  const { counts, images, withTags, missing } = aggregateScanFolderTags(paths)
+  const tr = translateMap()
+  const bl = blacklistMatcher()
+
+  const items = []
+  for (const [t, c] of counts) {
+    if (kw && !t.toLowerCase().includes(kw)) continue
+    items.push({ tag: t, count: c })
+  }
+  items.sort((a, b) => b.count - a.count)
+
+  const bannedCount = markBanAndZh(items, bl, tr)
   const visible = hideBanned ? items.filter((it) => !it.banned) : items
   const total = visible.length
   const page = limit > 0 ? visible.slice(offset, offset + limit) : visible
 
-  return { total, offset, returned: page.length, tags: page, bannedHidden: bannedCount }
+  return {
+    total, offset, returned: page.length, tags: page, bannedHidden: bannedCount,
+    scan: { images, withTags, missing },
+  }
 }
 
 // ---------------------------------------------------------------- 自定义封面

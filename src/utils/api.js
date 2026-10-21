@@ -118,6 +118,8 @@ export const api = {
   // 标签
   suggest: (q) => call('suggest:get', q),
   allTags: (q) => call('tags:all', q),
+  // 扫描文件夹的标签列表(2026-10-21): paths=逗号分隔文件夹路径, 其余参数同 allTags
+  scanTagList: (q) => call('tags:scanList', q),
   tagsCats: () => call('tags:cats'),
   dupScan: (opts) => call('dup:scan', opts),
   dupIgnoreAdd: (pairs) => call('dup:ignore:add', { pairs }),
@@ -199,6 +201,9 @@ export const api = {
   taggerConfig: () => call('tagger:config'),
   taggerRun: (opts) => call('tagger:run', opts),
   taggerPause: () => call('tagger:pause'),
+  // 无角色/系列图片补识别: 预览统计 / 入队并开跑
+  taggerOrphanStats: (opts) => call('tagger:orphans', opts),
+  taggerRequeueOrphans: (opts) => call('tagger:requeue-orphans', opts),
   // 设置弹窗(2026-10-15): 加速探测 / 偏好写入 / 检查更新 / 版本号
   taggerAccel: () => call('tagger:accel'),
   settingsSet: (patch) => call('app:settings:set', patch),

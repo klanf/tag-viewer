@@ -26,10 +26,12 @@ import TvTagSuggestInput from '@/components/tag/TvTagSuggestInput.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvChip from '@/components/base/TvChip.vue'
 import TvState from '@/components/base/TvState.vue'
+import TvSourceChips from '@/components/filter/TvSourceChips.vue'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import { useTagFavStore } from '@/stores/useTagFavStore.js'
+import { useSourceStore } from '@/stores/useSourceStore.js'
 import { api } from '@/utils/api.js'
 import { readLS, writeLS, LS } from '@/utils/lskey.js'
 import { nfmt } from '@/utils/format.js'
@@ -38,6 +40,7 @@ const ui = useUiStore()
 const router = useRouter()
 const safety = useSafetyStore()
 const tagFav = useTagFavStore()
+const srcStore = useSourceStore()   // 只借它的 list/totalImages(数据), 选择是本页自己的
 
 const kw = ref('')
 const BATCH = 300
@@ -47,6 +50,42 @@ const tags = ref([])          // 已加载的(服务端过滤后)
 const loading = ref(false)
 const error = ref('')
 const hideBanned = ref(readLS(LS.tagsHideBanned.key) !== '0')   // 默认隐藏
+
+/* ---------------- 来源 / 扫描夹筛选(2026-10-21) ----------------
+ * 两条筛选各自独立记忆(localStorage), 语义互斥:
+ *   · 来源 = 标签库的来源名(as_source 文件夹) —— 走 allTags 的 source 参数,
+ *     服务端按 srcSet 过滤, total 是筛后的真实数
+ *   · 扫描夹 = 扫描页登记的文件夹(as_scan) —— 走 tags:scanList, 数据源是
+ *     扫描的持久缓存(scan_cache.json, tags 在扫描时就已 promptToTags 规范化),
+ *     纯内存聚合不读图片。**选了扫描夹就按扫描夹出列表**(来源条灰掉) ——
+ *     扫描夹的图不进库, 两套口径没有交集, 混着筛只会让人迷惑。
+ */
+const splitLS = (k) => (readLS(k) || '').split(',').map((s) => s.trim()).filter(Boolean)
+const srcSel = ref(splitLS(LS.tagsSources.key))
+const scanSel = ref(splitLS(LS.tagsScanFolders.key))
+function persistSels() {
+  writeLS(LS.tagsSources.key, srcSel.value.join(','))
+  writeLS(LS.tagsScanFolders.key, scanSel.value.join(','))
+}
+const scanMode = computed(() => scanSel.value.length > 0)
+
+/** 扫描夹筛选条( chips ): 来自 folders 登记表, count 用夹的图片数 */
+const scanChips = ref([])          // [{name, images, value: path}]
+async function loadScanFolders() {
+  try {
+    const d = await api.folders()
+    scanChips.value = (d.folders || [])
+      .filter((f) => f.as_scan)
+      .map((f) => ({ name: f.name || f.label || f.path, images: f.images || 0, value: f.path }))
+      .sort((a, b) => b.images - a.images)
+  } catch { /* 扫描服务没起也不挡标签页 */ }
+}
+const scanTotalImages = computed(() => scanChips.value.reduce((s, f) => s + (f.images || 0), 0))
+/** 扫描模式的缓存情况提示(来自 scanTagList 的回执) */
+const scanNote = ref(null)         // { images, withTags, missing: [] }
+
+watch(srcSel, () => { persistSels(); reload() })
+watch(scanSel, () => { persistSels(); reload() })
 
 /* ---------------- ★ 只看收藏(2026-10-08) ----------------
  * 收藏在**前端 localStorage**(useTagFavStore), 服务端不知道 —— 所以「只看收藏」
@@ -92,16 +131,18 @@ watch(favOnly, (v) => {
 })
 
 /* ---------------- 安全模式: 敏感词从列表藏掉(客户端, 即时生效) ---------------- */
+/** 只看收藏是标签库口径的(收藏词的 count/zh 从 allTags 查) —— 扫描夹模式暂不参与 */
+const favActive = computed(() => favOnly.value && !scanMode.value)
 const visibleTags = computed(() => {
-  const base = favOnly.value ? favRows.value : tags.value
+  const base = favActive.value ? favRows.value : tags.value
   if (!safety.on) return base
   return base.filter((t) => !safety.isHidden({ tags: [t.tag] }))
 })
 /** 当前档位下藏掉了多少个词(只统计已加载的那批) */
 const safetyHidden = computed(() =>
-  safety.on ? (favOnly.value ? favRows.value : tags.value).length - visibleTags.value.length : 0)
+  safety.on ? (favActive.value ? favRows.value : tags.value).length - visibleTags.value.length : 0)
 /** 标题栏"共 N 个"的口径跟着视图走 */
-const shownTotal = computed(() => favOnly.value ? favRows.value.length : total.value)
+const shownTotal = computed(() => favActive.value ? favRows.value.length : total.value)
 
 /* ---------------- 滚动加载 ---------------- */
 const scrollEl = ref(null)
@@ -121,14 +162,19 @@ async function loadMore(force = false) {
   loading.value = true
   error.value = ''
   try {
-    const d = await api.allTags({
+    const base = {
       q: kw.value.trim(),
       offset: tags.value.length,
       limit: BATCH,
       hide_banned: hideBanned.value ? '1' : '',
-    })
+    }
+    // 两种模式同一个返回形状(total/tags/bannedHidden), 下面的装配逻辑不分家
+    const d = scanMode.value
+      ? await api.scanTagList({ ...base, paths: scanSel.value.join(',') })
+      : await api.allTags({ ...base, source: srcSel.value.length ? srcSel.value.join(',') : undefined })
     total.value = d.total || 0
     bannedHidden.value = d.bannedHidden || 0
+    scanNote.value = d.scan || null
     if (d.tags?.length) tags.value.push(...d.tags)
     initialized.value = true
   } catch (e) {
@@ -198,6 +244,8 @@ async function toggleBan(tag) {
 onMounted(() => {
   safety.ensureLoaded()
   loadMore()
+  srcStore.load()          // 来源条的数据(list/totalImages), 选择是本页自己的
+  loadScanFolders()        // 扫描夹条的数据(folders 登记表)
   if (favOnly.value) loadFavRows()   // 开关记忆是开的: 首屏就要收藏列表
 })
 </script>
@@ -231,23 +279,44 @@ onMounted(() => {
         />
         <TvChip
           :label="favOnly ? `★ 只看收藏(${tagFav.list.length})` : '★ 只看收藏'"
-          :active="favOnly"
-          :title="favOnly
-            ? '正显示收藏的标签; 点一下回到全部标签'
-            : `只显示收藏的标签(现在 ${tagFav.list.length} 个, 收藏入口: 光箱/本页 pill 上的 ★)`"
-          @click="favOnly = !favOnly"
+          :active="favActive"
+          :title="scanMode
+            ? '扫描夹模式下不参与(收藏词条的统计是标签库口径), 清空扫描夹后恢复'
+            : favOnly
+              ? '正显示收藏的标签; 点一下回到全部标签'
+              : `只显示收藏的标签(现在 ${tagFav.list.length} 个, 收藏入口: 光箱/本页 pill 上的 ★)`"
+          :class="{ dim: scanMode }"
+          @click="!scanMode && (favOnly = !favOnly)"
         />
         <span class="hint">共 {{ nfmt(shownTotal) }} 个标签</span>
         <span v-if="hideBanned && bannedHidden > 0" class="hint faint banned-hint">已隐藏 {{ nfmt(bannedHidden) }} 个已 ban</span>
         <span v-if="safetyHidden > 0" class="hint faint safety-hint">🛡 已隐藏 {{ nfmt(safetyHidden) }} 个敏感词</span>
+        <span v-if="scanMode && scanNote" class="hint faint scan-hint">
+          📁 缓存 {{ nfmt(scanNote.withTags) }}/{{ nfmt(scanNote.images) }} 张有标签<template v-if="scanNote.missing?.length"> · ⚠️ {{ scanNote.missing.length }} 个夹还没有缓存(去扫描页打开/重扫一次)</template>
+        </span>
         <span class="hint faint">点标签看它的图片 · 🚫 = 导出时剔除 · 灰色删除线 = 已 ban</span>
         <TvSafetyToggle />
       </div>
 
+      <!-- 筛选行: 来源(标签库口径) + 扫描夹(扫描缓存口径), 互斥 —— 选了扫描夹按扫描夹出列表 -->
+      <TvSourceChips
+        v-model="srcSel"
+        :sources="srcStore.list"
+        :total="srcStore.totalImages"
+        :class="{ dim: scanMode }"
+        :title="scanMode ? '正在按扫描文件夹筛选, 清空「扫描夹」后这里生效' : ''"
+      />
+      <TvSourceChips
+        v-model="scanSel"
+        label="📁 扫描夹:"
+        :sources="scanChips"
+        :total="scanTotalImages"
+      />
+
       <div ref="scrollEl" class="scroll" @scroll="loadMore">
-        <TvState v-if="favOnly && favLoading" state="loading" text="加载收藏..." />
-        <TvState v-else-if="loading && !tags.length && !favOnly" state="loading" text="加载中..." />
-        <TvState v-else-if="error && !tags.length && !favOnly" state="error" :text="`加载失败: ${error}`" />
+        <TvState v-if="favActive && favLoading" state="loading" text="加载收藏..." />
+        <TvState v-else-if="loading && !tags.length && !favActive" state="loading" text="加载中..." />
+        <TvState v-else-if="error && !tags.length && !favActive" state="error" :text="`加载失败: ${error}`" />
         <TvTagList
           v-else
           :tags="visibleTags"
@@ -263,8 +332,8 @@ onMounted(() => {
           @hover="({ zh, event }) => ui.showTip(zh, event)"
           @leave="ui.hideTip"
         />
-        <div v-if="loading && tags.length && !favOnly" class="more-hint">加载中...</div>
-        <div v-else-if="!favOnly && done && tags.length" class="more-hint">到底了 · 共 {{ nfmt(total) }} 个标签</div>
+        <div v-if="loading && tags.length && !favActive" class="more-hint">加载中...</div>
+        <div v-else-if="!favActive && done && tags.length" class="more-hint">到底了 · 共 {{ nfmt(total) }} 个标签</div>
       </div>
     </div>
 
@@ -290,4 +359,9 @@ onMounted(() => {
 .faint { color: var(--faint); }
 .scroll { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 4px; }
 .more-hint { color: var(--faint); font-size: 11px; text-align: center; padding: 10px 0 4px; }
+/* 筛选行与工具栏的间距; 来源条在扫描夹模式下灰掉(不可点, 语义互斥) */
+.filter-row { flex: 0 0 auto; }
+.filter-row + .filter-row { margin-top: -4px; }
+.dim { opacity: .45; pointer-events: none; }
+.scan-hint { color: var(--accent2, var(--muted)); }
 </style>

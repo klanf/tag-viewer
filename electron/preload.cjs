@@ -24,7 +24,7 @@ const CHANNELS = new Set([
   // 自定义封面(2026-10-06): 系列卡/角色卡 ⚙️ 挑封面
   'covers:candidates', 'covers:set',
   // 标签
-  'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'tags:filterCopy', 'translate:get',
+  'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'tags:filterCopy', 'translate:get', 'tags:scanList',
   'tags:edit:preview', 'tags:edit:apply',
   // 标签分类映射(2026-10-16 展示分组用)
   'tags:cats',
@@ -55,8 +55,9 @@ const CHANNELS = new Set([
   'scan:pickFolder', 'scan:folder',
   // 增量入库(磁盘 <-> tags.db 对齐)
   'ingest:status', 'ingest:run', 'ingest:pause',
-  // WD14 反推(消费 tag_queue)
+  // WD14 反推(消费 tag_queue) + 无角色/系列补识别
   'tagger:status', 'tagger:config', 'tagger:run', 'tagger:pause',
+  'tagger:orphans', 'tagger:requeue-orphans',
   // 设置弹窗(2026-10-15): 加速探测 / 偏好写入 / 检查更新 / 版本号
   'tagger:accel', 'app:settings:set', 'app:checkUpdate', 'app:version',
   'tagger:setup-download',
