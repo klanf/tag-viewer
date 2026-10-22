@@ -1,6 +1,6 @@
 <script setup>
 /**
- * 分类管理 —— 系列归类 / 补充角色 / 隐藏分类 三个页签
+ * 分类管理 —— 系列归类 / 补充角色 / 隐藏分类 / 屏蔽角色 四个页签
  * =================================================
  * 旧版这套 UI 全靠字符串拼 DOM: comboInit('cmSeries') + comboRender + comboItemHTML +
  * comboOpen + comboFilter + comboKey 六件套, 靠 `$(id + 'Search')` 找元素,
@@ -71,6 +71,7 @@ const tabs = [
   { value: 'series', label: '系列归类' },
   { value: 'char', label: '补充角色' },
   { value: 'hide', label: '隐藏分类' },
+  { value: 'hidechar', label: '屏蔽角色' },
 ]
 
 async function load() {
@@ -86,6 +87,7 @@ async function load() {
     meta.value.custom_categories ||= []
     meta.value.hidden_categories ||= []
     meta.value.custom_chars ||= {}
+    meta.value.hidden_chars ||= []
     // 系列中文名(用于中文搜索) —— 一次批量查, 失败了也不影响主流程
     try {
       const names = props.seriesList.map((s) => s.name).join(',')
@@ -109,8 +111,11 @@ async function save() {
       custom_categories: m.custom_categories,
       hidden_categories: m.hidden_categories,
       custom_chars: m.custom_chars,
+      hidden_chars: m.hidden_chars,
     })
     if (r?.error) { ui.err('保存失败: ' + r.error); return false }
+    // 后端是权威(空数组会真的删掉分组) —— 用它回填, 本地不会留"空分组"残影
+    if (r && typeof r === 'object') meta.value = r
     return true
   } catch (e) {
     ui.err('保存失败: ' + e.message)
@@ -155,6 +160,15 @@ async function toggleHideCat(cat) {
   if (await save()) emit('saved')
 }
 
+/** 解除屏蔽: 只从 hidden_chars 移除, 归属/显示名等纠正保持不变 */
+async function unhideChar(tag) {
+  meta.value.hidden_chars = meta.value.hidden_chars.filter((t) => t !== tag)
+  if (await save()) {
+    ui.ok(`已恢复角色: ${tag}`)
+    emit('saved')
+  }
+}
+
 async function addCustomChar() {
   if (!charSeries.value) { ui.warn('请先选择系列'); return }
   const tag = String(charTag.value || '').trim()
@@ -171,8 +185,8 @@ async function addCustomChar() {
 
 async function delCustomChar(seriesName, tag) {
   const arr = meta.value.custom_chars[seriesName] || []
+  // 留空数组而不是删 key: 后端按"提交了哪些系列"逐个替换, 空数组才会真的删掉分组
   meta.value.custom_chars[seriesName] = arr.filter((t) => t !== tag)
-  if (!meta.value.custom_chars[seriesName].length) delete meta.value.custom_chars[seriesName]
   if (await save()) { ui.ok('已移除'); emit('saved') }
 }
 </script>
@@ -280,7 +294,7 @@ async function delCustomChar(seriesName, tag) {
       </div>
 
       <!-- 隐藏分类 -->
-      <div v-else class="pane">
+      <div v-else-if="tab === 'hide'" class="pane">
         <div class="tip">
           勾选表示「隐藏」—— 系列列表里默认不显示该分类(数据还在, 切到对应 tab 仍能看到)。
         </div>
@@ -296,6 +310,28 @@ async function delCustomChar(seriesName, tag) {
         </div>
         <div class="hint">
           已隐藏 <b>{{ meta.hidden_categories.length }}</b> 个分类
+        </div>
+      </div>
+
+      <!-- 屏蔽角色 -->
+      <div v-else class="pane">
+        <div class="tip">
+          推错的角色在角色卡片上点 ✏️ → 勾「屏蔽」即可。被屏蔽的角色不会出现在系列页,
+          也不参与系列计数; 图片上的标签本身不动, 在这里可以随时恢复。
+        </div>
+        <div class="chips">
+          <TvChip
+            v-for="t in meta.hidden_chars"
+            :key="t"
+            :label="t"
+            tone="warn"
+            removable
+            @remove="unhideChar(t)"
+          />
+          <span v-if="!meta.hidden_chars.length" class="faint">还没有屏蔽任何角色</span>
+        </div>
+        <div class="hint">
+          已屏蔽 <b>{{ meta.hidden_chars.length }}</b> 个角色
         </div>
       </div>
     </template>

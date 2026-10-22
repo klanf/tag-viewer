@@ -57,10 +57,12 @@ if (STATUS_ONLY) {
   if (JSON_ONLY) { console.log(JSON.stringify(st, null, 2)); process.exit(0) }
   out('')
   out('=== 反推环境 ===')
+  out(`  模型预设      ${st.config.modelPresetLabel || st.config.modelPreset || '(未定)'}`)
   out(`  服务脚本      ${st.config.script || '(未找到)'}`)
   out(`  python        ${st.config.python || '(未探测到)'}`)
   out(`  WD14 模型     ${st.config.model || '(未找到)'}`)
   out(`  标签表        ${st.config.csv || '(未找到)'}`)
+  out(`  预处理        ${st.config.preprocess || 'auto'}`)
   out(`  可用          ${st.config.available ? '是' : `否 —— 缺 ${st.config.missing.join(' / ')}`}`)
   out('')
   out('=== 队列 ===')

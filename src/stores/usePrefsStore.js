@@ -61,6 +61,7 @@ export const usePrefsStore = defineStore('prefs', () => {
     sortScan: ['name', 'name_desc', 'folder', 'time_desc', 'time_asc', 'size_desc', 'size_asc', 'tags_desc'],
     sortSeries: ['path', 'time', 'random'],
     sortTagImgs: ['path', 'time', 'random'],
+    sortSeriesChars: ['name', 'name_desc', 'images', 'images_asc'],
   }
   function pickSort(key, def) {
     const v = readLS(LS[key].key)
@@ -70,10 +71,18 @@ export const usePrefsStore = defineStore('prefs', () => {
   const sortScan = ref(pickSort('sortScan', 'name'))
   const sortSeries = ref(pickSort('sortSeries', 'path'))
   const sortTagImgs = ref(pickSort('sortTagImgs', 'path'))
+  const sortSeriesChars = ref(pickSort('sortSeriesChars', 'name'))
   watch(sortHome, (v) => writeLS(LS.sortHome.key, v))
   watch(sortScan, (v) => writeLS(LS.sortScan.key, v))
   watch(sortSeries, (v) => writeLS(LS.sortSeries.key, v))
   watch(sortTagImgs, (v) => writeLS(LS.sortTagImgs.key, v))
+  watch(sortSeriesChars, (v) => writeLS(LS.sortSeriesChars.key, v))
+
+  /** 系列页图片每页数量 —— 只认 UI 提供的三档, 坏值回落 60 */
+  const PAGE_SIZES = [60, 120, 240]
+  const storedPageSize = Number(readLS(LS.seriesImgPageSize.key))
+  const seriesImgPageSize = ref(PAGE_SIZES.includes(storedPageSize) ? storedPageSize : 60)
+  watch(seriesImgPageSize, (v) => writeLS(LS.seriesImgPageSize.key, v))
 
   /**
    * 勾选状态下且该图缺背景 -> 追加背景补全标签(与导出行为一致)。
@@ -88,6 +97,6 @@ export const usePrefsStore = defineStore('prefs', () => {
 
   return {
     bgAuto, gridPageSize, trashAsk, maybeAddBg, seriesShowZero, lbCopyFilters,
-    sortHome, sortScan, sortSeries, sortTagImgs,
+    sortHome, sortScan, sortSeries, sortTagImgs, sortSeriesChars, seriesImgPageSize,
   }
 })

@@ -1067,4 +1067,20 @@ const NON_SERIES_GROUPS_REF = new Set([
   'category', 'tag', 'group', 'cosplay', 'artwork', 'image',
   'food', 'animal', 'plant', 'vehicle', 'furniture', 'instrument',
   'nature', 'weather', 'sky', 'water', 'fire', 'light', 'dark',
+  /* 下面这批由四份反推词表(v0.9 + v1.0 的 1008/336/672)统计得出:
+   * 这些括号组名下**从来没有** character/copyright 标签, 全是道具、部位、
+   * 材质、概念。缺了它们, xxx_(weapon) 这种就会被括号兜底当成作品系列。 */
+  'weapon', 'polearm', 'projectile', 'sword', 'bow', 'armor', 'helmet',
+  'scabbard', 'mecha', 'mask', 'headwear', 'headdress', 'hat', 'hair',
+  'hairstyle', 'makeup', 'cosmetics', 'piercing', 'jewelry', 'ornament',
+  'decoration', 'glowstick', 'container', 'bottle', 'cup', 'bowl',
+  'vessel', 'toy', 'doll', 'statue', 'sculpture', 'machine', 'robot',
+  'tool', 'hardware', 'software', 'computing', 'board_game', 'chess',
+  'flower', 'fruit', 'gemstone', 'stone', 'tree', 'seaweed', 'organ',
+  'anatomy', 'species', 'constellation', 'planet', 'element', 'gold',
+  'emblem', 'font', 'letter', 'phrase', 'meme', 'original', 'western',
+  'fandom', 'trend', 'topic', 'site', 'city', 'structure', 'geometry',
+  'texture', 'substance', 'action', 'gesture', 'riding', 'summon',
+  'cheerleading', 'hanetsuki', 'sport', 'expression', 'sex', 'sexual',
+  'nonsexual', 'mtf', 'ftm', 'otf', 'aircraft', 'automobile', 'brand',
 ])

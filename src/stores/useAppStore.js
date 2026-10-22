@@ -52,6 +52,15 @@ export const useAppStore = defineStore('app', () => {
    */
   const tagger = ref(null)
 
+  /* ---- 封面(2026-10-22) ----
+   * coverTick: 主进程每次写盘成功都会广播 cover:changed, 这里只把它变成一个自增的
+   * "版本号"。为什么不用弹窗的 emit('saved') 通知刷新: 用户在「下载中」关掉弹窗时,
+   * 写盘照样完成了但那句 emit 丢了 —— 于是封面只能重启才显示。订阅全局推送就与
+   * 弹窗生死无关, 而且购物车/系列页两处都能收到。
+   * autoCover: 批量自动拉封面的运行状态(主进程后台任务, 进度走 covers:auto:progress)。 */
+  const coverTick = ref(0)
+  const autoCover = ref(null)
+
   /* ---- 标签分类映射(2026-10-16, 展示分组着色) ----
    * { tag: cat } —— cat 形如 'count'/'char'/'series'/'artist'/'meta'/'other'/'general:服饰'。
    * 主进程在 tags:cats 一次给全(字典 1.3 万条, 几百 KB); 数据重载后拉一次即可。
@@ -289,7 +298,12 @@ export const useAppStore = defineStore('app', () => {
       applyStatus(st)
     })
     onPush('ingest:progress', (p) => { ingest.value = p })
-    onPush('tagger:progress', (p) => { tagger.value = p })
+    // 进度推送来自 taggerState, 不含 config/queue —— 直接替换会让设置弹窗里的
+    // 模型路径瞬间变空、误报"未找到"(2026-10-21 实测: 开机自动反推期间打开设置)。
+    onPush('tagger:progress', (p) => {
+      const prev = tagger.value || {}
+      tagger.value = { ...prev, ...p, config: p.config || prev.config, queue: p.queue || prev.queue }
+    })
     // 黑名单变更后的自动导出结果 —— 订阅放在 app store 里(而不是首页):
     // ban 大多发生在标签页 / 光箱, 那时首页可能压根没挂载。
     onPush('export:auto', (payload) => notifyAutoExport(payload))
@@ -308,6 +322,10 @@ export const useAppStore = defineStore('app', () => {
       }
       setup.value = p || null
     })
+    // 封面写盘成功 -> 自增版本号。订阅放全局层: 发起方(换封面弹窗/批量任务)和
+    // 显示方(系列页/购物车抽屉)不在同一个组件里, 而且弹窗可能已经被关掉了。
+    onPush('cover:changed', () => { coverTick.value++ })
+    onPush('covers:auto:progress', (p) => { autoCover.value = p })
 
     applyStatus(await api.status())
     void pullSettings()
@@ -317,6 +335,8 @@ export const useAppStore = defineStore('app', () => {
     // 同步可能在页面渲染之前就已经开跑(它只等数据集就绪, 不等界面), 所以补拉一次
     try { ingest.value = await api.ingestStatus() } catch { /* 主进程还没注册, 忽略 */ }
     try { tagger.value = await api.taggerStatus() } catch { /* 同上 */ }
+    // 批量拉封面同理: 任务是在主进程跑的, 界面重开/切页之后要能把进度条接回来
+    try { autoCover.value = await api.coversAutoState() } catch { /* 忽略 */ }
     // 同理: 待导出的排程可能是在这个窗口出现之前就排下的(主进程的定时器不等界面)
     void pullAutoState()
 
@@ -409,9 +429,40 @@ export const useAppStore = defineStore('app', () => {
     return tagger.value
   }
 
+  /**
+   * 批量自动拉封面(2026-10-22): 主进程后台任务, 启动即返回, 之后全靠
+   * covers:auto:progress 推送更新状态 —— 所以发起的页面切走/关掉都不影响。
+   * targets: [{kind:'chars'|'series', key, label}]
+   */
+  async function autoCoverRun(targets, opts = {}) {
+    if (autoCover.value?.running) return { error: '已经有一批在跑了' }
+    if (!targets?.length) return { error: '没有要处理的角色' }
+    // 先本地点亮: 第一个推送到达前那 1~2 秒界面也得有反应(与 ingestRun 同一个理由)
+    autoCover.value = { running: true, total: targets.length, done: 0, ok: 0, failed: 0, skipped: 0, current: '准备中 ...', errors: [] }
+    return api.coversAutoRun({
+      targets,
+      source: opts.source || 'danbooru',
+      rating: opts.rating || 'g',
+      // solo(只要单人图): 加一个标签条件, 匿名时 Danbooru 的 2 标签额度会被占满(见 booru.js)
+      solo: !!opts.solo,
+      skipCustom: opts.skipCustom !== false,
+    })
+  }
+
+  async function autoCoverCancel() {
+    try { autoCover.value = await api.coversAutoCancel() } catch { /* 忽略 */ }
+    return autoCover.value
+  }
+
+  async function autoCoverRefresh() {
+    try { autoCover.value = await api.coversAutoState() } catch { /* 忽略 */ }
+    return autoCover.value
+  }
+
   return {
     phase, error, progress, stats, translate, workspace, config, sourcesInfo, loadMs, epoch,
     theme, setTheme, ready, loading, totalImages, ingest, tagger, setup, setupProbe, autoExport,
+    coverTick, autoCover, autoCoverRun, autoCoverCancel, autoCoverRefresh,
     init, reload, applyStatus, bumpEpoch, toggleTheme, applyTheme,
     ingestRun, ingestPause, taggerRun, taggerPause, taggerRefresh,
     pullAutoState, flushAutoNow, clearAutoPending,

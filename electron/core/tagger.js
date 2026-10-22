@@ -34,9 +34,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { openDb, rebuildTags } from './store.js'
-import { sortTagString } from './tagcats.js'
+import { sortTagString, reloadCats, isCharOrSeries, unwrapWeight } from './tagcats.js'
 import { dataFile, getSettings, getWorkspace } from './workspace.js'
 import { PROJECT_ROOT } from './paths.js'
+import {
+  TAGGER_MODELS, DEFAULT_TAGGER_MODEL, normalizeTaggerModel,
+  presetIdForModelPath, taggerModelOptions,
+} from './tagger-models.js'
 import { ensureQueueTable, queueStats } from './ingest.js'
 import { flog } from './filelog.js'
 
@@ -51,13 +55,7 @@ const READY_TIMEOUT = 45000
 /** 同一次运行里最多重启几次服务 —— 超过就认为环境坏了, 停止整轮 */
 const MAX_RESTARTS = 3
 
-const MODEL_BASENAME = 'wd-pixai-tagger-v0.9'
-const MODEL_FILE = `${MODEL_BASENAME}.onnx`
-const CSV_FILE = `${MODEL_BASENAME}.csv`
-// HuggingFace 仓库(deepghs/pixai-tagger-v0.9-onnx)里的**原始文件名** ——
-// 下载后不改名直接丢进 models/ 也要认(见 assetCandidates, 2026-10-02)
-const MODEL_FILE_ORIG = 'model.onnx'
-const CSV_FILE_ORIG = 'selected_tags.csv'
+const DEFAULT_PRESET = TAGGER_MODELS[DEFAULT_TAGGER_MODEL]
 
 /* ------------------------------------------------------------ 状态 */
 
@@ -86,6 +84,8 @@ function emptyStats() {
     tagged: 0,           // 成功反推并写库
     created: 0,          // 其中"新插入 images 行"的数量
     updated: 0,          // 其中"覆盖已有 wd14 标签"的数量
+    merged: 0,           // 补识别: legacy 旧标签里追加了角色/系列
+    unchanged: 0,        // 补识别: legacy 旧标签已含这些角色/系列, 无新增
     skippedExisting: 0,  // 防御性跳过: 路径这会儿已有 legacy/未知来源标签
     noResult: 0,         // 反推跑通但一条标签都没过阈值
     missing: 0,          // 磁盘上已不存在
@@ -195,28 +195,56 @@ function commandCandidates(opts = {}) {
   return out
 }
 
-/** 模型 / 标签表候选。显式 > 环境变量 > 仓库内 models/ > 数据目录 models/。
- *  每个目录里**改名版与原始版都认**(原始版排后 —— 两种名字同时存在时, 认改名版)。 */
-function assetCandidates(kind, opts = {}) {
-  const file = kind === 'model' ? MODEL_FILE : CSV_FILE
-  const orig = kind === 'model' ? MODEL_FILE_ORIG : CSV_FILE_ORIG
+/** 模型文件会出现的目录, 按可信度排序。显式路径(env/settings)在 assetCandidates 里另排在前面。 */
+function modelDirs() {
+  const out = []
+  const push = (p) => {
+    if (!p) return
+    const v = path.resolve(p)
+    if (!out.includes(v)) out.push(v)
+  }
+  if (process.env.TV_OLD_ROOT) push(path.join(process.env.TV_OLD_ROOT, 'model'))
+  push(path.join(PROJECT_ROOT, 'models'))
+  if (dataFile) {
+    try { push(path.join(path.dirname(dataFile('tags.db')), 'models')) } catch { /* 忽略 */ }
+  }
+  return out
+}
+
+/**
+ * 当前选中的预设。`opts.preset` 显式给了就用它(测试/CLI), 否则读 settings.taggerModel。
+ * 返回 '' 表示"自动": 优先旧的自定义路径, 最后才落到默认 v0.9。
+ */
+function selectedPresetId(opts = {}) {
+  if (opts.preset !== undefined) return normalizeTaggerModel(opts.preset)
+  try { return normalizeTaggerModel(getSettings().taggerModel) } catch { return '' }
+}
+
+/**
+ * 模型 / 标签表候选。
+ *
+ * 优先级(与旧行为兼容):
+ *   opts 显式路径 > TV_WD14_MODEL/CSV 环境变量
+ *   > [明确选了预设] 该预设的文件名
+ *   > [自动] settings.wd14Model/wd14Csv 旧自定义路径 > 默认预设 v0.9 的文件名
+ *
+ * 明确选了预设时**不再回退旧路径**: 用户点 v1.0 就是要 v1.0, 文件缺了应该
+ * 在界面上报缺, 而不是偷偷跑起 v0.9 让他以为切换成功了。
+ */
+function assetCandidates(kind, opts = {}, preset = null) {
   const envKey = kind === 'model' ? 'TV_WD14_MODEL' : 'TV_WD14_CSV'
   const setKey = kind === 'model' ? 'wd14Model' : 'wd14Csv'
   const out = []
   const push = (p) => { if (typeof p === 'string' && p.trim()) out.push(String(p).trim()) }
   push(opts[kind])
   push(process.env[envKey])
-  try { push(getSettings()[setKey]) } catch { /* 忽略 */ }
-  const oldRoot = process.env.TV_OLD_ROOT
-  if (oldRoot) push(path.join(oldRoot, 'model', file))
-  push(path.join(PROJECT_ROOT, 'models', file))
-  push(path.join(PROJECT_ROOT, 'models', orig))
-  if (dataFile) {
-    try {
-      const dir = path.dirname(dataFile('tags.db'))
-      push(path.join(dir, 'models', file))
-      push(path.join(dir, 'models', orig))
-    } catch { /* 忽略 */ }
+  const namesOf = (p) => (kind === 'model' ? p.models : p.csvs)
+  const dirs = modelDirs()
+  if (preset) {
+    for (const dir of dirs) for (const n of namesOf(preset)) push(path.join(dir, n))
+  } else {
+    try { push(getSettings()[setKey]) } catch { /* 命令行工具可能没 initWorkspace */ }
+    for (const dir of dirs) for (const n of namesOf(DEFAULT_PRESET)) push(path.join(dir, n))
   }
   return out
 }
@@ -232,11 +260,15 @@ export function resolveTagger(opts = {}) {
     process.env.TV_TAGGER_SCRIPT,
     path.join(PROJECT_ROOT, 'tools', 'tagger_serve.py'),
   ])
+  const presetId = selectedPresetId(opts)
+  const preset = presetId ? TAGGER_MODELS[presetId] : null
   return {
     script,
     cmds: commandCandidates(opts),
-    models: assetCandidates('model', opts),
-    csvs: assetCandidates('csv', opts),
+    models: assetCandidates('model', opts, preset),
+    csvs: assetCandidates('csv', opts, preset),
+    presetId,
+    preset,
     provider: opts.provider || process.env.TV_TAGGER_PROVIDER || 'auto',
     threshold: Number(opts.threshold ?? process.env.TV_WD14_THRESHOLD ?? 0.35),
     charThreshold: Number(opts.charThreshold ?? process.env.TV_WD14_CHAR_THRESHOLD ?? 0.85),
@@ -244,32 +276,59 @@ export function resolveTagger(opts = {}) {
   }
 }
 
+/**
+ * 把候选列表收敛成"实际要 spawn 的那一组", 并算出预处理模式与服务签名。
+ * 签名用于 ensureService: 模型/词表/provider/阈值任一变化都重启服务,
+ * 否则改了设置仍会复用上一次已经加载了旧模型的那个常驻进程。
+ */
+function computeLaunch(opts = {}) {
+  const cfg = resolveTagger(opts)
+  const model = firstExisting(cfg.models)
+  const csv = firstExisting(cfg.csvs)
+  const detectedPresetId = presetIdForModelPath(model)
+  // 预处理跟着**实际解析到的文件**走(env 覆盖了路径时也不能用错模式);
+  // 认不出文件时交给 Python 侧 auto 按输入尺寸/词表阈值判断。
+  const effectivePresetId = detectedPresetId || cfg.presetId || ''
+  const preset = effectivePresetId ? TAGGER_MODELS[effectivePresetId] : null
+  const preprocess = preset ? preset.preprocess : 'auto'
+  const sig = [model, csv, cfg.provider, cfg.threshold, cfg.charThreshold, preprocess].join('|')
+  return { cfg, model, csv, detectedPresetId, presetId: effectivePresetId, preset, preprocess, sig }
+}
+
 /** 供 UI / CLI 展示的"当前配置长什么样" */
 export function taggerConfig(opts = {}) {
-  const c = resolveTagger(opts)
-  const model = firstExisting(c.models)
-  const csv = firstExisting(c.csvs)
+  const launch = computeLaunch(opts)
+  const c = launch.cfg
   // 解释器: 优先报"磁盘上真的存在"的那一个(conda 常规位置 / 用户指定),
   // 都不存在时退到 PATH 上的兜底名(python / py) —— 那个没法静态验证,
   // 所以另给一个 `pythonOnDisk` 让界面说实话。
   const onDisk = c.cmds.find((x) => /[\\/]/.test(x.bin) && firstExisting([x.bin]))
   const first = onDisk || c.cmds[0] || null
+  const shownPresetId = launch.presetId || DEFAULT_TAGGER_MODEL
+  const shownPreset = TAGGER_MODELS[shownPresetId]
   return {
     script: c.script,
     scriptExists: !!c.script,
     python: first ? first.label : '',
     pythonOnDisk: !!onDisk,
     pythons: c.cmds.map((x) => x.label),
-    model,
-    csv,
-    modelExists: !!model,
-    csvExists: !!csv,
+    model: launch.model,
+    csv: launch.csv,
+    modelExists: !!launch.model,
+    csvExists: !!launch.csv,
     provider: c.provider,
+    // 模型预设: selected 是设置里的原值('auto' 或 id), preset 是最终生效的那一档
+    modelPreset: shownPresetId,
+    modelPresetLabel: shownPreset.label,
+    modelPresetExperimental: shownPreset.experimental,
+    modelPresetSelected: c.presetId || 'auto',
+    preprocess: launch.preprocess,
+    presets: taggerModelOptions(),
     // 静态能判定的三样: 服务脚本 + 模型 + 标签表。
     // **解释器刻意不算进来**: PATH 上那个 python 可能是 Windows 商店的占位程序
     // (本机就有), 静态看它"存在", 真跑起来连 onnxruntime 都导不进来。
     // 只有真拉起来、收到 ready 才知道这一组能不能用 —— 那是 probe 的活。
-    available: !!(c.script && model && csv),
+    available: !!(c.script && launch.model && launch.csv),
   }
 }
 
@@ -282,7 +341,21 @@ let buf = ''
 let readyInfo = null           // 最近一次 ready 事件
 let readyWaiters = []          // 等 ready 的 resolve 队列
 let activeConfig = null
+let activeSig = ''             // 当前常驻进程的模型/词表/provider/阈值指纹(变了就重启)
+let catsCsv = ''               // 分类词表最近一次重载用的 CSV
 const logTail = []             // 子进程 stderr 的尾部若干行, 出错时回给人看
+
+/** 反推词表与分类词表保持同一份 CSV(切模型后角色/系列索引要跟着换) */
+function reloadCatsFor(csv) {
+  if (!csv || csv === catsCsv) return
+  try {
+    reloadCats({ csvPath: csv })
+    catsCsv = csv
+  } catch (e) {
+    // 分类是增强, 不能因为它把已经就绪的反推服务拖垮
+    try { flog('tagger', `分类词表重载失败: ${e?.message || e}`) } catch { /* 忽略 */ }
+  }
+}
 
 function pushTail(line) {
   const s = String(line || '').trim()
@@ -389,19 +462,23 @@ function waitReady(timeoutMs) {
  * 这样"PATH 上的 python 是商店占位程序""模型还没下载"这类情况都能自动越过。
  */
 export async function startService(opts = {}, onLog) {
-  const cfg = resolveTagger(opts)
-  const model = firstExisting(cfg.models)
-  const csv = firstExisting(cfg.csvs)
+  const launch = computeLaunch(opts)
+  const cfg = launch.cfg
+  const { model, csv } = launch
   const tried = []
 
   if (!cfg.script) {
     return { ok: false, reason: `找不到反推服务脚本(tools/tagger_serve.py)`, tried, cfg }
   }
   if (!model) {
-    return { ok: false, reason: `找不到 WD14 模型(${MODEL_FILE})，请放到 <仓库>/models/ 或用 TV_WD14_MODEL 指定`, tried, cfg }
+    const name = launch.preset ? launch.preset.name : 'WD14'
+    const want = launch.preset ? launch.preset.models[0] : DEFAULT_PRESET.models[0]
+    return { ok: false, reason: `找不到 ${name} 模型(${want})，请放到 <数据目录>/models/ 或换一个模型预设`, tried, cfg }
   }
   if (!csv) {
-    return { ok: false, reason: `找不到标签表(${CSV_FILE})，请放到 <仓库>/models/ 或用 TV_WD14_CSV 指定`, tried, cfg }
+    const name = launch.preset ? launch.preset.name : 'WD14'
+    const want = launch.preset ? launch.preset.csvs[0] : DEFAULT_PRESET.csvs[0]
+    return { ok: false, reason: `找不到 ${name} 标签表(${want})，请放到 <数据目录>/models/ 或换一个模型预设`, tried, cfg }
   }
 
   for (const c of cfg.cmds) {
@@ -416,6 +493,7 @@ export async function startService(opts = {}, onLog) {
     const args = [...c.pre, cfg.script,
       '--model', model, '--csv', csv,
       '--provider', prov,
+      '--preprocess', launch.preprocess,
       '--threshold', String(cfg.threshold),
       '--char-threshold', String(cfg.charThreshold)]
     let child
@@ -450,8 +528,12 @@ export async function startService(opts = {}, onLog) {
     }
     const provider = (info.providers || []).includes('CUDAExecutionProvider') && prov !== 'cpu'
       ? 'CUDAExecutionProvider' : 'CPUExecutionProvider'
-    activeConfig = cfg
-    flog('tagger', `服务已就绪 ${c.label} provider=${info.providers?.join('/') || '?'} 握手 ${Date.now() - t0}ms`)
+    activeConfig = { ...cfg, model, csv, preprocess: launch.preprocess }
+    activeSig = launch.sig
+    // 分类词表(角色/系列反查)必须跟反推用的是同一份 CSV —— 切 v1.0 后
+    // 角色从 4,9xx 条涨到 8,3xx 条, 不重载的话看板还按 v0.9 的索引归段。
+    reloadCatsFor(csv)
+    flog('tagger', `服务已就绪 ${c.label} preset=${launch.presetId || 'custom'} provider=${info.providers?.join('/') || '?'} 握手 ${Date.now() - t0}ms`)
     onLog?.(`反推服务已就绪(${c.label}, 握手 ${Date.now() - t0}ms)`)
     return { ok: true, python: py, model, csv, provider, providers: info.providers || [], tried, cfg }
     }
@@ -461,12 +543,15 @@ export async function startService(opts = {}, onLog) {
   return { ok: false, reason: tried.length ? tried[tried.length - 1] : '没有可用的 python', tried, cfg }
 }
 
-/** 已就绪的话直接用; 没起来就拉。**服务崩了这里会自动重启** */
+/** 已就绪的话直接用; 没起来 / 参数变了就拉。**服务崩了这里会自动重启** */
 async function ensureService(opts = {}) {
-  if (proc && !proc.killed && readyInfo && readyInfo.ok) {
+  const launch = computeLaunch(opts)
+  if (proc && !proc.killed && readyInfo && readyInfo.ok && activeSig === launch.sig) {
     return { ok: true, provider: taggerState.provider || readyInfo.providers?.[0] || '', python: taggerState.python }
   }
-  if (proc) { try { proc.kill() } catch { /* 忽略 */ } ; proc = null }
+  // 参数变了(换预设 / 改阈值 / 换解释器): 旧进程还常驻着上一个模型, 不能复用。
+  // stopTagger 不阻塞, startService 里 assign 新 proc; 旧进程 exit 有身份判断兜底。
+  if (proc) stopTagger()
   const r = await startService(opts)
   if (r.ok) {
     taggerState.provider = r.provider
@@ -537,18 +622,43 @@ export function stopTagger() {
  *   · tags_src='meta'/'meta+wd14' -> **覆盖**(自带 tag 只是暂存, 反推为准;
  *     tags_src 归一为 'wd14'。meta 部分不再保留 —— 文件重扫时 ingest 规则 3
  *     会按 mtime 变化重新写回 meta 并重新入队, 不会真丢)
- *   · legacy / 未知来源      -> 一律让路(skipped) —— 老手工导入的标签是孤本
+ *   · legacy / 未知来源      -> 普通反推一律让路(skipped) —— 老手工导入的标签是孤本;
+ *     但「补识别」入队(mode='merge')时例外: **只把新认出的角色/系列追加进去**,
+ *     原标签、tags_src、mtime/size 全保留(用户 2026-10-21 要的"补角色"语义)。
  *
- * @returns {'created'|'updated'|'skipped'}
+ * @returns {'created'|'updated'|'merged'|'unchanged'|'skipped'}
  */
-function applyTags(db, row, tags, mtimeMs, size, now) {
+function tagKey(t) { return unwrapWeight(t).trim().toLowerCase() }
+
+function applyTags(db, row, tags, mtimeMs, size, now, mode = '') {
   const p = row.path
   const cur = db.prepare('SELECT id, tags, tags_src FROM images WHERE path = ? ORDER BY id LIMIT 1').get(p)
   if (cur) {
     const src = String(cur.tags_src || '')
     const curTags = String(cur.tags || '')
     const hasTags = curTags.trim().length > 0
-    if (hasTags && src !== 'wd14' && src !== 'meta' && src !== 'meta+wd14') return 'skipped'
+    const overwritable = src === 'wd14' || src === 'meta' || src === 'meta+wd14'
+    if (hasTags && !overwritable) {
+      if (mode !== 'merge') return 'skipped'
+      // 入队时 tags 以逗号串形式传进来(见下面的 batch.push), 这里统一成数组再比
+      const incoming = Array.isArray(tags)
+        ? tags
+        : String(tags || '').split(',').map((x) => x.trim()).filter(Boolean)
+      const have = new Set(curTags.split(',').map(tagKey).filter(Boolean))
+      const add = []
+      for (const t of incoming) {
+        const k = tagKey(t)
+        if (!k || have.has(k) || !isCharOrSeries(t)) continue
+        have.add(k)
+        add.push(String(t).trim())
+      }
+      if (!add.length) return 'unchanged'
+      // 原顺序一字不动, 新认出的角色/系列追加在末尾(不调 sortTagString —— 那会重排孤本)
+      const next = [...curTags.split(',').map((x) => x.trim()).filter(Boolean), ...add]
+      db.prepare('UPDATE images SET tags = ?, gone = 0, tagged_at = ? WHERE id = ?')
+        .run(next.join(','), now, cur.id)
+      return 'merged'
+    }
     db.prepare(`UPDATE images SET tags = ?, tags_src = 'wd14', mtime_ms = ?, size = ?,
                 gone = 0, tagged_at = ? WHERE id = ?`)
       .run(sortTagString(tags), mtimeMs, size, now, cur.id)
@@ -569,11 +679,14 @@ function setQueueState(db, p, state, attempts, note) {
 /**
  * 跑一轮反推。
  *
- * @param {{onProgress?:(s:object)=>void, limit?:number, python?:string,
+ * @param {{onProgress?:(s:object)=>void, limit?:number, onlyFolderId?:number,
+ *          onlyOrphans?:boolean, python?:string,
  *          model?:string, csv?:string, provider?:string}} opts
+ *   onlyOrphans=true 只消费「补识别」入队的行(mode='orphan'|'merge') ——
+ *   不会顺带把队列里别的裸图跑掉。
  * @returns {Promise<object>} stats
  */
-export async function runTagger({ onProgress, limit = 0, onlyFolderId = 0, ...svcOpts } = {}) {
+export async function runTagger({ onProgress, limit = 0, onlyFolderId = 0, onlyOrphans = false, ...svcOpts } = {}) {
   if (taggerState.running) return { skipped: true, reason: 'busy' }
   taggerState.running = true
   taggerState.paused = false
@@ -590,9 +703,18 @@ export async function runTagger({ onProgress, limit = 0, onlyFolderId = 0, ...sv
     ensureQueueTable(db)
 
     const q0 = queueStats(db)
-    stats.queued = q0.pending
-    if (!q0.pending) {
-      emit(onProgress, { phase: 'done', note: '没有待反推的图', stats, done: 1, total: 1 })
+    let pending = q0.pending
+    if (onlyOrphans) {
+      try {
+        pending = db.prepare("SELECT COUNT(*) AS n FROM tag_queue WHERE state = 'pending' AND mode IN ('orphan','merge')").get().n
+      } catch { pending = 0 }
+    }
+    stats.queued = pending
+    if (!pending) {
+      emit(onProgress, {
+        phase: 'done', stats, done: 1, total: 1,
+        note: onlyOrphans ? '没有待补识别的图' : '没有待反推的图',
+      })
       taggerState.lastRunAt = Date.now()
       taggerState.lastRunMs = 0
       return stats
@@ -621,13 +743,14 @@ export async function runTagger({ onProgress, limit = 0, onlyFolderId = 0, ...sv
     })
 
     /* 只跑某个来源(来源管理页「⚡ 反推」): 加 folder_id 过滤。
+     * onlyOrphans: 只跑「补识别」入队的行, 队列里别的裸图不掺和。
      * 队列里压着别的来源的图时, 用户只想先看到这一个来源出标签 —— 不能让他等全库。 */
-    const sql = onlyFolderId
-      ? `SELECT path, folder_id, src_id, size, mtime_ms, attempts FROM tag_queue
-                 WHERE state = 'pending' AND folder_id = ? ORDER BY added_at, path`
-      : `SELECT path, folder_id, src_id, size, mtime_ms, attempts FROM tag_queue
-                 WHERE state = 'pending' ORDER BY added_at, path`
-    const all = onlyFolderId ? db.prepare(sql).all(onlyFolderId) : db.prepare(sql).all()
+    const where = ["state = 'pending'"]
+    const args = []
+    if (onlyOrphans) where.push("mode IN ('orphan','merge')")
+    if (onlyFolderId) { where.push('folder_id = ?'); args.push(Number(onlyFolderId)) }
+    const all = db.prepare(`SELECT path, folder_id, src_id, size, mtime_ms, attempts, mode
+                            FROM tag_queue WHERE ${where.join(' AND ')} ORDER BY added_at, path`).all(...args)
     const rows = limit > 0 ? all.slice(0, limit) : all
     stats.picked = rows.length
     emit(onProgress, { phase: 'infer', total: rows.length, done: 0, note: `反推 ${rows.length} 张` })
@@ -643,11 +766,15 @@ export async function runTagger({ onProgress, limit = 0, onlyFolderId = 0, ...sv
       try {
         for (const b of batch) {
           if (b.kind === 'tag') {
-            b.result = applyTags(db, b.row, b.tags, b.mtime, b.size, b.now)
+            b.result = applyTags(db, b.row, b.tags, b.mtime, b.size, b.now, b.row.mode)
             if (b.result === 'created') stats.created++
             else if (b.result === 'updated') stats.updated++
+            else if (b.result === 'merged') stats.merged++
+            else if (b.result === 'unchanged') stats.unchanged++
             else stats.skippedExisting++
-            setQueueState(db, b.row.path, 'done', b.attempts, '')
+            setQueueState(db, b.row.path, 'done', b.attempts,
+              b.result === 'merged' ? '已补角色/系列'
+                : b.result === 'unchanged' ? '无新增角色/系列' : '')
           } else if (b.kind === 'noresult') {
             // 跑通了但一条都没过阈值。**不能留 pending** —— 否则每次同步都会重新读这张图、
             // 再重新反推一遍, 永远循环。标 done 且不写 images(不制造空标签行)。
@@ -682,10 +809,12 @@ export async function runTagger({ onProgress, limit = 0, onlyFolderId = 0, ...sv
 
       // ---- 防御性复查: legacy/未知来源的已有标签不碰(孤本); meta/meta+wd14/wd14
       //      都放行 —— 一律覆盖写回, tags_src 归一为 wd14(applyTags 里分流)。
+      //      例外: 补识别入队的 merge 行是**明确要往 legacy 里补角色/系列**, 放行。
       //      并发场景下队列里可能躺着一张"这会儿刚被别的路子打上 legacy 标签"的图。
       const cur = db.prepare('SELECT tags, tags_src FROM images WHERE path = ? ORDER BY id LIMIT 1').get(row.path)
       const curSrc = String(cur?.tags_src || '')
-      if (cur && String(cur.tags || '').trim() && curSrc !== 'wd14' && curSrc !== 'meta' && curSrc !== 'meta+wd14') {
+      const overwritableSrc = curSrc === 'wd14' || curSrc === 'meta' || curSrc === 'meta+wd14'
+      if (cur && String(cur.tags || '').trim() && !overwritableSrc && row.mode !== 'merge') {
         batch.push({ kind: 'skip', row, attempts: Number(row.attempts) || 0, note: '已有标签, 跳过' })
         continue
       }
@@ -776,7 +905,9 @@ export async function runTagger({ onProgress, limit = 0, onlyFolderId = 0, ...sv
     stats.ms = Date.now() - t0
     const parts = [
       `反推成功 ${stats.tagged}`,
-      stats.updated ? `合并/覆盖 ${stats.updated}` : '',
+      stats.updated ? `覆盖 ${stats.updated}` : '',
+      stats.merged ? `补角色/系列 ${stats.merged}` : '',
+      stats.unchanged ? `无新增 ${stats.unchanged}` : '',
       stats.noResult ? `无结果 ${stats.noResult}` : '',
       stats.skippedExisting ? `已有标签跳过 ${stats.skippedExisting}` : '',
       stats.missing ? `磁盘已无 ${stats.missing}` : '',
@@ -829,12 +960,18 @@ export function taggerStatus() {
       script: cfg.script || '',
       model: cfg.model || '',
       csv: cfg.csv || '',
+      modelPreset: cfg.modelPreset,
+      modelPresetLabel: cfg.modelPresetLabel,
+      modelPresetExperimental: cfg.modelPresetExperimental,
+      modelPresetSelected: cfg.modelPresetSelected,
+      preprocess: cfg.preprocess,
+      presets: cfg.presets,
       // "静态看着能不能反推"(不拉起进程)。真跑一轮时还会再探一次, 那里才是权威。
       available: cfg.available,
       missing: [
         !cfg.scriptExists ? '反推服务脚本' : '',
-        !cfg.modelExists ? 'WD14 模型' : '',
-        !cfg.csvExists ? '标签表' : '',
+        !cfg.modelExists ? `${cfg.modelPresetLabel || 'WD14'} 模型` : '',
+        !cfg.csvExists ? `${cfg.modelPresetLabel || 'WD14'} 标签表` : '',
       ].filter(Boolean),
     },
   }

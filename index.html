@@ -4,7 +4,10 @@
   <meta charset="UTF-8" />
   <!-- CSP: 只允许加载本地资源 + 自定义图片协议 tv:, 不允许远程脚本/内联脚本。
        connect-src 的 ws:/http://localhost 是给 vite dev server 的 HMR 用的。
-       style-src 需要 unsafe-inline —— Vue 的 scoped 样式在 dev 下是动态注入的。 -->
+       style-src 需要 unsafe-inline —— Vue 的 scoped 样式在 dev 下是动态注入的。
+       img-src **不放任何远端主机**(2026-10-22): 「网上挑封面」的缩略图由主进程代拉后
+       经 tv://remote 送进来 —— 渲染进程直连 Danbooru 图床会被 Cloudflare 403,
+       而且少开一个口子总是好的。搜索请求同样只走主进程, connect-src 也不放远端。 -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self';
                  img-src 'self' tv: data: blob:;

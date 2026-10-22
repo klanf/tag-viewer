@@ -71,6 +71,9 @@ import { searchStats, clearSearchCache } from './core/search.js'
 import { moveFile, copyFile } from './core/fileTransfer.js'
 import { spawnOpenWith, detectPhotoshop, INPAINT_EXE } from './core/externalApp.js'
 import { charLibDiag } from './core/charlib.js'
+import { booruSearch, booruDownload, booruAuthTest } from './core/booru.js'
+import { booruAuthSummary, writeBooruAuth } from './core/booru-auth.js'
+import { runAutoCovers, autoCoversState, cancelAutoCovers } from './core/coverfetch.js'
 import { translateInfo } from './core/translate.js'
 import { resolveFavorites } from './core/favResolve.js'
 import { dimsForPaths } from './core/dims.js'
@@ -121,6 +124,8 @@ const DATA_CHANNELS = new Set([
   'stats:get', 'search:do',
     'series:get', 'characters:get',
     'covers:candidates',
+    // 批量拉封面: 内部要 setCover -> recordByPath(读内存数据集), 所以要等就绪
+    'covers:auto:run', 'covers:auto:state',
   'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'translate:get', 'tags:scanList',
   'export:preview', 'export:save', 'export:text', 'export:cart',
   'scan:folder',
@@ -145,6 +150,13 @@ function gated(handler) {
 
 function mainWindow() {
   return BrowserWindow.getAllWindows()[0] || null
+}
+
+/** 推给所有窗口(主窗 + 光箱/详情窗)。只推 mainWindow() 会让副窗口错过状态变化。 */
+function broadcast(channel, payload) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send(channel, payload)
+  }
 }
 
 /** 把文件夹存进「移动到」预设列表(按路径去重, 上限 50), 结果随 invoke 返回给渲染层弹 toast */
@@ -551,7 +563,37 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'series:meta:post': safe((body) => postSeriesMeta(body)),
     'characters:get': safe((raw) => getCharacters(raw)),
     'covers:candidates': safe((raw) => getCoverCandidates(raw)),
-    'covers:set': safe((raw) => setCover(raw)),
+    /* 设封面成功后**主动广播** cover:changed(2026-10-22):
+     * 原先只靠换封面弹窗 emit('saved') 让父组件刷新 —— 用户在「下载中」把弹窗关掉,
+     * 下载和写盘照样在主进程完成了, 但那句 emit 却没送到(或送到时列表已经切走了),
+     * 于是"数据已经改了、界面还是旧封面, 得重启才看得到"。改成由写盘方通知所有窗口,
+     * 谁在看这一层谁自己刷, 与弹窗活不活着无关。 */
+    'covers:set': safe(async (raw) => {
+      const r = await setCover(raw)
+      if (r && !r.error && raw?.key) broadcast('cover:changed', { kind: r.kind, key: String(raw.key), path: String(raw.path || '') })
+      return r
+    }),
+    // 网上挑封面(2026-10-22): 只发远端请求/写 user_picks, 不读内存数据集,
+    // 所以刻意**不进 DATA_CHANNELS** —— 数据集没就绪时也该能搜图挑封面。
+    'booru:search': safe((raw) => booruSearch(raw)),
+    'booru:download': safe((raw) => booruDownload(raw)),
+    /* Danbooru API Key(2026-10-22): 明文只存主进程 userData/booru_auth.json,
+     * get 回的是摘要(有没有配 + 用户名), set 也只回摘要 —— 密钥不进 settings.json、
+     * 不进渲染层缓存, 免得跟着每条 app:settings:set 的回包到处跑。 */
+    'booru:auth:get': safe(() => booruAuthSummary()),
+    'booru:auth:set': safe((raw) => writeBooruAuth(raw)),
+    'booru:auth:test': safe(() => booruAuthTest()),
+    /* 批量自动拉封面(2026-10-22): 启动即返回, 进度走 covers:auto:progress 推送 ——
+     * 与 tagger:run / ingest:run 同一套形状(见那两处注释), 渲染层关掉弹窗/切页都不影响。
+     * 走 setCover 要读数据集(recordByPath), 所以这三个通道**进** DATA_CHANNELS。 */
+    'covers:auto:run': safe((raw) => {
+      const out = runAutoCovers(raw, { onProgress: (p) => broadcast('covers:auto:progress', p) })
+      // 不 await: 任务可能跑几十分钟, invoke 只能立即回一个"已启动"
+      out.catch((e) => log('批量拉封面异常: ' + (e?.message || e)))
+      return { ok: true, started: true }
+    }),
+    'covers:auto:state': safe(() => autoCoversState()),
+    'covers:auto:cancel': safe(() => cancelAutoCovers()),
 
     // ---------------- 标签 ----------------
     'suggest:get': safe((raw) => getSuggest(raw)),
@@ -1191,4 +1233,4 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
 }
 
 /** 主进程主动推送的事件名(渲染进程用 tv.on 订阅) */
-export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress', 'tagger:progress', 'export:auto', 'cart:auto', 'app:toast']
+export const PUSH_EVENTS = ['app:progress', 'app:reloaded', 'ingest:progress', 'tagger:progress', 'export:auto', 'cart:auto', 'app:toast', 'cover:changed', 'covers:auto:progress']

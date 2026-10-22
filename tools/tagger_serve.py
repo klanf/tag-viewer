@@ -132,32 +132,38 @@ def log(msg):
 
 # ============================================================ 标签表 / 预处理
 
-def load_labels(csv_path):
-    """读 WD14 CSV -> (标签列表, general 起始索引, character 起始索引)
+CAT_ALIASES = {
+    '0': 'general', '1': 'artist', '3': 'copyright', '4': 'character',
+    '9': 'rating',
+}
 
-    与 classify_images_by_wd14.load_labels 逐行等价:
-      · 第 3 列(category) '0' = general, '4' = character, '9' = rating
-      · general/character 的**起始下标**用作分段边界, rating 段整体不参与
+
+def load_labels(csv_path):
+    """读标签表 -> (标签列表, 每行类别名, 每行阈值或 None)
+
+    兼容两种表:
+      · v0.9: tag_id,name,category,count —— category 只有 0/4
+      · v1.0: tag_id,name,category,count,threshold —— 模型自带的分类别标定阈值
+    有阈值列时逐行生效, 否则回退到命令行传进来的 general/character 阈值。
     """
-    tags = []
-    general_index = None
-    character_index = None
+    tags, cats, ths = [], [], []
     with open(csv_path, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         next(reader)                     # 跳过表头
         for row in reader:
             if len(row) < 3:
                 continue
-            if general_index is None and row[2] == '0':
-                general_index = len(tags)
-            elif character_index is None and row[2] == '4':
-                character_index = len(tags)
+            c = row[2].strip().lower()
+            cats.append(CAT_ALIASES.get(c, c))
             tags.append(row[1])
-    if general_index is None:
-        general_index = len(tags)
-    if character_index is None:
-        character_index = len(tags)
-    return tags, general_index, character_index
+            th = None
+            if len(row) >= 5 and row[4].strip():
+                try:
+                    th = float(row[4])
+                except ValueError:
+                    th = None
+            ths.append(th)
+    return tags, cats, ths
 
 
 def preprocess(image, height):
@@ -168,6 +174,7 @@ def preprocess(image, height):
     """
     import numpy as np
     from PIL import Image
+    image = image.convert('RGB')
     ratio = float(height) / max(image.size)
     new_size = tuple(int(x * ratio) for x in image.size)
     image = image.resize(new_size, Image.LANCZOS)
@@ -178,25 +185,51 @@ def preprocess(image, height):
     return np.expand_dims(arr, 0)
 
 
-def preprocess_pixai(image):
-    """PixAI 官方预处理: 直接拉伸 448x448 + normalize(0.5) + RGB, 返回 (1,3,448,448)
+def preprocess_pixai(image, height=448):
+    """PixAI v0.9 官方预处理: 直接拉伸 + normalize(0.5) + RGB, 返回 NCHW
 
-    本机用的就是 PixAI 版模型(`wd-pixai-tagger-v0.9.onnx`), 所以这条才是主路径;
-    保留 WD14 分支是为了让换成标准 WD14 模型时也能直接跑。
+    本机历史数据走的就是这条(448 拉伸), 所以 448 输入且标签表没有逐行阈值时保持原样。
     """
     import numpy as np
     from PIL import Image
-    im = image.resize((448, 448), Image.BILINEAR)
+    im = image.convert('RGB')
+    im = im.resize((height, height), Image.BILINEAR)
     arr = np.array(im).astype(np.float32) / 255.0
     arr = (arr - 0.5) / 0.5
     return np.transpose(arr, (2, 0, 1))[None, ...]
 
 
-def infer_tags(session, image, tags, general_index, character_index,
-               threshold, character_threshold):
+def preprocess_rescale_pad(image, height):
+    """PixAI v1.0 官方预处理: 保持比例缩放到长边=height + 黑底居中补方 + normalize(0.5)
+
+    对应官方的 RescalePadProcessor: to_tensor -> bilinear resize -> pad(0) -> normalize。
+    PIL 的双线性与 torchvision 略有差异, 只影响阈值边缘的少数标签。
+    """
+    import numpy as np
+    from PIL import Image
+    if image.mode != 'RGB':
+        im = image.convert('RGBA')
+        canvas = Image.new('RGBA', im.size, (255, 255, 255, 255))
+        canvas.alpha_composite(im)
+        image = canvas.convert('RGB')
+    w, h = image.size
+    r = min(float(height) / h, float(height) / w)
+    nw, nh = int(w * r), int(h * r)
+    image = image.resize((nw, nh), Image.BILINEAR)
+    square = Image.new('RGB', (height, height), (0, 0, 0))
+    square.paste(image, ((height - nw) // 2, (height - nh) // 2))
+    arr = np.array(square).astype(np.float32) / 255.0
+    arr = (arr - 0.5) / 0.5
+    return np.transpose(arr, (2, 0, 1))[None, ...]
+
+
+def infer_tags(session, image, tags, cats, ths,
+               threshold, character_threshold, preprocess_mode='auto'):
     """推理单张 -> [(标签名, 分数, 是否角色标签)], 已按阈值过滤, 不含 rating
 
     自动兼容 NHWC(标准 WD14)与 NCHW(PixAI)两种输入布局 —— 看输入张量第 2 维是不是 3。
+    预处理: JS 侧按模型预设传 pixai448(固定拉伸) / rescale_pad(比例+黑边),
+    传 auto 或认不出模型时按老规则判断(448 且标签表无逐行阈值 -> v0.9 拉伸)。
     输出张量的选择同样做了兜底: 优先名字像概率的, 其次宽度等于标签数的,
     最后才退到"宽度 > 1000 的那个", 避免误选 embedding 特征输出。
     """
@@ -209,7 +242,25 @@ def infer_tags(session, image, tags, general_index, character_index,
     else:
         height = shape[1]                # NHWC -> WD14
         is_nchw = False
-    x = preprocess_pixai(image) if is_nchw else preprocess(image, height)
+    # 336-ft 是静态 batch=2 的导出(官方为提吞吐一次喂两张)。我们一次只推一张,
+    # 就把同一张复制成两行; 只取第一行结果 —— 比为了凑 batch 改整个队列消费逻辑稳。
+    batch = shape[0] if isinstance(shape[0], int) and shape[0] > 1 else 1
+    calibrated = any(t is not None for t in ths)
+    if is_nchw:
+        if preprocess_mode == 'pixai448':
+            x = preprocess_pixai(image, height)
+        elif preprocess_mode == 'rescale_pad':
+            x = preprocess_rescale_pad(image, height)
+        else:
+            x = (preprocess_rescale_pad(image, height)
+                 if calibrated or height != 448
+                 else preprocess_pixai(image, height))
+    else:
+        x = preprocess(image, height)
+    if batch > 1:
+        x = np.repeat(x, batch, axis=0)
+    if 'float16' in str(inp.type):
+        x = x.astype(np.float16)
 
     input_name = inp.name
     n_tags = len(tags)
@@ -228,34 +279,40 @@ def infer_tags(session, image, tags, general_index, character_index,
         output_name = session.get_outputs()[0].name
 
     probs = session.run([output_name], {input_name: x})[0][0]
+    probs = np.asarray(probs, dtype=np.float32)
     # 部分导出的模型给的是未归一化 logits(有 >1 或 <0 的值), 补一次 sigmoid
     if np.max(probs) > 1.0 or np.min(probs) < 0.0:
         probs = 1.0 / (1.0 + np.exp(-probs))
 
     result = []
     for i, prob in enumerate(probs):
-        if i < general_index:
-            continue                     # rating 段: 不参与
-        is_char = i >= character_index
-        th = character_threshold if is_char else threshold
+        if i >= len(cats):
+            break
+        cat = cats[i]
+        if cat == 'rating':
+            continue                     # 分级标签不参与
+        th = ths[i] if ths[i] is not None else (
+            character_threshold if cat == 'character' else threshold)
         if prob > th:
-            result.append((tags[i], float(prob), is_char))
+            result.append((tags[i], float(prob), cat == 'character'))
     return result
 
 
 # ============================================================ 模型会话(懒加载)
 
 class Tagger(object):
-    def __init__(self, model, csv_path, provider='auto', threshold=0.35, char_threshold=0.85):
+    def __init__(self, model, csv_path, provider='auto', threshold=0.35, char_threshold=0.85,
+                 preprocess_mode='auto'):
         self.model = model
         self.csv_path = csv_path
         self.provider = provider
         self.threshold = threshold
         self.char_threshold = char_threshold
+        self.preprocess_mode = preprocess_mode
         self.session = None
         self.tags = None
-        self.general_index = None
-        self.character_index = None
+        self.cats = None
+        self.ths = None
         self.provider_used = ''
         self.loaded = False
         self.load_ms = 0
@@ -305,7 +362,7 @@ class Tagger(object):
             raise RuntimeError('模型不存在: %s' % self.model)
         if not os.path.isfile(self.csv_path):
             raise RuntimeError('标签表不存在: %s' % self.csv_path)
-        self.tags, self.general_index, self.character_index = load_labels(self.csv_path)
+        self.tags, self.cats, self.ths = load_labels(self.csv_path)
         providers, avail = self._pick_providers()
         so = ort.SessionOptions()
         so.log_severity_level = 3        # 关掉 onnxruntime 的 INFO 噪音(它默认往 stderr 刷)
@@ -330,10 +387,9 @@ class Tagger(object):
         from PIL import Image
         self.load()
         im = Image.open(path)
-        im = im.convert('RGB')           # 与历史实现一致: alpha 直接丢, 不做黑白底合成
         try:
-            found = infer_tags(self.session, im, self.tags, self.general_index,
-                               self.character_index, self.threshold, self.char_threshold)
+            found = infer_tags(self.session, im, self.tags, self.cats, self.ths,
+                               self.threshold, self.char_threshold, self.preprocess_mode)
         finally:
             try:
                 im.close()
@@ -362,6 +418,7 @@ def handle(tg, msg):
             'csv': os.path.isfile(tg.csv_path),
             'modelPath': tg.model,
             'csvPath': tg.csv_path,
+            'preprocess': tg.preprocess_mode,
             'loaded': tg.loaded,
             'providers': avail,
         }
@@ -388,11 +445,14 @@ def main():
     ap.add_argument('--csv', required=True, help='标签表 csv 路径')
     ap.add_argument('--provider', choices=['auto', 'cuda', 'dml', 'cpu'], default='auto',
                     help='cuda=只走N卡GPU; dml=只走DirectML(任意DX12显卡); cpu=纯CPU; auto=按 cuda>dml>cpu 自动挑')
+    ap.add_argument('--preprocess', choices=['auto', 'pixai448', 'rescale_pad'], default='auto',
+                    help='pixai448=固定拉伸(v0.9); rescale_pad=比例+黑边(v1.0); auto=按输入尺寸/词表阈值判断')
     ap.add_argument('--threshold', type=float, default=0.35, help='普通标签阈值')
     ap.add_argument('--char-threshold', type=float, default=0.85, help='角色标签阈值')
     args = ap.parse_args()
 
-    tg = Tagger(args.model, args.csv, args.provider, args.threshold, args.char_threshold)
+    tg = Tagger(args.model, args.csv, args.provider, args.threshold, args.char_threshold,
+                args.preprocess)
 
     # 握手: 先探活, 让 JS 侧几秒内就知道这条路能不能走(不加载模型)
     ok, err = tg.deps_ok()
@@ -403,6 +463,7 @@ def main():
         'error': err,
         'model': os.path.isfile(tg.model),
         'csv': os.path.isfile(tg.csv_path),
+        'preprocess': tg.preprocess_mode,
         'providers': avail,
         'pid': os.getpid(),
     })

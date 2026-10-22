@@ -25,6 +25,12 @@ export function fileUrl(path) {
   return tv ? tv.fileUrl(path) : ''
 }
 
+/** 远程图(网上挑封面的缩略图)必须经主进程代拉, 见 imageproto.js 的 tv://remote 分支 */
+export function remoteImageUrl(url) {
+  if (!url) return ''
+  return tv ? tv.remoteUrl(url) : url
+}
+
 /**
  * 把载荷里的**响应式代理**拆成纯数据 —— 凡是要过桥的参数都得先过这里。
  * ==================================================================
@@ -114,6 +120,17 @@ export const api = {
   // 自定义封面(2026-10-06): 挑选候选 / 设定与清除(path 空 = 恢复自动)
   coverCandidates: (q) => call('covers:candidates', q),
   coverSet: (body) => call('covers:set', body),
+  // 网上挑封面(2026-10-22): 远程搜索缩略图 / 下载选中的那张到 data/char_covers/user_picks/
+  booruSearch: (q) => call('booru:search', q),
+  booruDownload: (body) => call('booru:download', body),
+  // Danbooru API Key: 三个通道都只过「摘要」, 明文密钥留在主进程(见 booru-auth.js)
+  booruAuthGet: () => call('booru:auth:get'),
+  booruAuthSet: (body) => call('booru:auth:set', body),
+  booruAuthTest: () => call('booru:auth:test'),
+  // 批量自动拉封面(2026-10-22): run 启动即返回, 进度走 covers:auto:progress 推送
+  coversAutoRun: (body) => call('covers:auto:run', body),
+  coversAutoState: () => call('covers:auto:state'),
+  coversAutoCancel: () => call('covers:auto:cancel'),
 
   // 标签
   suggest: (q) => call('suggest:get', q),

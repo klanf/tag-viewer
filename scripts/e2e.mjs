@@ -3178,9 +3178,15 @@ async function main() {
      */
     // 走**真实入口**: 扫描页标题旁的「🗄️ 来源管理」按钮(2026-10-04 从顶栏挪来),
     // 顺便验证这个入口还在 —— 直接 hash 跳转就绕过了入口, 测不到。
+    // 2026-10-22 修: 2026-10-16 入口改成"一级页一份(goto-sources) + 文件夹详情头部一份
+    // (goto-sources-folder)"(原先绝对定位在右上角, 和「← 返回」重叠, 用户截图反馈)。
+    // 到这里时上一段可能把人留在某个文件夹里, 只认一级那份就必然超时 ——
+    // 而这条 waitFor 抛错会**中断整轮**, 后果是后面所有段落(含 11h 的批量选择)从来没执行过,
+    // 却照样统计进"235/247"。两个入口点的是同一个路由, 所以两个都认。
     await cdp.eval(`location.hash = '#/scan'; return true`)
-    await waitFor(cdp, `!!document.querySelector('[data-test="goto-sources"]')`, { label: '扫描页的来源管理入口', timeout: 20000 })
-    await cdp.eval(`document.querySelector('[data-test="goto-sources"]').click(); return true`)
+    const SRC_ENTRY = `document.querySelector('[data-test="goto-sources"], [data-test="goto-sources-folder"]')`
+    await waitFor(cdp, `!!${SRC_ENTRY}`, { label: '扫描页的来源管理入口', timeout: 20000 })
+    await cdp.eval(`${SRC_ENTRY}.click(); return true`)
     await waitFor(cdp, `!!document.querySelector('.source-view')`, { label: '来源管理页', timeout: 20000 })
     await waitFor(cdp, `__t.count('.source-view .rows .row') > 0`, { label: '登记表行', timeout: 20000 })
 
@@ -3954,15 +3960,21 @@ async function main() {
       check('安全模式: 从 core 段挑出可用的敏感词样本', !!probe.hit && probe.n > 0,
         `样本=${probe.hit || '(无)'} · ${probe.n} 个胶囊 · 候选=[${coreWords.slice(0, 6).join(',')}]`)
       // 开 🛡 -> 样本词消失(客户端过滤, 即时生效); 关 -> 回来
+      /* ⚠️ 判据认的是**那颗胶囊本身消失**（pill 上的 data-tag 是精确 tag），
+       * 不是「整个列表文本里搜不到这个词」。2026-10-22 踩的坑：样本词是 "sex"，
+       * 列表里 31 个匹配项，安全模式只按精确 tag 藏掉 sex 那一个，
+       * 剩下 30 个（sexylittle 之类）全都含 "sex" 子串 —— 用子串判据永远等不到，
+       * 直接 waitFor 超时**中断整轮**，把后面 60+ 条断言全部带走（它们其实全绿）。 */
+      const SEXPILL = `.tag-list .pill[data-tag=${JSON.stringify(probe.hit)}]`
       await cdp.eval(`document.querySelector('.tags-view .bar .safe-tog .st-btn').click(); return true`)
-      await waitFor(cdp, `!__t.text('.tag-list').includes(${JSON.stringify(probe.hit)})`,
-        { label: '安全模式藏词(样本词消失)', timeout: 15000 })
+      await waitFor(cdp, `!document.querySelector(${JSON.stringify(SEXPILL)})`,
+        { label: '安全模式藏词(样本词那粒胶囊消失)', timeout: 15000 })
       const sHint = await cdp.eval(`return __t.text('.tags-view .bar .safety-hint')`)
       const sCnt = await cdp.eval(`return __t.count('.tag-list .pill')`)
       check('安全模式: 敏感词从标签列表隐藏(提示条报数)',
         sCnt < probe.n && /已隐藏/.test(sHint), `${probe.n} -> ${sCnt} 个 · 提示="${sHint}"`)
       await cdp.eval(`document.querySelector('.tags-view .bar .safe-tog .st-btn').click(); return true`)
-      await waitFor(cdp, `__t.text('.tag-list').includes(${JSON.stringify(probe.hit)})`,
+      await waitFor(cdp, `!!document.querySelector(${JSON.stringify(SEXPILL)})`,
         { label: '关安全模式词回来', timeout: 15000 })
       // 清搜索, 别把筛选词带进后面的节
       await cdp.eval(`
@@ -4669,6 +4681,33 @@ async function main() {
     `)
     check('批量: 勾选框 Shift 区间选(ckbox[0] -> Shift ckbox[2]) = 3', ckShift === 3, `计数 ${ckShift}`)
     await cdp.eval(`__t.click('[data-test="scan-sel-clear"]'); return true`)
+
+    /* 「选到在看的那张」(2026-10-22 用户的真实流程: 一张一张看过来, 看到一半想把
+     * 第 1 张到当前这张整个搬到别的文件夹)。
+     * **必须真跑一遍光箱**: 退出选择模式 -> 点第 2 张开大图 -> 关掉 -> 重进选择模式 -> 点按钮。
+     * 认的是光箱关掉之后留下的 lastPath, 所以"大图已经关了"这个真实状态下也得能用。 */
+    const uptoBtn = await cdp.eval(`
+      const b = document.querySelector('[data-test="scan-sel-upto"]')
+      return b ? { has: true, text: b.textContent.trim(), title: b.getAttribute('title') || '' } : { has: false }
+    `)
+    check('批量: 操作条里有「选到在看的那张」且自带一句说明', uptoBtn.has === true && /在看/.test(uptoBtn.text) && uptoBtn.title.length > 10,
+      JSON.stringify(uptoBtn))
+
+    await cdp.eval(`__t.click('[data-test="scan-batch-exit"]'); return true`)
+    await waitFor(cdp, `!document.querySelector('[data-test="scan-batch-bar"]')`, { label: '退出选择模式(浏览态才能开大图)', timeout: 10000 })
+    await cdp.eval(`document.querySelectorAll('.scan-view .grid.imgs .card')[1].click(); return true`)
+    await waitFor(cdp, `!!document.querySelector('.lightbox')`, { label: '大图打开(第 2 张)', timeout: 15000 })
+    await cdp.eval(`document.querySelector('.lightbox .lb-close').click(); return true`)
+    await waitFor(cdp, `!document.querySelector('.lightbox')`, { label: '大图关闭', timeout: 15000 })
+    await cdp.eval(`__t.click('[data-test="scan-select-toggle"]'); return true`)
+    await waitFor(cdp, `!!document.querySelector('[data-test="scan-batch-bar"]')`, { label: '重回选择模式', timeout: 10000 })
+    /* 先手动勾第 3 张, 再点按钮: 判据是**并集**(第 1~2 张并进来, 已勾的那张不能丢) */
+    await cdp.eval(`document.querySelectorAll('.scan-view .grid.imgs .card')[2].click(); return true`)
+    const uptoPre = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
+    await cdp.eval(`__t.click('[data-test="scan-sel-upto"]'); return true`)
+    const uptoPost = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
+    check('批量: 「选到在看的那张」勾上第 1~2 张, 且保留先手勾的第 3 张(并集不是替换)',
+      uptoPre === 1 && uptoPost === 3, `点前 ${uptoPre} 张 / 点后 ${uptoPost} 张`)
 
     // 恢复原「反选」断言的前提(已选 3/3): 我的拖框/勾选框段落把选中集清空了
     await cdp.eval(`__t.click('[data-test="scan-sel-all"]'); return true`)

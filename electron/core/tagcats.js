@@ -20,9 +20,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { dataFile } from './workspace.js'
+import { dataFile, getSettings } from './workspace.js'
 import { PROJECT_ROOT, BUNDLED_TRANSLATIONS_DB } from './paths.js'
 import { resolveWeiLinDirs } from './translate.js'
+import { TAGGER_MODELS, DEFAULT_TAGGER_MODEL, normalizeTaggerModel } from './tagger-models.js'
 
 /* ------------------------------------------------------------ 段位定义 */
 
@@ -51,6 +52,22 @@ const NON_SERIES_GROUPS = new Set([
   'category', 'tag', 'group', 'cosplay', 'artwork', 'image',
   'food', 'animal', 'plant', 'vehicle', 'furniture', 'instrument',
   'nature', 'weather', 'sky', 'water', 'fire', 'light', 'dark',
+  /* 下面这批由四份反推词表(v0.9 + v1.0 的 1008/336/672)统计得出:
+   * 这些括号组名下**从来没有** character/copyright 标签, 全是道具、部位、
+   * 材质、概念。缺了它们, xxx_(weapon) 这种就会被括号兜底当成作品系列。 */
+  'weapon', 'polearm', 'projectile', 'sword', 'bow', 'armor', 'helmet',
+  'scabbard', 'mecha', 'mask', 'headwear', 'headdress', 'hat', 'hair',
+  'hairstyle', 'makeup', 'cosmetics', 'piercing', 'jewelry', 'ornament',
+  'decoration', 'glowstick', 'container', 'bottle', 'cup', 'bowl',
+  'vessel', 'toy', 'doll', 'statue', 'sculpture', 'machine', 'robot',
+  'tool', 'hardware', 'software', 'computing', 'board_game', 'chess',
+  'flower', 'fruit', 'gemstone', 'stone', 'tree', 'seaweed', 'organ',
+  'anatomy', 'species', 'constellation', 'planet', 'element', 'gold',
+  'emblem', 'font', 'letter', 'phrase', 'meme', 'original', 'western',
+  'fandom', 'trend', 'topic', 'site', 'city', 'structure', 'geometry',
+  'texture', 'substance', 'action', 'gesture', 'riding', 'summon',
+  'cheerleading', 'hanetsuki', 'sport', 'expression', 'sex', 'sexual',
+  'nonsexual', 'mtf', 'ftm', 'otf', 'aircraft', 'automobile', 'brand',
 ])
 
 /* ------------------------------------------------------------ 词表规则 */
@@ -85,8 +102,14 @@ const state = {
   seriesSet: new Set(),
   /** 裸角色名 -> 系列名集合(用户拍板: 裸名角色也要能归段) */
   bareToSeries: new Map(),
-  info: { weilin: 0, chars: 0, series: 0, bare: 0, source: 'none' },
+  /** v1.0 的 copyright 词条(如 goddess_of_victory:_nikke) —— 只用于「这张图有没有系列」
+   *  的判定, 不参与 classify 的展示归段, 避免凭空多出系列卡片。`original` 不算系列。 */
+  copyrightSet: new Set(),
+  info: { weilin: 0, chars: 0, series: 0, bare: 0, copyright: 0, source: 'none' },
 }
+
+/** isCharOrSeries 的逐标签缓存 —— 补识别要扫十万张图的标签, 不能每次重跑正则 */
+let charSeriesCache = new Map()
 
 /** 归一化: 小写。韦林库混用空格/下划线, 库里存的是下划线 —— 两种变体都查。 */
 function norm(t) { return String(t || '').trim().toLowerCase() }
@@ -113,6 +136,22 @@ export function loadCats(opts = {}) {
   try { loadWd14Chars(opts.csvPath) } catch (e) { state.info.csvError = e.message }
   state.info.source = state.info.weilin || state.info.chars ? 'weilin+csv' : 'rules'
   return state.info
+}
+
+/**
+ * 丢掉进程内缓存的分类数据重新加载 —— 切换反推模型(v0.9 <-> v1.0)后,
+ * 角色/系列索引必须换成新词表, 否则界面还按旧模型归段。同步, 几十 ms 级。
+ */
+export function reloadCats(opts = {}) {
+  state.loaded = false
+  state.weilin = new Map()
+  state.charSet = new Set()
+  state.seriesSet = new Set()
+  state.bareToSeries = new Map()
+  state.copyrightSet = new Set()
+  state.info = { weilin: 0, chars: 0, series: 0, bare: 0, copyright: 0, source: 'none' }
+  charSeriesCache = new Map()
+  return loadCats(opts)
 }
 
 /** 韦林分类库: tag_tags(text) → tag_subgroups → tag_groups(组名) */
@@ -165,37 +204,70 @@ function loadBundledCats() {
 }
 
 /**
- * WD14 词表: category=4 是角色列。
+ * WD14 词表: category=character 是角色列。
  *   · charSet  <- 完整角色名(带括号)
  *   · seriesSet<- 括号里的系列名
  *   · bareToSeries <- 裸角色名 -> 系列集合(用户点名的"裸名角色"问题就在这解)
+ *
+ * 词表格式两代都认(2026-10-21 兼容模式):
+ *   v0.9 -> category 是数字(0=general, 4=character)
+ *   v1.0 -> category 是字符串(general/character/copyright/style/meta/rating),
+ *           且多一列 threshold。只认前两列的语义, 多出来的列不影响。
+ *
+ * CSV 的挑选与 tagger.js 保持一致: 调用方显式给 > 环境变量 > 预设/旧设置 > 默认 v0.9。
+ * 反推服务启动后还会用实际加载的那份 CSV 再调一次 reloadCats, 两者不会跑偏。
  */
+function catKind(raw) {
+  const s = String(raw || '').trim().toLowerCase()
+  if (s === '0' || s === 'general') return 'general'
+  if (s === '3' || s === 'copyright') return 'copyright'
+  if (s === '4' || s === 'character') return 'character'
+  return ''
+}
+
+function csvCandidates(csvPathOverride) {
+  const out = []
+  const push = (p) => { if (typeof p === 'string' && p.trim()) out.push(String(p).trim()) }
+  push(csvPathOverride)
+  push(process.env.TV_WD14_CSV)
+  const dirs = []
+  try { dirs.push(path.join(path.dirname(dataFile('tags.db')), 'models')) } catch { /* 忽略 */ }
+  dirs.push(path.join(PROJECT_ROOT, 'models'))
+  dirs.push(path.join(PROJECT_ROOT, 'data', 'models'))
+
+  let presetId = ''
+  try { presetId = normalizeTaggerModel(getSettings().taggerModel) } catch { /* 命令行工具可能没 initWorkspace */ }
+  const preset = presetId ? TAGGER_MODELS[presetId] : null
+  if (preset) {
+    for (const dir of dirs) for (const n of preset.csvs) push(path.join(dir, n))
+  } else {
+    try { push(getSettings().wd14Csv) } catch { /* 忽略 */ }
+    const d = TAGGER_MODELS[DEFAULT_TAGGER_MODEL]
+    for (const dir of dirs) for (const n of d.csvs) push(path.join(dir, n))
+  }
+  return out
+}
+
 function loadWd14Chars(csvPathOverride) {
-  const cands = [
-    csvPathOverride,
-    process.env.TV_WD14_CSV || '',
-    dataFile(path.join('models', 'wd-pixai-tagger-v0.9.csv')),
-    dataFile(path.join('models', 'selected_tags.csv')),
-    path.join(PROJECT_ROOT, 'data', 'models', 'wd-pixai-tagger-v0.9.csv'),
-    path.join(PROJECT_ROOT, 'models', 'selected_tags.csv'),
-  ].filter(Boolean)
-  const fp = cands.find((p) => fs.existsSync(p))
+  const fp = csvCandidates(csvPathOverride).find((p) => fs.existsSync(p))
   if (!fp) return
   const lines = fs.readFileSync(fp, 'utf8').split(/\r?\n/)
   const generalSet = new Set()   // 词表里的通用 tag —— 用来挡"角色括号内容是普通词"的污染
+  const rows = []
   for (let i = 1; i < lines.length; i++) {
     const c = lines[i].split(',')
     if (c.length < 3) continue
     const name = c[1].trim()
     if (!name) continue
-    if (c[2].trim() === '0') generalSet.add(norm(name))
+    rows.push({ k: norm(name), kind: catKind(c[2]) })
   }
-  for (let i = 1; i < lines.length; i++) {
-    const c = lines[i].split(',')
-    if (c.length < 3) continue
-    const name = c[1].trim()
-    if (!name || c[2].trim() !== '4') continue
-    const k = norm(name)
+  for (const r of rows) if (r.kind === 'general') generalSet.add(r.k)
+  for (const r of rows) {
+    if (r.kind === 'copyright' && r.k !== 'original') state.copyrightSet.add(r.k)
+  }
+  for (const r of rows) {
+    if (r.kind !== 'character') continue
+    const k = r.k
     state.charSet.add(k)
     const m = /^(.+)_\((.+)\)$/.exec(k)
     if (m) {
@@ -211,9 +283,11 @@ function loadWd14Chars(csvPathOverride) {
       }
     }
   }
+  state.info.csvPath = fp
   state.info.chars = state.charSet.size
   state.info.series = state.seriesSet.size
   state.info.bare = state.bareToSeries.size
+  state.info.copyright = state.copyrightSet.size
 }
 
 /* ------------------------------------------------------------ 分类 */
@@ -280,6 +354,29 @@ export function classify(tag) {
     if (re.test(k)) return { seg: 'general', sub, series: '' }
   }
   return { seg: 'other', sub: '', series: '' }
+}
+
+/**
+ * 这个标签是否「角色 / 系列」—— 补识别功能用它判断一张图是不是"没有角色也没有系列"。
+ *
+ * 与 classify 的区别: 这里认 v1.0 的 copyright 词条(如 goddess_of_victory:_nikke),
+ * 也认 `xxx_(series)` 这种显式系列后缀; 但**不改变** classify 的展示归段。
+ * `original`(原创作品)是 copyright 类里明确不算系列的例外。
+ */
+export function isCharOrSeries(tag) {
+  if (!state.loaded) loadCats()
+  const raw = String(tag || '').trim()
+  if (!raw) return false
+  const cached = charSeriesCache.get(raw)
+  if (cached !== undefined) return cached
+  const k = norm(unwrapWeight(raw))
+  let hit = false
+  const m = /^(.+)_\((.+)\)$/.exec(k)
+  if (m && (m[2] === 'series' || !NON_SERIES_GROUPS.has(m[2]))) hit = true
+  if (!hit && (state.charSet.has(k) || state.seriesSet.has(k)
+    || state.bareToSeries.has(k) || state.copyrightSet.has(k))) hit = true
+  charSeriesCache.set(raw, hit)
+  return hit
 }
 
 /** 一个 tag 的完整排序键: [段位, 子类序(仅 general), 原顺序] —— 数值越小越靠前 */
@@ -353,6 +450,7 @@ export function injectForTest({ weilin, chars, series, bare } = {}) {
   if (chars) { state.charSet = chars; state.info.chars = chars.size }
   if (series) { state.seriesSet = series; state.info.series = series.size }
   if (bare) { state.bareToSeries = bare; state.info.bare = bare.size }
+  charSeriesCache = new Map()
   state.loaded = true
 }
 

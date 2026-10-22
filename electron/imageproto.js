@@ -19,6 +19,7 @@ import path from 'node:path'
 import { protocol, net } from 'electron'
 import { pathToFileURL } from 'node:url'
 import { getThumb } from './core/thumbs.js'
+import { booruImageBuffer } from './core/booru.js'
 
 export const SCHEME = 'tv'
 
@@ -53,6 +54,23 @@ export function registerHandler() {
 
     if (url.hostname === 'ping') {
       return new Response('pong', { headers: { 'Content-Type': 'text/plain' } })
+    }
+
+    /* 远程缩略图代拉(2026-10-22): 渲染层 <img src="https://cdn.donmai.us/…"> 会被
+     * Cloudflare 403(主进程同一个 URL 是 200, 差在请求头), 所以网上挑封面一律走这里。
+     * 主机白名单在 booruImageBuffer 里, 不给渲染层开「加载任意远端 URL」。 */
+    if (url.hostname === 'remote') {
+      const r = await booruImageBuffer(url.searchParams.get('u') || '')
+      if (r.error) {
+        return new Response(r.error, { status: 502, headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
+      }
+      return new Response(r.buf, {
+        headers: {
+          'Content-Type': r.ct,
+          'Content-Length': String(r.buf.length),
+          'Cache-Control': 'max-age=86400',
+        },
+      })
     }
 
     const p = url.searchParams.get('p')

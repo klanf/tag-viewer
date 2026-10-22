@@ -23,6 +23,12 @@ const CHANNELS = new Set([
   'series:get', 'series:meta:get', 'series:meta:post', 'characters:get',
   // 自定义封面(2026-10-06): 系列卡/角色卡 ⚙️ 挑封面
   'covers:candidates', 'covers:set',
+  // 网上挑封面(2026-10-22): Danbooru / Safebooru 搜索 + 下载选中图到 user_picks
+  'booru:search', 'booru:download',
+  // Danbooru API Key(2026-10-22): 读摘要/写凭据/测试连接。明文密钥不过桥, 只回「配没配」
+  'booru:auth:get', 'booru:auth:set', 'booru:auth:test',
+  // 批量自动拉封面(2026-10-22): 主进程后台任务, 启动即返回 + 进度推送 + 取消
+  'covers:auto:run', 'covers:auto:state', 'covers:auto:cancel',
   // 标签
   'suggest:get', 'tags:all', 'tags:forPath', 'lightbox:data', 'tags:filterCopy', 'translate:get', 'tags:scanList', 'tags:matchMeta', 'tags:metaSimilar',
   'tags:edit:preview', 'tags:edit:apply',
@@ -95,6 +101,11 @@ const PUSH = new Set([
   'scan:partial', 'scan:final',
   // 文件夹卡片统计后台刷新(2026-10-20): 每夹完成/全部完成推一次, 渲染端重拉列表
   'folders:stats',
+  // 封面变了(2026-10-22): 由**写盘方**广播, 各窗口自己刷所在层 —— 换封面弹窗关掉了
+  // 也能收到(修「下载中关弹窗、封面要重启才出现」那个 bug)
+  'cover:changed',
+  // 批量拉封面的进度(每个目标推一次, 结束再推一次带 finished)
+  'covers:auto:progress',
 ])
 
 /** 自定义协议的 URL 构造 —— 与 imageproto.js 的解析必须成对 */
@@ -105,6 +116,14 @@ function thumbUrl(p, w = 400) {
 function fileUrl(p) {
   if (!p) return ''
   return `tv://file/?p=${encodeURIComponent(p)}`
+}
+/**
+ * 远程图代拉(2026-10-22): 网上挑封面的缩略图必须由主进程转发 —— 渲染进程直连
+ * Danbooru 的 CDN 会被 Cloudflare 403。这里只拼 URL, 白名单校验在主进程。
+ */
+function remoteUrl(u) {
+  if (!u) return ''
+  return `tv://remote/?u=${encodeURIComponent(u)}`
 }
 
 contextBridge.exposeInMainWorld('tv', {
@@ -126,6 +145,7 @@ contextBridge.exposeInMainWorld('tv', {
 
   thumbUrl,
   fileUrl,
+  remoteUrl,
 
   /** 渲染进程可以据此知道自己在 Electron 里(而不是浏览器里), 用来做能力降级 */
   isElectron: true,

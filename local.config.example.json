@@ -17,8 +17,9 @@
   "//pythonPath": "WD14 反推用的 python 解释器（需装 onnxruntime + pillow + numpy，如 miniconda 环境）。留空则由 core/tagger.js 自动探测 PATH 与 conda 常规位置。等价环境变量：TV_PYTHON",
   "pythonPath": "",
 
-  "//wd14Model": "WD14/PixAI onnx 模型路径。留空则依次找 <oldRoot>/model/wd-pixai-tagger-v0.9.onnx 与 <仓库>/models/。等价环境变量：TV_WD14_MODEL",
+  "//wd14Model": "【高级覆盖】显式指定 onnx 路径，会压过设置弹窗里的「反推模型」预设；一般留空。等价环境变量：TV_WD14_MODEL",
   "wd14Model": "",
-  "//wd14Csv": "标签表 csv。留空规则同上。等价环境变量：TV_WD14_CSV",
-  "wd14Csv": ""
+  "//wd14Csv": "【高级覆盖】标签表 csv，同上。等价环境变量：TV_WD14_CSV",
+  "wd14Csv": "",
+  "//taggerModel": "反推模型预设写在 settings.json / 设置弹窗（auto / v0.9 / v1.0），不在这里配置。默认 auto -> v0.9"
 }

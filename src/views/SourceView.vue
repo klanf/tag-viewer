@@ -15,7 +15,7 @@
  * ⚠️ 与扫描页的分工: 扫描页管"看", 这里管"登记与追平"。同一个目录在两处都能加,
  * 加进来的是同一条记录(不会出现两本账)。
  */
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import TvInput from '@/components/base/TvInput.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvCheckbox from '@/components/base/TvCheckbox.vue'
@@ -268,6 +268,55 @@ async function openInExplorer(f) {
   try { await api.openPath(f.path) } catch (e) { ui.err(e.message) }
 }
 
+/* ---------------- 补识别(2026-10-21) ----------------
+ * 对「既没有角色、也没有系列」的图重新跑一遍反推。
+ * 两档写回语义不同, 弹窗里必须说清楚:
+ *   · 反推/自带标签 -> 整体覆盖(本来就是反推的地盘)
+ *   · 旧看板 legacy -> 只把新认出的角色/系列追加进去, 原标签一条不动
+ */
+const orphanOpen = ref(false)
+const orphanLoading = ref(false)
+const orphanStarting = ref(false)
+const orphanStats = ref(null)
+const orphanLegacy = ref(false)
+const orphanErr = ref('')
+
+async function openOrphans() {
+  orphanOpen.value = true
+  orphanStats.value = null
+  orphanErr.value = ''
+  await loadOrphanStats()
+}
+
+async function loadOrphanStats() {
+  orphanLoading.value = true
+  orphanErr.value = ''
+  try {
+    orphanStats.value = await api.taggerOrphanStats({ includeLegacy: orphanLegacy.value })
+  } catch (e) {
+    orphanErr.value = e.message || String(e)
+  } finally {
+    orphanLoading.value = false
+  }
+}
+
+watch(orphanLegacy, () => { if (orphanOpen.value) loadOrphanStats() })
+
+async function startOrphans() {
+  orphanStarting.value = true
+  try {
+    const r = await api.taggerRequeueOrphans({ includeLegacy: orphanLegacy.value })
+    if (r?.error) { ui.warn(r.error); return }
+    orphanOpen.value = false
+    ui.toast(`🧩 已开始补识别 ${r.queued} 张${r.legacy ? `（旧看板 ${r.legacy} 张只补角色/系列）` : ''}`, 'info', 3600)
+    await app.taggerRefresh().catch(() => null)
+  } catch (e) {
+    ui.err('补识别启动失败: ' + e.message)
+  } finally {
+    orphanStarting.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -306,6 +355,12 @@ onMounted(load)
           <template v-if="stats.removed"> · 已移出 {{ stats.removed }}</template>
         </span>
         <TvButton size="sm" variant="secondary" :loading="loading" @click="load">🔄 刷新</TvButton>
+        <TvButton
+          size="sm"
+          variant="secondary"
+          title="找出没有角色/系列标签的图, 重新跑一遍反推补上"
+          @click="openOrphans"
+        >🧩 补识别</TvButton>
         <TvButton size="sm" variant="secondary" title="把登记表导出成 user/folders.json" @click="exportBackup">💾 导出备份</TvButton>
         <TvButton size="sm" variant="secondary" title="改完来源后让看板立刻用上新数据" @click="reloadDataset">♻️ 重载看板</TvButton>
       </div>
@@ -442,6 +497,61 @@ onMounted(load)
         <TvButton variant="danger" :loading="purging" @click="doPurge">确认清除</TvButton>
       </template>
     </TvModal>
+
+    <!-- 补识别: 没有角色/系列的图重新送模型 -->
+    <TvModal
+      v-model="orphanOpen"
+      title="🧩 补识别：没有角色 / 系列的图片"
+      size="md"
+      :mask-closable="false"
+    >
+      <p class="q2">
+        有些图反推出来只有画风、构图这类通用标签，没认出角色或系列 —— 常见于老图、旧看板导入的图。
+        这里会把它们重新送进反推模型，认出角色/系列后补上。
+      </p>
+
+      <div v-if="orphanLoading" class="op-dim">正在统计 ...</div>
+      <div v-else-if="orphanErr" class="err">统计失败: {{ orphanErr }}</div>
+      <template v-else-if="orphanStats">
+        <div class="stat-row">
+          <div class="stat">
+            <b>{{ nfmt(orphanStats.overwritable) }}</b>
+            <span>反推 / 自带标签<br>重跑后整体覆盖</span>
+          </div>
+          <div class="stat">
+            <b>{{ nfmt(orphanStats.legacy) }}</b>
+            <span>旧看板标签（孤本）<br>只追加角色 / 系列</span>
+          </div>
+        </div>
+
+        <TvCheckbox
+          v-model="orphanLegacy"
+          label="连同旧看板图片一起补（原标签一条都不清空）"
+        />
+
+        <ul class="note-list">
+          <li>只挑<b>已经有标签、但一个角色/系列都没有</b>的图；没标签的裸图归普通反推队列管。</li>
+          <li>旧看板图片只会新增识别出的角色/系列，通用标签、来源标记、原顺序都保留。</li>
+          <li>这一轮会真正调用模型。参考速度：v1.0-336 在 DirectML 上约 0.17 秒/张；1008 在 CUDA 上约 1.2 秒/张，CPU 会慢很多。</li>
+          <li>完成后看板标签会自动重建，进度见右下角胶囊。</li>
+        </ul>
+
+        <p class="op-warn">
+          本次将处理 <b>{{ nfmt(orphanStats.included) }}</b> 张
+          <template v-if="app.tagger?.running"> · ⚠️ 已有反推在跑，等它结束再来</template>
+        </p>
+      </template>
+
+      <template #footer>
+        <TvButton variant="secondary" @click="orphanOpen = false">取消</TvButton>
+        <TvButton
+          variant="primary"
+          :loading="orphanStarting"
+          :disabled="!orphanStats?.included || app.tagger?.running"
+          @click="startOrphans"
+        >开始补识别（{{ nfmt(orphanStats?.included || 0) }} 张）</TvButton>
+      </template>
+    </TvModal>
   </div>
 </template>
 
@@ -523,6 +633,18 @@ onMounted(load)
 
 .q { font-size: 13px; margin-bottom: 8px; }
 .q b { color: var(--danger); }
+.q2 { font-size: 12.5px; line-height: 1.8; color: var(--muted); margin-bottom: 10px; }
+.op-dim { font-size: 12px; color: var(--muted); padding: 8px 0; }
+.stat-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0 12px; }
+.stat {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.stat b { font-size: 20px; color: var(--accent); }
+.stat span { font-size: 11px; color: var(--muted); line-height: 1.5; }
+.op-warn { font-size: 12px; color: var(--warn); margin: 8px 0 0; }
+.op-warn b { color: var(--accent); }
 .path-box {
   margin: 0 0 8px; padding: 7px 10px;
   background: var(--panel2); border-radius: var(--r-sm);

@@ -99,7 +99,7 @@ export function applyLocalEnv(env = process.env) {
   const map = {
     TV_OLD_ROOT: c.oldRoot,       // 旧版工具根目录(WD14 模型就住在它的 model/ 下)
     TV_PYTHON: c.pythonPath,      // 反推用的 python 解释器
-    TV_WD14_MODEL: c.wd14Model,   // 显式覆盖模型路径(一般不必填, 有 oldRoot 就够)
+    TV_WD14_MODEL: c.wd14Model,   // 【高级覆盖】显式模型路径, 会压过设置里的模型预设
     TV_WD14_CSV: c.wd14Csv,
   }
   const applied = []

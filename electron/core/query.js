@@ -18,7 +18,8 @@ import { parseQuery, scopeRecords, searchCached, applySort, frozenKey } from './
 import { extractImagePrompt } from './png.js'
 import { promptToTags, dedupeTags } from './prompt.js'
 import { openDb } from './store.js'
-import { reloadCharLib } from './charlib.js'
+import { reloadCharLib, libCharsBySeries } from './charlib.js'
+import { isUserPickPath } from './booru.js'
 import { aggregateScanFolderTags, collectScanFolderImages } from './scan.js'
 
 // ---------------------------------------------------------------- 统计
@@ -111,7 +112,7 @@ export function doSearch(raw = {}) {
   // 过滤 —— searchCached 的 key 不含 under, 把它塞进 records 会让不同前缀共享同一份
   // 缓存条目, 结果直接错; 放在缓存之后过滤则天然正确, total 也跟着变小(口径一致)。
   // 路径比较统一 / 分隔 + 小写(Windows 不区分大小写), 前缀补尾部 / 防止
-  // "D:/ai" 误吞 "D:/ai2/..." 这种同前缀兄弟目录。
+  // 「ai」这个文件夹误吞同前缀兄弟目录「ai2」。
   const underRaw = String(raw.under || '').trim()
   if (underRaw) {
     const prefixes = underRaw.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
@@ -245,6 +246,7 @@ export function getSeries(raw = {}) {
   const meta = loadUserMeta()
   const hidden = hiddenCharSet(meta)
   const customBySeries = customCharsBySeries(meta)
+  const libBySeries = libCharsBySeries()
   /** 「显示无本地图的角色」开关: 关(默认)时 0 图补全角色不计角色数、纯 0 图系列不出现 */
   const withZero = !!raw.withZero
   const cats = meta.categories
@@ -284,13 +286,25 @@ export function getSeries(raw = {}) {
       }
       groupsShown.set(short, ids.size)
     }
-    // 合并补充角色 —— 按"有效系列"取(被 char_series 挪过来的也算),
-    // 不算上的话列表页的角色数/图片数会和详情页对不上
-    const extraAll = (customBySeries.get(name) || [])
-      .filter((t) => !hidden.has(t.toLowerCase()) && !groups.has(charShortName(t)))
+    // 合并补充角色 —— 用户补的(custom_chars) + 新角色库里 0 图的角色。
+    // 按短名和已出图角色去重, 否则同一个角色会出现两张卡。
+    const extraSeen = new Set()
+    const extraList = []
+    for (const t of customBySeries.get(name) || []) {
+      const short = charShortName(t)
+      if (extraSeen.has(short) || hidden.has(t.toLowerCase()) || groups.has(short)) continue
+      extraSeen.add(short)
+      extraList.push(t)
+    }
+    for (const [short, g] of libCharGroups(libBySeries.get(name) || [])) {
+      if (extraSeen.has(short) || groups.has(short)) continue
+      if (hidden.has(g.rep.toLowerCase())) continue
+      extraSeen.add(short)
+      extraList.push(g.rep)
+    }
     // 开关关(默认): 0 图的补全角色不计入角色数 —— 与 getCharacters 的过滤同一口径,
     // 不然列表页写 20 个角色、点进详情页只有 6 张卡(老坑, 见 mergeCharVariants 注释)
-    const extra = withZero ? extraAll : extraAll.filter((t) => (tagCounter.get(t) || 0) > 0)
+    const extra = withZero ? extraList : extraList.filter((t) => (tagCounter.get(t) || 0) > 0)
     let extraImgs = 0
     for (const t of extra) extraImgs += tagCounter.get(t) || 0
 
@@ -300,6 +314,7 @@ export function getSeries(raw = {}) {
       characters: groupsShown.size + extra.length,
       // 自定义封面(用户在卡片 ⚙️ 里挑的)优先; 没设才走自动挑选(安全感知)
       thumb: meta.custom_covers?.series?.[name] || ds.records[ids.size ? coverIdx(ids) : 0].path,
+      has_cover: !!meta.custom_covers?.series?.[name],
       category: cats[name] || guessCategory(name),
     })
     seen.add(name)
@@ -322,6 +337,7 @@ export function getSeries(raw = {}) {
     items.push({
       name, images: real, characters: shownTags.length,
       thumb: meta.custom_covers?.series?.[name] || thumb,
+      has_cover: !!meta.custom_covers?.series?.[name],
       category: cats[name] || guessCategory(name), custom: true,
     })
   }
@@ -375,11 +391,36 @@ export function mergeCharVariants(chars) {
   return groups
 }
 
-/** 组 -> 代表 tag + alt 列表(代表优先带括号的完整形式) */
+/**
+ * 组 -> 代表 tag + alt 列表。
+ * 排序: 括号里就是所属系列的完整写法(frieren_(sousou_no_frieren)) > 裸名(usada_pekora)
+ * > 服装/形态写法(usada_pekora_(1st_costume)) —— 代表 tag 会被当成「角色表」里那一行
+ * 和导出用的标签, 用服装名当代表等于往角色表里塞 `1st_costume`。
+ */
 function charRep(g) {
-  const full = g.tags.find((t) => t !== charShortName(t))
-  const rep = full || g.tags[0]
+  const rank = (t) => {
+    const short = charShortName(t)
+    if (t === short) return 1
+    const inner = t.slice(short.length + 2, -1).toLowerCase()
+    const s = seriesName(t)
+    return s && s === inner ? 2 : 0
+  }
+  let rep = g.tags[0]
+  for (const t of g.tags) if (rank(t) > rank(rep)) rep = t
   return { rep, alt: g.tags.filter((t) => t !== rep) }
+}
+
+/** 角色库里的同角色多写法按短名合并; 代表优先裸名(usada_pekora 而非 1st_costume) */
+function libCharGroups(tags) {
+  const groups = new Map()
+  for (const tag of tags) {
+    const short = charShortName(tag)
+    let g = groups.get(short)
+    if (!g) { g = { rep: tag, tags: [] }; groups.set(short, g) }
+    g.tags.push(tag)
+    if (tag === short) g.rep = tag
+  }
+  return groups
 }
 
 export function getCharacters(raw = {}) {
@@ -392,6 +433,7 @@ export function getCharacters(raw = {}) {
   const ccov = meta.custom_covers?.chars || {}
   const hidden = hiddenCharSet(meta)
   const customBySeries = customCharsBySeries(meta)
+  const libBySeries = libCharsBySeries()
   const chars = ds.seriesChars.get(series) || new Map()
   const items = []
   const okCache = new Map()
@@ -418,6 +460,9 @@ export function getCharacters(raw = {}) {
       images: ids.size,
       // 自定义封面优先(用户在卡片 ⚙️ 里挑的); 没设才走自动挑选(安全感知)
       thumb: ccov[rep] || ds.records[coverIdx(ids)].path,
+      // 「有没有自己设过封面」单独告诉渲染层: 批量拉封口的三个口径要用它筛
+      // (thumb 字段分不出来 —— 自动挑的也有值)
+      has_cover: !!ccov[rep],
     })
   }
 
@@ -425,11 +470,15 @@ export function getCharacters(raw = {}) {
   const [tagCounter, , ] = statsFor(srcSet)
   const recs = recordsFor(srcSet)
   const groups = mergeCharVariants(chars)
+  const seenExtra = new Set()
   for (const tag of customBySeries.get(series) || []) {
+    const short = charShortName(tag)
+    if (seenExtra.has(short)) continue
+    seenExtra.add(short)
     if (hidden.has(tag.toLowerCase())) continue
     // 跟"合并后"的组比, 不是跟原始 chars 比 —— 否则用户补的 `frieren` 会跟
     // 合并组(代表 tag = frieren_(sousou_no_frieren)) 又撞出一张重复卡
-    if (groups.has(charShortName(tag))) continue
+    if (groups.has(short)) continue
     const c = tagCounter.get(tag) || 0
     let thumb = ''
     if (c > 0) {
@@ -439,7 +488,28 @@ export function getCharacters(raw = {}) {
     }
     items.push({
       tag, alt: [], name: displayNameOf(meta, [tag], charShortName(tag)),
-      images: c, thumb: ccov[tag] || thumb,
+      images: c, thumb: ccov[tag] || thumb, has_cover: !!ccov[tag],
+    })
+  }
+
+  // 角色库里登记、但本地还没出过图的角色 —— 只在"显示无本地图角色"打开时列出,
+  // 取代原来靠 custom_chars 才能看到 0 图角色的做法(2026-10-21)。
+  for (const [short, g] of libCharGroups(libBySeries.get(series) || [])) {
+    if (seenExtra.has(short) || groups.has(short)) continue
+    const tag = g.rep
+    if (hidden.has(tag.toLowerCase())) continue
+    const c = tagCounter.get(tag) || 0
+    if (!withZero && c === 0) continue
+    let thumb = ''
+    if (c > 0) {
+      for (const rec of recs) {
+        if (rec.tags.includes(tag)) { thumb = rec.path; break }
+      }
+    }
+    items.push({
+      tag, alt: g.tags.filter((t) => t !== tag),
+      name: displayNameOf(meta, g.tags, charShortName(tag)),
+      images: c, thumb: ccov[tag] || thumb, has_cover: !!ccov[tag], fromLibrary: true,
     })
   }
 
@@ -453,7 +523,7 @@ export function getSeriesMeta() { return loadUserMeta() }
 export async function postSeriesMeta(body) {
   const before = loadUserMeta()
   const r = patchUserMeta(body)
-  if (r.ok === false) return { error: '保存失败' }
+  if (r.ok === false) return { error: r.error || '保存失败' }
   // 影响"角色 -> 系列"的字段变了才重建索引: 补/挪/屏蔽角色都要让系列页立刻变,
   // 但只改分类/封面/显示名时不该白等一次 85k 条重建。
   const sig = (m) => JSON.stringify([m.custom_chars, m.char_series, m.hidden_chars])
@@ -759,9 +829,15 @@ export function setCover(raw = {}) {
   const key = String(raw.key || '').trim()
   if (!key) return { error: '缺少 key' }
   const pth = String(raw.path || '').trim()
-  if (pth && !recordByPath(pth)) return { error: '该图片不在当前库里: ' + pth }
+  /* 库内图才校验"记录存在"(挑到被移走的图会 404); 「网上挑封面」下载的 user_picks
+   * 是**故意不进库**的远程图, 走 isUserPickPath 放行 —— 2026-10-22。 */
+  if (pth && !recordByPath(pth) && !isUserPickPath(pth)) return { error: '该图片不在当前库里: ' + pth }
   const r = patchUserMeta({ custom_covers: { [kind]: { [key]: pth } } })
-  return { ok: r.ok !== false, covers: r.meta?.custom_covers }
+  // 写盘失败必须原样带出去(2026-10-22): 原先只回 ok:false、没有 error 字段,
+  // 而 IPC 的 safe() 只把 {error} 变成 reject —— 于是"封面没存上"在界面上是静默的。
+  if (r.ok === false) return { error: r.error || '写入 user_meta.json 失败' }
+  // 带上 kind/key: 调用方(ipc.js)据此广播 cover:changed, 让各窗口刷新对的那一层
+  return { ok: true, kind, key, path: pth, covers: r.meta?.custom_covers }
 }
 
 // ---------------------------------------------------------------- 单图标签

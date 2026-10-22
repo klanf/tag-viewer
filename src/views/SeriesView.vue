@@ -10,11 +10,13 @@
  * 原版用 window.scrollY 记忆滚动位置, 这个 SPA 里滚动发生在面板内部,
  * 所以改成记录/恢复面板的 scrollTop —— 返回时同样"回到刚才的位置"。
  */
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import TvSourceChips from '@/components/filter/TvSourceChips.vue'
 import TvEntityCard from '@/components/series/TvEntityCard.vue'
 import TvImageGrid from '@/components/image/TvImageGrid.vue'
+import TvBatchBar from '@/components/image/TvBatchBar.vue'
+import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
 import TvButton from '@/components/base/TvButton.vue'
 import TvSelect from '@/components/base/TvSelect.vue'
 import TvInput from '@/components/base/TvInput.vue'
@@ -22,7 +24,9 @@ import TvTabs from '@/components/base/TvTabs.vue'
 import TvState from '@/components/base/TvState.vue'
 import TvCategoryManager from '@/components/rules/TvCategoryManager.vue'
 import TvCoverPickerModal from '@/components/series/TvCoverPickerModal.vue'
+import TvCharEditModal from '@/components/series/TvCharEditModal.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
+import { useBatchOps } from '@/composables/useBatchOps.js'
 import { useFloatBack } from '@/composables/useFloatBack.js'
 import { useSourceStore } from '@/stores/useSourceStore.js'
 import { useCartStore } from '@/stores/useCartStore.js'
@@ -30,6 +34,7 @@ import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { usePrefsStore } from '@/stores/usePrefsStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
+import { useAppStore } from '@/stores/useAppStore.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { api } from '@/utils/api.js'
 import { nfmt, stripZhSeries } from '@/utils/format.js'
@@ -41,6 +46,8 @@ const ui = useUiStore()
 const prefs = usePrefsStore()
 /** 安全模式(全局一个开关): 本页只用它过滤要显示的图片 */
 const safety = useSafetyStore()
+/** 全局后台任务状态(批量拉封面的进度、封面变更广播都在这里) */
+const app = useAppStore()
 
 const view = ref('series')        // series | chars | images
 const loading = ref(false)
@@ -110,8 +117,15 @@ const shownSeries = computed(() => {
     })
 })
 
-async function loadSeries() {
-  loading.value = true
+/**
+ * opts.silent: **换封面这类"内容没变、只是图换了"的重拉**要用。
+ * 默认那套会先把整层网格换成「加载中」占位框(TvState), 滚动容器里的内容一没,
+ * scrollTop 直接塌回 0 —— 用户看到的就是"封面一拉完就给我跳回开头"(2026-10-22 反馈)。
+ * 静默模式保留网格、原地换数据, 并把滚动位置在重渲染后再按回去。
+ */
+async function loadSeries(opts = {}) {
+  const keepTop = opts.silent ? (seriesScrollEl.value?.scrollTop || 0) : 0
+  if (!opts.silent) loading.value = true
   listError.value = ''
   try {
     // withZero: 「显示无本地图的角色」开关 —— 决定系列列表的角色数统计口径
@@ -127,7 +141,8 @@ async function loadSeries() {
   } catch (e) {
     listError.value = e.message
   } finally {
-    loading.value = false
+    if (!opts.silent) loading.value = false
+    else requestAnimationFrame(() => { if (seriesScrollEl.value) seriesScrollEl.value.scrollTop = keepTop })
   }
 }
 
@@ -143,7 +158,8 @@ async function showSeriesList() {
 const curSeries = ref('')
 const curSeriesZh = ref('')
 const charData = ref([])
-const charSort = ref('name')
+const charKw = ref('')
+const charSort = ref(prefs.sortSeriesChars)
 const charsLoading = ref(false)
 const selectMode = ref(false)
 const selected = ref(new Set())
@@ -151,7 +167,14 @@ const selected = ref(new Set())
 const charZh = ref({})
 
 const sortedChars = computed(() => {
-  const arr = [...charData.value]
+  const kw = charKw.value.trim().toLowerCase()
+  const arr = charData.value.filter((c) => {
+    if (!kw) return true
+    const zh = charZh.value[c.tag] || ''
+    return [c.name, c.tag, ...(c.alt || []), zh, stripZhSeries(zh)]
+      .filter(Boolean)
+      .some((s) => String(s).toLowerCase().includes(kw))
+  })
   const s = charSort.value
   if (s === 'name') arr.sort((a, b) => a.name.localeCompare(b.name, 'en'))
   else if (s === 'name_desc') arr.sort((a, b) => b.name.localeCompare(a.name, 'en'))
@@ -160,8 +183,11 @@ const sortedChars = computed(() => {
   return arr
 })
 
-async function loadChars(series) {
-  charsLoading.value = true
+const charsEmptyText = computed(() => (charKw.value.trim() ? '没有匹配的角色' : '该系列下没有识别到角色'))
+
+async function loadChars(series, opts = {}) {
+  const keepTop = opts.silent ? (charScrollEl.value?.scrollTop || 0) : 0
+  if (!opts.silent) charsLoading.value = true
   try {
     // withZero: 开着时带上 0 图的补全角色(可入购物车, 卡片显示占位封面)
     const d = await api.characters({ series, source: src.param, withZero: prefs.seriesShowZero })
@@ -175,7 +201,8 @@ async function loadChars(series) {
     ui.err('角色加载失败: ' + e.message)
     charData.value = []
   } finally {
-    charsLoading.value = false
+    if (!opts.silent) charsLoading.value = false
+    else requestAnimationFrame(() => { if (charScrollEl.value) charScrollEl.value.scrollTop = keepTop })
   }
 }
 
@@ -183,6 +210,7 @@ async function openSeries(s) {
   scrollSeries.value = seriesScrollEl.value?.scrollTop || 0
   curSeries.value = s.name
   curSeriesZh.value = seriesZh.value[s.name] || ''
+  charKw.value = ''
   selected.value = new Set()
   if (selectMode.value) selectMode.value = false
   view.value = 'chars'
@@ -208,13 +236,141 @@ function toggleSelect(c) {
   else s.add(c.tag)
   selected.value = s
 }
-function selectAll() { selected.value = new Set(charData.value.map((c) => c.tag)) }
+/* 搜索过滤时「全选/反选」只看当前可见的角色 —— 否则筛出 1 个点全选，
+   会把另外 151 个看不见的也加进购物车 */
+function selectAll() { selected.value = new Set(sortedChars.value.map((c) => c.tag)) }
 function invertSelect() {
   const s = new Set()
-  for (const c of charData.value) if (!selected.value.has(c.tag)) s.add(c.tag)
+  for (const c of sortedChars.value) if (!selected.value.has(c.tag)) s.add(c.tag)
   selected.value = s
 }
 function clearSelect() { selected.value = new Set() }
+
+/* ---------------- 批量操作(2026-10-22, 复用上面那套选择模式) ----------------
+ * 「拉封面」的三个口径来自用户点名: 全部 / 没自定义过的 / 没有图片的。
+ * 口径先算成目标数组, 再交给主进程的后台任务(covers:auto:run) —— 页面切走、
+ * 弹窗关掉都不影响它继续跑, 进度由 store 接 covers:auto:progress。 */
+const COVER_SCOPES = [
+  { value: 'selected', label: '仅选中的' },
+  { value: 'nocustom', label: '没自定义过封面的' },
+  { value: 'noimg', label: '没有本地图片的' },
+  { value: 'all', label: '全部(当前筛选结果)' },
+]
+const coverScope = ref('nocustom')
+const coverSource = ref('danbooru')
+const coverRating = ref('g')
+const coverSolo = ref(false)
+/* Danbooru 配没配 API Key —— 面板上那句"能不能又要 solo 又要站方人气排序"要说准。
+ * null = 还没问过(打开面板才问, 不为这个多占一条启动路径)。 */
+const booruKeyed = ref(null)
+/** 面板下面那句说明要跟着三个选择变, 不能写死成"取人气最高的一张安全图" ——
+ *  匿名拿不到站方排序(实测 order 被忽略), 这时候说"人气"是吹牛。 */
+const coverHint = computed(() => {
+  const cred = booruKeyed.value === true && coverSource.value === 'danbooru'
+  const pop = cred
+    ? '按站方人气(score)从高到低取第一张'
+    : '在翻到的那几十张里取分数最高的一张（匿名拿不到站方排序）'
+  return `${coverSolo.value ? '只认单人图(solo)' : '不限人数'} · ${pop} · 已有封面的默认跳过，中断后再点会接着跑`
+})
+
+/** 口径 -> 目标列表。注意读的是 sortedChars(筛过的可见项), 与「全选」同一口径 */
+const coverTargets = computed(() => {
+  const list = sortedChars.value
+  const pick = coverScope.value === 'selected'
+    ? list.filter((c) => selected.value.has(c.tag))
+    : coverScope.value === 'nocustom'
+      ? list.filter((c) => !c.has_cover)
+      : coverScope.value === 'noimg'
+        ? list.filter((c) => c.images === 0)
+        : list
+  return pick.map((c) => ({ kind: 'chars', key: c.tag, label: stripZhSeries(charZh.value[c.tag]) || c.name }))
+})
+
+/** 下拉里给每个口径标个数, 用户点之前就知道这次要跑多少个(0 个就别点了) */
+function scopeCount(v) {
+  const list = sortedChars.value
+  if (v === 'selected') return list.filter((c) => selected.value.has(c.tag)).length
+  if (v === 'nocustom') return list.filter((c) => !c.has_cover).length
+  if (v === 'noimg') return list.filter((c) => c.images === 0).length
+  return list.length
+}
+
+async function runAutoCovers() {
+  const t = coverTargets.value
+  if (!t.length) { ui.err('这个口径下没有要拉封面的角色(换个口径或先勾选)'); return }
+  if (t.length > 50 && !window.confirm(`要给 ${t.length} 个角色逐个联网拉封面。\n本机到图床是慢链路，粗估要 ${Math.ceil(t.length * 4 / 60)} 分钟，中途可以点「停止」。\n已经设过封面的会被跳过(所以断了可以再点一次接着跑)。\n确定开跑？`)) return
+  const r = await app.autoCoverRun(t, { source: coverSource.value, rating: coverRating.value, solo: coverSolo.value })
+  if (r?.error) ui.err(r.error)
+}
+
+async function stopAutoCovers() {
+  await app.autoCoverCancel()
+  ui.toast('已请求停止(当前这个拉完就停)', 'info', 2000)
+}
+
+/** 面板开合。跑着的时候强制可见 —— 用户点到别处也不该看不见进度。 */
+const coverPanel = ref(false)
+/* 每次打开都重新问一遍配没配 Key。以前只在第一次打开时问(`!== null` 当缓存),
+ * 于是"设置里刚存好 Key → 回来开面板"仍然按匿名说话, 用户看到的就是"存了没用"
+ * (2026-10-22)。这句话是**当前状态**的描述, 不是一次性的探测结果, 不该缓存。 */
+watch(coverPanel, (v) => {
+  if (!v) return
+  api.booruAuthGet().then((r) => { booruKeyed.value = !!r?.hasKey }).catch(() => { booruKeyed.value = false })
+})
+const autoCover = computed(() => app.autoCover)
+const autoCoverLive = computed(() => !!autoCover.value && (autoCover.value.running || coverPanel.value))
+const autoCoverDoneText = computed(() => {
+  const a = autoCover.value
+  if (!a) return ''
+  const mm = Math.round((a.elapsedMs || 0) / 60000)
+  return `${a.cancelled ? '已停止' : '跑完了'}：成功 ${a.ok}、跳过 ${a.skipped}、失败 ${a.failed}（用时 ${mm} 分钟）`
+})
+
+/* 封面变了 -> 静默重拉当前层。放这里而不是等弹窗 emit: 任务在**主进程**跑,
+   发起时那个界面可能早就切走了。 */
+watch(() => autoCover.value?.finished, (done) => {
+  if (!done) return
+  const a = autoCover.value || {}
+  fetchingKey.value = ''                // 卡片上那个 🌐 的加载态到这里才解除
+  if (a.failed) ui.warn(autoCoverDoneText.value + (a.errors?.length ? `｜例如：${a.errors[0]}` : ''), 6000)
+  else ui.ok(autoCoverDoneText.value, 4000)
+  refreshCoverLayer()
+})
+
+/** 批量隐藏 = 把选中角色写进 hidden_chars。
+ *  ⚠️ 这个字段是**整数组替换**语义(meta.js 的 patchUserMeta), 所以必须先把现有
+ *  列表并进来再发 —— 直接发选中那几个会把之前屏蔽的角色全解屏蔽。 */
+/** 单张卡「联网拉一张封面」(角色卡/系列卡都有这个入口, 2026-10-22 用户点名)。
+ *  不另起一套下载代码, 走的就是批量那条链路(targets 只有一项) —— 为了让
+ *  「进度 / 取消 / 跳过已有封面 / 写盘失败要报错」这些行为两处完全一致。 */
+const fetchingKey = ref('')
+async function fetchOneCover(kind, key, label) {
+  if (!key) return
+  if (fetchingKey.value || app.autoCover?.running) { ui.warn('已经有一批在跑了，先等它结束'); return }
+  fetchingKey.value = `${kind}:${key}`
+  const r = await app.autoCoverRun([{ kind, key, label }], { source: coverSource.value, rating: coverRating.value, solo: coverSolo.value })
+  if (r?.error) { ui.err(r.error); fetchingKey.value = '' }
+}
+
+async function hideSelected() {
+  const tags = [...selected.value]
+  if (!tags.length) { ui.err('先勾选要隐藏的角色'); return }
+  if (!window.confirm(`隐藏选中的 ${tags.length} 个角色？\n之后在 分类管理 → 屏蔽角色 里可以恢复。`)) return
+  try {
+    const cur = await api.seriesMeta()
+    const merged = [...new Set([...(cur.hidden_chars || []), ...tags.map((t) => String(t).toLowerCase())])]
+    const r = await api.saveSeriesMeta({ hidden_chars: merged })
+    if (r?.error) { ui.err(r.error); return }
+    ui.ok(`已隐藏 ${tags.length} 个角色`, 2000)
+    selected.value = new Set()
+    selectMode.value = false
+    // 静默重拉: 隐藏只是让几张卡消失, 不该把用户从看到的位置甩回顶部
+    await loadChars(curSeries.value, { silent: true })
+    await loadSeries({ silent: true })
+  } catch (e) {
+    ui.err('隐藏失败: ' + e.message)
+  }
+}
 
 /** 把选中的角色加入购物车(与旧版 exportSelected 的语义一致: 已存在的算 skipped)。
  *  入车时把视图里已查到的中文翻译带上(剥掉系列尾巴) —— 以前只传 c.name(英文短名),
@@ -251,7 +407,7 @@ const shownResults = computed(() => safety.filterItems(imgFeed.results.value))
 const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boolean))
 watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
 const imgSort = ref(prefs.sortSeries)
-const imgPageSize = ref(60)
+const imgPageSize = ref(prefs.seriesImgPageSize)
 const curChar = ref(null)
 
 async function openCharImages(c) {
@@ -279,11 +435,36 @@ function imgQuery() {
 
 function reloadImages() { if (curChar.value) imgFeed.search(imgQuery()) }
 
+/* ---------------- 图片层批量选择(2026-10-21): 勾选 -> 批量移动/复制/删除 ----------------
+ * 与看板/扫描页同款交互(useBatchOps)。**重命名解构**: 角色列表层已经有一套
+ * selectMode/selected/selectAll(购物车选择导出), 两套选择语义不同不能撞名。
+ * 键盘守卫判 route.name: 本页在 KeepAlive 白名单里, 切走后监听器还在。 */
+const {
+  selectMode: imgSelMode, selected: imgSel, moving: imgMoving, copying: imgCopying,
+  moveOpen: imgMoveOpen, copyOpen: imgCopyOpen, folders: imgMoveFolders,
+  toggleSelectMode: imgToggleSelectMode, toggleSelect: imgToggleSelectOne,
+  selectAll: imgSelectAll, invertSel: imgInvertSel, clearSel: imgClearSel,
+  onCardClick: imgCardClick, batchDelete: imgBatchDelete,
+  openMove: imgOpenMove, openCopy: imgOpenCopy, doMove: imgDoMove, doCopy: imgDoCopy,
+  onKey: imgBatchKey,
+} = useBatchOps({
+  items: () => imgFeed.results.value,
+  openImage: (it) => lb.open(it.path, { list: imgPaths.value }),
+})
+
+function onSeriesKey(e) {
+  if (route.name !== 'series') return
+  imgBatchKey(e)
+}
+onMounted(() => window.addEventListener('keydown', onSeriesKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onSeriesKey))
+
 /** 面包屑 */
 const crumb = computed(() => ({
   series: curSeries.value,
   seriesZh: curSeriesZh.value,
   char: curChar.value?.name || '',
+  charTag: curChar.value?.tag || '',
 }))
 
 /** 面包屑悬停复制: 复制该层的 tag 名(系列用英文 tag, 角色用名字) */
@@ -310,9 +491,66 @@ function openCoverPick(kind, key, title, current) {
 }
 
 /** 挑完/恢复默认后重拉当前层, 卡片封面立刻换新 */
+/* 这里以前走的是**非静默**重拉(loading 把整层网格换成占位框) —— 用户 2026-10-22 报的
+ * 「挑完封面还是跳到最上面, 而且画面闪一下」就是它: 滚动容器内容一空, scrollTop 塌回 0,
+ * 占位框→网格那一跳就是"闪"。上一轮只把**广播**那条路径改成静默了, emit 这条漏了。
+ * 顺带把待执行的防抖重拉取消掉: 同一次写盘会同时走 emit 和广播, 不取消就白重拉两遍。 */
 function onCoverSaved() {
-  if (view.value === 'series') return loadSeries()
-  if (view.value === 'chars' && curSeries.value) return loadChars(curSeries.value)
+  if (coverReloadTimer) { clearTimeout(coverReloadTimer); coverReloadTimer = null }
+  refreshCoverLayer()
+}
+
+/* 封面变更的**第二条**刷新路径(2026-10-22): 由主进程在写盘成功后广播 cover:changed。
+   为什么不能只靠上面那个 emit —— 用户在「下载中」把换封面弹窗关掉时, 下载和写盘照旧
+   在主进程完成了, 但那句 emit 是在弹窗组件里发的, 丢了就没人刷新, 于是"数据明明改了、
+   卡片还是旧封面, 只能重启"。订阅全局推送就和弹窗活不活着无关。
+
+   ⚠️ 但批量拉封面时每写成功一张都会广播一次(100 个角色 = 100 次), 每次都整层重拉会把
+   列表反复刷掉、滚动位置反复跳顶 —— 用户反馈的"拉完强制回到开头"就是这么来的。
+   所以这里**合并**成一次: 安静 1.2 秒才真重拉, 而且是静默重拉(不动 loading、保住 scrollTop)。 */
+const COVER_RELOAD_QUIET_MS = 1200
+let coverReloadTimer = null
+function refreshCoverLayer() {
+  if (view.value === 'series') loadSeries({ silent: true })
+  else if (view.value === 'chars' && curSeries.value) loadChars(curSeries.value, { silent: true })
+  // 图片层的网格不吃这个: 那里没有"卡片封面"这个东西
+}
+watch(() => app.coverTick, () => {
+  if (coverReloadTimer) clearTimeout(coverReloadTimer)
+  coverReloadTimer = setTimeout(() => { coverReloadTimer = null; refreshCoverLayer() }, COVER_RELOAD_QUIET_MS)
+})
+onBeforeUnmount(() => { if (coverReloadTimer) clearTimeout(coverReloadTimer) })
+
+/* ---------------- 角色纠正(2026-10-21) ---------------- */
+const showCharEdit = ref(false)
+const charEdit = ref(null)
+const seriesPickOptions = computed(() => (seriesData.value?.series || []).map((s) => ({
+  name: s.name,
+  zh: seriesZh.value[s.name] || '',
+})))
+
+function openCharEdit(c) {
+  charEdit.value = { char: c, series: curSeries.value }
+  showCharEdit.value = true
+}
+
+/** 改名/挪系列/屏蔽落盘后: 当前卡可能已不属于本系列, 两层都重拉 */
+async function onCharEditSaved(info) {
+  const tag = charEdit.value?.char?.tag
+  if (tag && selected.value.has(tag)) {
+    const s = new Set(selected.value)
+    s.delete(tag)
+    selected.value = s
+  }
+  if (info?.hidden) ui.ok('已屏蔽该角色(可在 分类管理 → 屏蔽角色 里恢复)', 2600)
+  else if (info?.moved) ui.ok('已挪到目标系列', 2000)
+  else ui.ok('角色已更新', 1600)
+  await loadChars(curSeries.value)
+  await loadSeries()
+  if (view.value === 'images' && curChar.value && tag === curChar.value.tag) {
+    // 正在看这个角色的图集: 返回角色列表, 避免停在已挪走的角色上
+    backToChars()
+  }
 }
 
 /* 封面是主进程按**当前安全档位**挑的 —— 🛡 开关/档位一变, 列表层要重拉才拿得到新封面。
@@ -334,8 +572,8 @@ onMounted(() => {
 })
 
 watch(imgSort, (v) => { prefs.sortSeries = v; reloadImages() })
-watch(imgPageSize, (v) => { imgFeed.setPageSize(v); reloadImages() })
-watch(charSort, () => { /* 纯前端排序, computed 已经处理 */ })
+watch(imgPageSize, (v) => { prefs.seriesImgPageSize = v; imgFeed.setPageSize(v); reloadImages() })
+watch(charSort, (v) => { prefs.sortSeriesChars = v })
 
 const route = useRoute()
 const router = useRouter()
@@ -374,8 +612,8 @@ watch(() => route.query.series, async (name) => {
             <span class="now">{{ crumb.char }}</span>
             <button
               class="crumb-copy"
-              :title="`复制角色名(${crumb.char})`"
-              @click="copyCrumb(crumb.char, '角色名')"
+              :title="`复制角色 tag(${crumb.charTag})`"
+              @click="copyCrumb(crumb.charTag, '角色 tag')"
             >📋</button>
           </span>
         </template>
@@ -435,8 +673,11 @@ watch(() => route.query.series, async (name) => {
               :thumb-width="300"
               :in-cart="null"
               coverable
+              fetchable
+              :fetching="fetchingKey === 'series:' + s.name"
               @open="openSeries(s)"
               @cover="openCoverPick('series', s.name, seriesZh[s.name] || s.name, s.thumb)"
+              @fetch="fetchOneCover('series', s.name, seriesZh[s.name] || s.name)"
             />
           </div>
         </div>
@@ -448,13 +689,23 @@ watch(() => route.query.series, async (name) => {
           <span class="hint">
             {{ crumb.seriesZh || curSeries }}
             <span v-if="crumb.seriesZh" class="name-en">{{ curSeries }}</span>
-            · 共 {{ charData.length }} 个角色
+            · 共 {{ charData.length }} 个角色<template v-if="charKw.trim()">, 匹配 <b>{{ sortedChars.length }}</b> 个</template>
           </span>
+          <TvInput
+            v-model="charKw"
+            size="sm"
+            clearable
+            placeholder="🔍 搜索角色(中/英文)"
+            class="kw"
+          />
           <span class="spacer" />
           <template v-if="selectMode">
             <span class="sel-hint">已选 <b>{{ selected.size }}</b></span>
             <TvButton size="sm" variant="success" @click="addSelectedToCart">
               🛒 全部加入购物车({{ selected.size }})
+            </TvButton>
+            <TvButton size="sm" variant="danger" :disabled="!selected.size" @click="hideSelected">
+              🙈 批量隐藏({{ selected.size }})
             </TvButton>
             <TvButton size="sm" variant="secondary" @click="selectAll">☑️ 全选</TvButton>
             <TvButton size="sm" variant="secondary" @click="invertSelect">🔄 反选</TvButton>
@@ -463,6 +714,9 @@ watch(() => route.query.series, async (name) => {
           </template>
           <template v-else>
             <TvButton size="sm" variant="secondary" @click="toggleSelectMode">🎯 选择导出</TvButton>
+            <TvButton size="sm" variant="secondary" @click="coverPanel = !coverPanel">
+              🌐 批量拉封面
+            </TvButton>
             <TvButton size="sm" variant="secondary" :disabled="!cart.count" @click="cart.drawerOpen = true">
               🛒 购物车({{ cart.count }})
             </TvButton>
@@ -485,9 +739,66 @@ watch(() => route.query.series, async (name) => {
           />
         </div>
 
+        <!-- 批量拉封面(2026-10-22): 口径 + 源 + 档位, 跑起来之后这里就是进度条 -->
+        <div v-if="autoCoverLive || coverPanel" class="auto-cover">
+          <template v-if="!autoCover?.running">
+            <TvSelect
+              v-model="coverScope"
+              size="sm"
+              inline
+              label="范围"
+              :options="COVER_SCOPES.map((s) => ({
+                ...s,
+                label: s.value === 'selected' ? `仅选中的(${selected.size})` : `${s.label}(${scopeCount(s.value)})`,
+              }))"
+            />
+            <TvSelect
+              v-model="coverSource"
+              size="sm"
+              inline
+              label="图源"
+              :options="[{ value: 'danbooru', label: 'Danbooru' }, { value: 'safebooru', label: 'Safebooru' }]"
+            />
+            <TvSelect
+              v-model="coverRating"
+              size="sm"
+              inline
+              label="分级"
+              :options="[
+                { value: 'g', label: '仅安全级' },
+                { value: 's', label: '放开敏感' },
+                { value: 'all', label: '不限' },
+              ]"
+            />
+            <label class="zero-tog" title="只要单人图：挡掉群像/对打里混一个的那种，那种当封面经常认不出是谁">
+              <input v-model="coverSolo" type="checkbox" />
+              只要单人图 (solo)
+            </label>
+            <TvButton size="sm" variant="primary" @click="runAutoCovers">
+              🌐 开始拉取({{ coverTargets.length }})
+            </TvButton>
+            <span class="hint">{{ coverHint }}</span>
+            <span v-if="booruKeyed === false" class="hint keyhint">
+              🔑 没配 Danbooru API Key：一次最多带 2 个普通标签（勾了 solo 正好用满，再加第三个条件就会报错），
+              而且「人气」只能在翻到的那几十张里自己比。在 设置 → 在线封面 填 Key 两处都放开；Safebooru 不需要 Key。
+            </span>
+            <span class="spacer" />
+            <TvButton size="sm" variant="ghost" @click="coverPanel = false">✕ 收起</TvButton>
+          </template>
+          <template v-else>
+            <span class="run">🌐 正在拉封面 <b>{{ autoCover.done }}</b> / {{ autoCover.total }}</span>
+            <span class="hint">成功 {{ autoCover.ok }} · 跳过 {{ autoCover.skipped }} · 失败 {{ autoCover.failed }}<template v-if="autoCover.current"> · 当前：{{ autoCover.current }}</template></span>
+            <span class="spacer" />
+            <TvButton size="sm" variant="danger" @click="stopAutoCovers">⏹ 停止</TvButton>
+          </template>
+          <template v-if="autoCover?.finished && !autoCover.running">
+            <div class="done-line">{{ autoCoverDoneText }}<template v-if="autoCover.errors?.length">（例：{{ autoCover.errors[0] }}）</template></div>
+          </template>
+        </div>
+
         <div ref="charScrollEl" class="scroll">
           <TvState v-if="charsLoading" state="loading" text="加载中..." />
-          <TvState v-else-if="!sortedChars.length" state="empty" text="该系列下没有识别到角色" />
+          <TvState v-else-if="!sortedChars.length" state="empty" :text="charsEmptyText" />
           <div v-else class="grid">
             <TvEntityCard
               v-for="c in sortedChars"
@@ -500,14 +811,19 @@ watch(() => route.query.series, async (name) => {
               :selectable="selectMode"
               :selected="selected.has(c.tag)"
               :in-cart="inCart(c.tag)"
-              :badge="c.images === 0 ? '仅手动补充' : ''"
+              :badge="c.images === 0 ? (c.fromLibrary ? '库内角色' : '仅手动补充') : ''"
               :badge-tone="'warn'"
               :thumb-width="300"
               coverable
+              editable
+              fetchable
+              :fetching="fetchingKey === 'chars:' + c.tag"
               @open="selectMode ? toggleSelect(c) : openCharImages(c)"
               @toggle-select="toggleSelect(c)"
               @toggle-cart="toggleCartOne(c)"
               @cover="openCoverPick('chars', c.tag, stripZhSeries(charZh[c.tag]) || c.name, c.thumb)"
+              @edit="openCharEdit(c)"
+              @fetch="fetchOneCover('chars', c.tag, stripZhSeries(charZh[c.tag]) || c.name)"
             />
           </div>
         </div>
@@ -537,8 +853,24 @@ watch(() => route.query.series, async (name) => {
             label="每页"
             :options="[60, 120, 240].map((n) => ({ value: n, label: String(n) }))"
           />
+          <TvButton size="sm" variant="ghost" title="批量选择: 勾选后批量移动/复制/删除(浏览状态下 Ctrl+点击也可直接勾)" @click="imgToggleSelectMode">☑ 选择</TvButton>
           <TvButton size="sm" variant="secondary" @click="backToChars">← 返回角色列表</TvButton>
         </div>
+
+        <!-- 批量操作条: 选择模式下出现, 钉在滚动区外 -->
+        <TvBatchBar
+          v-if="imgSelMode"
+          :count="imgSel.size"
+          :moving="imgMoving"
+          :copying="imgCopying"
+          @sel-all="imgSelectAll"
+          @sel-invert="imgInvertSel"
+          @sel-clear="imgClearSel"
+          @exit="imgToggleSelectMode"
+          @move="imgOpenMove"
+          @copy="imgOpenCopy"
+          @del="imgBatchDelete"
+        />
 
         <div ref="imgScrollEl" class="scroll">
           <TvImageGrid
@@ -548,7 +880,10 @@ watch(() => route.query.series, async (name) => {
             :loaded-once="imgFeed.loadedOnce.value"
             :infinite="true"
             :has-more="imgFeed.hasMore.value"
-            @open="(it) => lb.open(it.path, { list: imgPaths })"
+            :selectable="imgSelMode"
+            :selected-tags="imgSel"
+            @open="imgCardClick"
+            @toggle-select="imgToggleSelectOne"
             @load-more="imgFeed.loadMore"
             @hover="({ text, event }) => ui.showTip(text, event)"
             @move="ui.moveTip"
@@ -559,6 +894,17 @@ watch(() => route.query.series, async (name) => {
     </div>
 
     <TvCategoryManager v-model="showCatMgr" :series-list="seriesData?.series || []" @saved="showSeriesList" />
+
+    <MoveTargetModal v-model="imgMoveOpen" :count="imgSel.size" :folders="imgMoveFolders" :busy="imgMoving" @pick="imgDoMove" />
+    <MoveTargetModal v-model="imgCopyOpen" mode="copy" :count="imgSel.size" :folders="imgMoveFolders" :busy="imgCopying" @pick="imgDoCopy" />
+
+    <TvCharEditModal
+      v-model="showCharEdit"
+      :char="charEdit?.char || null"
+      :series="charEdit?.series || ''"
+      :series-options="seriesPickOptions"
+      @saved="onCharEditSaved"
+    />
 
     <TvCoverPickerModal
       v-model="showCoverPick"
@@ -598,6 +944,22 @@ watch(() => route.query.series, async (name) => {
 .sel-hint b { color: var(--accent2); }
 .cnt { color: var(--accent); font-size: 16px; }
 .kw { max-width: 260px; }
+/* 批量拉封面那一条(2026-10-22): 平时收起, 点「🌐 批量拉封面」或任务在跑时出现 */
+.auto-cover {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel2); font-size: 12px; color: var(--muted);
+}
+.auto-cover .hint { color: var(--muted); }
+.auto-cover .run { color: var(--text); font-size: 13px; }
+.auto-cover .run b { color: var(--accent); }
+.auto-cover .done-line { flex: 1 0 100%; color: var(--warn); }
+/* 匿名限制那句指路单独占一行(混在说明里就看不见"去哪能放开") */
+.auto-cover .keyhint {
+  flex: 1 0 100%;
+  font-size: 11px; line-height: 1.5;
+  color: var(--accent2, var(--accent));
+}
 /* 「无图角色」开关(两层工具栏各一个, 共用 v-model) */
 .zero-tog {
   display: inline-flex; align-items: center; gap: 5px;

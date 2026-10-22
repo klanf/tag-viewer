@@ -19,6 +19,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { resolveDataDir, resolveConfigPath, resolveDataFilePath } from './paths.js'
+import { normalizeTaggerModel } from './tagger-models.js'
 
 const state = {
   appDir: '',
@@ -133,6 +134,11 @@ export function saveSettings(patch) {
   if (patch.taggerProvider !== undefined) {
     const v = String(patch.taggerProvider)
     next.taggerProvider = ['auto', 'cuda', 'dml', 'cpu'].includes(v) ? v : 'auto'
+  }
+  // taggerModel: 反推模型预设(2026-10-21 兼容模式)。
+  // ''/auto = 跟随旧自定义路径, 否则 v0.9 / v1.0。认不出的一律归 auto。
+  if (patch.taggerModel !== undefined) {
+    next.taggerModel = normalizeTaggerModel(patch.taggerModel)
   }
   if (patch.taggerThreshold !== undefined) {
     const v = Number(patch.taggerThreshold)

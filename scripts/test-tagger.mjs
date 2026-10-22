@@ -42,10 +42,11 @@ for (const k of ['TV_PYTHON', 'TV_TAGGER_CMD', 'TV_TAGGER_SCRIPT', 'TV_WD14_MODE
   delete process.env[k]
 }
 
-const { initWorkspace } = await load('electron/core/workspace.js')
+const { initWorkspace, saveSettings } = await load('electron/core/workspace.js')
 const store = await load('electron/core/store.js')
 const ingest = await load('electron/core/ingest.js')
 const tagger = await load('electron/core/tagger.js')
+const orphans = await load('electron/core/orphans.js')
 
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-tagger-'))
 const DATA = path.join(WORK, 'data')
@@ -102,6 +103,7 @@ process.stdin.on('data', (d) => {
     if (MODE === 'empty') { out({ id, ok: true, path: msg.path, tags: [], text: '', ms: 1, provider: 'CUDAExecutionProvider' }); continue }
     const base = String(msg.path).split(/[\\\\/]/).pop().replace(/\\.[^.]+$/, '')
     const tags = ['fake_tag', 'name_' + base]
+    if (MODE === 'with-char') tags.push('hatsune_miku_(vocaloid)')
     out({ event: 'loaded', ms: 1, provider: 'CUDAExecutionProvider', tags: 2 })
     out({ id, ok: true, path: msg.path, tags, text: tags.join(', '), ms: 1, provider: 'CUDAExecutionProvider' })
   }
@@ -362,7 +364,7 @@ console.log('\n[9] 静态配置自检 + 暂停语义')
 
 console.log('\n[9.5] 原始名兼容: 只放 HuggingFace 原始文件名(model.onnx / selected_tags.csv)也认')
 {
-  const MODEL_NAME_ONNX = 'wd-pixai-tagger-v0.9.onnx'   // 应用首选的改名版(与 tagger.js 的 MODEL_FILE 一致)
+  const MODEL_NAME_ONNX = 'wd-pixai-tagger-v0.9.onnx'   // 默认预设首选的改名版
   // 显式指定的候选优先 —— 先摘掉, 才能验"落在目录候选上的原始名"
   delete process.env.TV_WD14_MODEL
   delete process.env.TV_WD14_CSV
@@ -385,6 +387,147 @@ console.log('\n[9.5] 原始名兼容: 只放 HuggingFace 原始文件名(model.o
   fs.rmSync(modelsDir, { recursive: true, force: true })
   const cfg3 = tagger.taggerConfig()
   eq('删掉后回到不可用', cfg3.available, false)
+}
+
+/* ---------------------------------------------------------- 模型预设 */
+
+console.log('\n[9.6] 模型预设: 默认 v0.9 / 选 v1.0 / 切换后服务真重启')
+{
+  const modelsDir = path.join(DATA, 'models')
+  fs.mkdirSync(modelsDir, { recursive: true })
+  const v09Model = 'wd-pixai-tagger-v0.9.onnx'
+  const v10Model = 'pixai-tagger-v1.0-1008-fp16.onnx'
+  for (const n of [v09Model, v10Model]) fs.writeFileSync(path.join(modelsDir, n), 'stub-model')
+  fs.writeFileSync(path.join(modelsDir, 'wd-pixai-tagger-v0.9.csv'),
+    'tag_id,name,category,count\n0,1girl,0,0\n1,kazusa_(blue_archive),4,0\n')
+  fs.writeFileSync(path.join(modelsDir, 'pixai-tagger-v1.0-1008-fp16.csv'),
+    'tag_id,name,category,count,threshold\n0,1girl,general,0,0.17\n1,kazusa_(blue_archive),character,0,0.27\n')
+
+  // 环境变量在 9.5 已摘掉; 此时没有任何显式配置, 未选预设应落到默认 v0.9
+  saveSettings({ taggerModel: '' })
+  const c0 = tagger.taggerConfig()
+  eq('未选预设时默认 v0.9', c0.modelPreset, 'v0.9')
+  eq('默认用 v0.9 模型', path.basename(c0.model), v09Model)
+  eq('默认预处理 pixai448', c0.preprocess, 'pixai448')
+
+  const p1 = await tagger.probeTagger({})
+  eq('默认服务加载 v0.9', path.basename(p1.model || ''), v09Model)
+
+  saveSettings({ taggerModel: 'v1.0' })
+  const c1 = tagger.taggerConfig()
+  eq('选 v1.0 后解析到 v1.0 模型', path.basename(c1.model), v10Model)
+  eq('v1.0 用同名标签表', path.basename(c1.csv), 'pixai-tagger-v1.0-1008-fp16.csv')
+  eq('v1.0 预处理 rescale_pad', c1.preprocess, 'rescale_pad')
+  eq('设置回读为 v1.0', c1.modelPresetSelected, 'v1.0')
+
+  // 已有服务跑着 v0.9; 模型指纹变了必须重启, 否则会拿旧模型继续反推
+  const p2 = await tagger.probeTagger({})
+  eq('切换后服务重启并加载 v1.0', path.basename(p2.model || ''), v10Model)
+
+  saveSettings({ taggerModel: 'v0.9' })
+  const p3 = await tagger.probeTagger({})
+  eq('切回 v0.9 也会重启', path.basename(p3.model || ''), v09Model)
+
+  // ---- 336/672 快速档: 文件名成对解析, 预处理跟 1008 一样是 rescale_pad ----
+  const fast = {
+    'v1.0-336': ['pixai-tagger-v1.0-336-ft-fp16.onnx', 'pixai-tagger-v1.0-336-ft.csv'],
+    'v1.0-672': ['pixai-tagger-v1.0-672-ft-fp16.onnx', 'pixai-tagger-v1.0-672-ft.csv'],
+  }
+  for (const [id, [m, c]] of Object.entries(fast)) {
+    fs.writeFileSync(path.join(modelsDir, m), 'stub-model')
+    fs.writeFileSync(path.join(modelsDir, c),
+      'tag_id,name,category,count,threshold\n0,1girl,general,0,0.17\n1,kazusa_(blue_archive),character,0,0.27\n')
+    saveSettings({ taggerModel: id })
+    const cf = tagger.taggerConfig()
+    eq(`选 ${id} 解析到对应模型`, path.basename(cf.model), m)
+    eq(`${id} 用同名标签表`, path.basename(cf.csv), c)
+    eq(`${id} 预处理 rescale_pad`, cf.preprocess, 'rescale_pad')
+    const pf = await tagger.probeTagger({})
+    eq(`${id} 服务加载对应模型`, path.basename(pf.model || ''), m)
+  }
+
+  // 收尾: 回到自动, 删除临时模型, 不影响后续
+  saveSettings({ taggerModel: '' })
+  tagger.stopTagger()
+  fs.rmSync(modelsDir, { recursive: true, force: true })
+}
+
+/* ---------------------------------------------------------- 补识别 */
+
+console.log('\n[10] 补识别: 无角色/系列重新入队; legacy 只追加角色/系列')
+const ORPHAN_DIR = path.join(WORK, 'orphanimgs')
+fs.mkdirSync(ORPHAN_DIR, { recursive: true })
+const odb = store.openDb()
+const orphanFid = Number(odb.prepare(`INSERT INTO folders (path, label, as_source, as_scan, recursive, added_at)
+                                      VALUES (?, ?, 1, 0, 1, ?)`)
+  .run(norm(ORPHAN_DIR), 'orphans', Date.now()).lastInsertRowid)
+function seedOrphan(name, tags, src) {
+  const p = writeImg(ORPHAN_DIR, name, '', 10)
+  const st = fs.statSync(p)
+  odb.prepare(`INSERT INTO images (path, src_id, tags, folder_id, mtime_ms, size, tags_src, gone, tagged_at)
+               VALUES (?, 0, ?, ?, ?, ?, ?, 0, ?)`)
+    .run(norm(p), tags, orphanFid, Math.round(st.mtimeMs), st.size, src, Date.now())
+  return p
+}
+const O1 = seedOrphan('o1.png', 'fake_tag, name_o1', 'wd14')
+const O2 = seedOrphan('o2.png', 'prompt_meta_only', 'meta')
+const O3 = seedOrphan('o3.png', 'legacy_tag, blue_hair', 'legacy')
+const O4 = seedOrphan('o4.png', 'hatsune_miku_(vocaloid), blue_hair', 'wd14')
+const O5 = seedOrphan('o5.png', 'legacy_char, kazusa_(blue_archive)', 'legacy')
+{
+  const s0 = orphans.orphanStats({ folderId: orphanFid })
+  eq('可覆盖重跑 2 张(o1/o2)', s0.overwritable, 2)
+  eq('legacy 孤本 1 张(o3)', s0.legacy, 1)
+  eq('默认不含 legacy', s0.included, 2)
+  eq('勾选 legacy 后共 3 张', orphans.orphanStats({ folderId: orphanFid, includeLegacy: true }).included, 3)
+
+  const rq = orphans.requeueOrphans({ folderId: orphanFid })
+  eq('入队 2 张', rq.queued, 2)
+
+  useFake('with-char')
+  resetFakeLog()
+  const st = await tagger.runTagger({ onlyOrphans: true, onlyFolderId: orphanFid })
+  eq('只取补识别入队的 2 张', st.picked, 2)
+  eq('发给模型 2 张', st.inferCalls, 2)
+  eq('可覆盖来源整体覆盖 2 张', st.updated, 2)
+  eq('o1 补上了角色', dbGet('SELECT tags FROM images WHERE path=?', norm(O1)).tags.includes('hatsune_miku_(vocaloid)'), true)
+  eq('o1 来源标仍是 wd14', dbGet('SELECT tags_src FROM images WHERE path=?', norm(O1)).tags_src, 'wd14')
+  eq('o2(meta) 覆盖后归一为 wd14', dbGet('SELECT tags_src FROM images WHERE path=?', norm(O2)).tags_src, 'wd14')
+  eq('o3 没勾选, 原标签不动', dbGet('SELECT tags FROM images WHERE path=?', norm(O3)).tags, 'legacy_tag, blue_hair')
+  eq('有角色的 o4 未被送模型', fakeCalls().some((p) => p.includes('o4.png')), false)
+  eq('legacy 有角色的 o5 未被送模型', fakeCalls().some((p) => p.includes('o5.png')), false)
+  eq('onlyOrphans 不顺手消费普通队列(h 还在)', ingest.queueStats().pending, 1)
+
+  // 补完之后 o1/o2 已有角色 -> 不再是孤儿; 只剩 legacy o3
+  eq('补完后再数只剩 legacy o3', orphans.orphanStats({ folderId: orphanFid, includeLegacy: true }).included, 1)
+  const rq2 = orphans.requeueOrphans({ includeLegacy: true, folderId: orphanFid })
+  eq('legacy 入队 1 张', rq2.queued, 1)
+  resetFakeLog()
+  const st2 = await tagger.runTagger({ onlyOrphans: true, onlyFolderId: orphanFid })
+  eq('legacy 走 merge 分支', st2.merged, 1)
+  const ro3 = dbGet('SELECT tags, tags_src FROM images WHERE path=?', norm(O3))
+  eq('o3 原标签保留', ro3.tags.includes('legacy_tag') && ro3.tags.includes('blue_hair'), true)
+  eq('o3 原标签顺序保持在前面', ro3.tags.startsWith('legacy_tag,blue_hair'), true)
+  eq('o3 追加了角色', ro3.tags.includes('hatsune_miku_(vocaloid)'), true)
+  eq('o3 来源仍是 legacy(不被改写成 wd14)', ro3.tags_src, 'legacy')
+  eq('o3 队列留了说明', dbGet('SELECT note FROM tag_queue WHERE path=?', norm(O3)).note, '已补角色/系列')
+  eq('o3 原 mtime 没被改(文件变化仍能被同步发现)',
+    Number(dbGet('SELECT mtime_ms FROM images WHERE path=?', norm(O3)).mtime_ms),
+    Math.round(fs.statSync(O3).mtimeMs))
+
+  // 模型没认出角色 -> merge 无新增, 标签与来源都必须一模一样
+  const O6 = seedOrphan('o6.png', 'legacy_only_tag', 'legacy')
+  orphans.requeueOrphans({ includeLegacy: true, folderId: orphanFid })
+  useFake('ok')
+  resetFakeLog()
+  const st3 = await tagger.runTagger({ onlyOrphans: true, onlyFolderId: orphanFid })
+  eq('认不出角色 -> 无新增', st3.unchanged, 1)
+  const ro6 = dbGet('SELECT tags, tags_src FROM images WHERE path=?', norm(O6))
+  eq('o6 标签一字未动', ro6.tags, 'legacy_only_tag')
+  eq('o6 来源一字未动', ro6.tags_src, 'legacy')
+  eq('o6 队列说明', dbGet('SELECT note FROM tag_queue WHERE path=?', norm(O6)).note, '无新增角色/系列')
+  // 模型这次没认出角色 -> 图仍然"没有角色/系列", 下次换模型还能再补
+  eq('o6 仍会被下次补识别选中', orphans.orphanStats({ folderId: orphanFid, includeLegacy: true }).included, 1)
 }
 
 /* ---------------------------------------------------------- 收尾 */

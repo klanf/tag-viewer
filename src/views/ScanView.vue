@@ -468,6 +468,29 @@ function selectAll() {
   selected.value = new Set(sortedItems.value.map((it) => it.path))
 }
 
+/* 「第 1 张 -> 你正在看的这张」整段勾上(2026-10-22 用户的真实流程: 一张一张看过来,
+ * 看到一半想把前面这一串整个搬到别的文件夹)。
+ * 认的是光箱记下的 lastPath —— 关掉大图它也还在(存 localStorage), 所以顺序是
+ * 「看完 -> 关掉 -> 点这个 -> 点移动到…」, 不用把大图开着找按钮。
+ * 区间按**当前排序**的下标算, 和 Shift 区间选、和网格上那个红框高亮是同一套顺序。 */
+function selectUpToViewed() {
+  const target = lb.lastPath || lb.path
+  if (!target) {
+    ui.warn('还没看过图：先打开任意一张大图，翻到你想停下的那张，再点这个')
+    return
+  }
+  const idx = sortedItems.value.findIndex((it) => it.path === target)
+  if (idx < 0) {
+    ui.warn(`找不到你最后看的那张 —— 它不在当前列表里（多半是换了来源或被筛选条件滤掉了），也可以直接 Shift 点那张卡片`)
+    return
+  }
+  const s = new Set(selected.value)
+  for (let i = 0; i <= idx; i++) s.add(sortedItems.value[i].path)
+  selected.value = s
+  lastSelIdx = idx
+  ui.toast(`已勾上第 1 ~ ${idx + 1} 张（现在共 ${s.size} 张）`, 'info', 2000)
+}
+
 function invertSel() {
   const s = new Set()
   for (const it of sortedItems.value) if (!selected.value.has(it.path)) s.add(it.path)
@@ -889,6 +912,7 @@ onActivated(() => {
             :badge-tone="f.exists ? 'ok' : 'warn'"
             :dim="!f.exists"
             :thumb-width="300"
+            :in-cart="null"
             @open="openFolder(f)"
           >
             <div class="fmeta">
@@ -980,6 +1004,13 @@ onActivated(() => {
             <span class="bcnt">已选 <b data-test="scan-sel-count">{{ selected.size }}</b> 张</span>
             <TvButton size="sm" variant="ghost" data-test="scan-sel-all" @click="selectAll">全选</TvButton>
             <TvButton size="sm" variant="ghost" data-test="scan-sel-invert" @click="invertSel">反选</TvButton>
+            <TvButton
+              size="sm"
+              variant="ghost"
+              data-test="scan-sel-upto"
+              title="从第 1 张一直勾到你正在看的那张(按当前排序; 关掉大图也认得最后看的是哪张)"
+              @click="selectUpToViewed"
+            >选到在看的那张</TvButton>
             <TvButton size="sm" variant="ghost" :disabled="!selected.size" data-test="scan-sel-clear" @click="clearSel">清空</TvButton>
             <TvButton size="sm" variant="ghost" data-test="scan-batch-exit" title="退出选择模式(同时清空已选)" @click="toggleSelectMode">✕ 退出</TvButton>
             <span class="spacer" />

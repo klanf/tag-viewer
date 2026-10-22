@@ -24,7 +24,10 @@
 import fs from 'node:fs'
 import { streamTagFile } from './tagfile.js'
 import { syncSources, readRecords, dbReady, sourceNameList, openDb, normalizeImagePath } from './store.js'
-import { loadCharLib, libIsChar, libCharSeries, libIsCopyright, charLibDiag } from './charlib.js'
+import {
+  loadCharLib, libIsChar, libCharSeries, libIsCopyright, charLibDiag,
+  libOverrideSeries, libIsHidden, libIsNonChar,
+} from './charlib.js'
 import { unsafeLevelOf, safetyMatcher } from './safety.js'
 
 /** Danbooru 分类组名: 出现在 xxx_(group) 里时不是真实作品系列 */
@@ -38,6 +41,22 @@ export const NON_SERIES_GROUPS = new Set([
   'category', 'tag', 'group', 'cosplay', 'artwork', 'image',
   'food', 'animal', 'plant', 'vehicle', 'furniture', 'instrument',
   'nature', 'weather', 'sky', 'water', 'fire', 'light', 'dark',
+  /* 下面这批由四份反推词表(v0.9 + v1.0 的 1008/336/672)统计得出:
+   * 这些括号组名下**从来没有** character/copyright 标签, 全是道具、部位、
+   * 材质、概念。缺了它们, xxx_(weapon) 这种就会被括号兜底当成作品系列。 */
+  'weapon', 'polearm', 'projectile', 'sword', 'bow', 'armor', 'helmet',
+  'scabbard', 'mecha', 'mask', 'headwear', 'headdress', 'hat', 'hair',
+  'hairstyle', 'makeup', 'cosmetics', 'piercing', 'jewelry', 'ornament',
+  'decoration', 'glowstick', 'container', 'bottle', 'cup', 'bowl',
+  'vessel', 'toy', 'doll', 'statue', 'sculpture', 'machine', 'robot',
+  'tool', 'hardware', 'software', 'computing', 'board_game', 'chess',
+  'flower', 'fruit', 'gemstone', 'stone', 'tree', 'seaweed', 'organ',
+  'anatomy', 'species', 'constellation', 'planet', 'element', 'gold',
+  'emblem', 'font', 'letter', 'phrase', 'meme', 'original', 'western',
+  'fandom', 'trend', 'topic', 'site', 'city', 'structure', 'geometry',
+  'texture', 'substance', 'action', 'gesture', 'riding', 'summon',
+  'cheerleading', 'hanetsuki', 'sport', 'expression', 'sex', 'sexual',
+  'nonsexual', 'mtf', 'ftm', 'otf', 'aircraft', 'automobile', 'brand',
 ])
 
 export const CATEGORY_LABELS = { game: '游戏', anime: '动漫', vtb: 'Vtuber', other: '其他' }
@@ -91,10 +110,19 @@ const RE_CHAR_TAG = /^.+_\((.+)\)$/
  * (higuchi_madoka 这种)也能归到作品; 裸系列标签(genshin_impact)本身也算系列。
  */
 export function seriesName(tag) {
+  if (libIsHidden(tag)) return null        // 用户屏蔽的推错角色: 不参与任何系列
+  const ov = libOverrideSeries(tag)
+  if (ov) return ov                        // 用户纠正压过括号自述(最高优先级)
+  if (libIsNonChar(tag)) return null       // 库判定的道具/概念标签: 括号写法也不算系列
   const m = RE_CHAR_TAG.exec(tag)
   if (m) {
     const s = m[1].toLowerCase()
-    if (!NON_SERIES_GROUPS.has(s)) return s
+    if (!NON_SERIES_GROUPS.has(s)) {
+      // 2026-10-21: 角色库里的系列(Danbooru 归属)优先于括号自述。
+      // 否则 usada_pekora_(1st_costume) 会被当成系列 1st_costume, 库里的
+      // hololive 归属永远生效不了。库没登记时才退回括号。
+      return libCharSeries(tag) || s
+    }
     return libCharSeries(tag) || null      // 括号里是分类组词 -> 库里兜底
   }
   const libS = libCharSeries(tag)          // 无括号角色 -> 它所属的系列
@@ -105,9 +133,12 @@ export function seriesName(tag) {
 
 /** 是否真正的角色标签(排除 xxx_(category) 分类写法; 无括号角色查角色库) */
 export function isCharacterTag(tag) {
+  if (libOverrideSeries(tag)) return true
+  if (libIsNonChar(tag)) return false
+  if (libIsChar(tag)) return true
   const m = RE_CHAR_TAG.exec(tag)
   if (m) return !NON_SERIES_GROUPS.has(m[1].toLowerCase())
-  return libIsChar(tag)
+  return false
 }
 
 /** 是否裸系列标签(不带角色名的 copyright 写法, 如 genshin_impact) */
@@ -523,6 +554,53 @@ async function buildSeriesIndex() {
   }
   W.seriesImgs = si
   W.seriesChars = sc
+}
+
+/**
+ * 用户改了角色归属(char_series / hidden_chars / custom_chars)后重建系列索引。
+ * 不重读标签库, 只遍历内存里的 records(85k 条, 分片让路) —— 比整库重载便宜得多。
+ * 先等当前正在跑的数据加载结束: 否则会和 W=fresh 的分片构建交错, 一半索引用旧
+ * charlib、一半用新 charlib。来源过滤缓存(_srcStats)里带着旧的 seriesCounter,
+ * 必须一并作废。
+ */
+export async function rebuildSeriesIndex() {
+  // 期间若有新加载排队, 等它一起结束(它可能用新版 charlib 又提交了一份索引)
+  let seen
+  do { seen = loadChain; await seen } while (seen !== loadChain)
+  if (!ds.loaded) return false
+  const recs = ds.records
+  const chain = loadChain
+  const si = new Map()
+  const sc = new Map()
+  const counter = new Map()
+  for (let idx = 0; idx < recs.length; idx++) {
+    for (const t of recs[idx].tags) {
+      const s = seriesName(t)
+      if (!s) continue
+      counter.set(s, (counter.get(s) || 0) + 1)
+      let imgs = si.get(s)
+      if (!imgs) { imgs = new Set(); si.set(s, imgs) }
+      imgs.add(idx)
+      if (!isCharacterTag(t)) continue
+      let chars = sc.get(s)
+      if (!chars) { chars = new Map(); sc.set(s, chars) }
+      let ids = chars.get(t)
+      if (!ids) { ids = new Set(); chars.set(t, ids) }
+      ids.add(idx)
+    }
+    if ((idx + 1) % 5000 === 0) await new Promise((r) => setImmediate(r))
+  }
+  // 构建期间若有整库加载提交/排队, 我们扫的是旧快照 —— 等新加载结束后重来一次
+  if (ds.records !== recs || loadChain !== chain) return rebuildSeriesIndex()
+  ds.seriesImgs = si
+  ds.seriesChars = sc
+  ds.seriesCounter = counter
+  ds._srcStats.clear()
+  if (ds.stats) {
+    ds.stats.series = counter.size
+    ds.stats.charLib = charLibDiag()
+  }
+  return true
 }
 
 // ---------------------------------------------------------------- 来源过滤

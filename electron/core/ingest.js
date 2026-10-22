@@ -113,10 +113,18 @@ CREATE TABLE IF NOT EXISTS tag_queue (
   attempts  INTEGER NOT NULL DEFAULT 0,
   added_at  INTEGER NOT NULL DEFAULT 0,
   last_try  INTEGER NOT NULL DEFAULT 0,
-  note      TEXT    NOT NULL DEFAULT ''
+  note      TEXT    NOT NULL DEFAULT '',
+  mode      TEXT    NOT NULL DEFAULT ''           -- '' 普通 | orphan 无角色重跑 | merge 旧标签只补角色
 );
 CREATE INDEX IF NOT EXISTS idx_queue_state ON tag_queue(state, added_at);
 `)
+  /* 老库原地补列(与 store.js 的 ADDITIVE_COLS 同一套路): 建表语句只对新库生效 */
+  try {
+    const cols = db.prepare('PRAGMA table_info(tag_queue)').all()
+    if (!cols.some((c) => c.name === 'mode')) {
+      db.exec("ALTER TABLE tag_queue ADD COLUMN mode TEXT NOT NULL DEFAULT ''")
+    }
+  } catch { /* 只读库/老版本: 补不了就不补, 普通反推不依赖它 */ }
 }
 
 /**
