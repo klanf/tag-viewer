@@ -7,13 +7,17 @@
  * 扫描口径与看板可见图一致(gone=0 + 来源未注销), 幽灵记录/隐藏来源不掺和。
  *
  * 处理能力(2026-10-17 用户拍板):
- *   · 每张缩略图悬停 🗑 = 单张删(系统回收站, 走全局确认弹窗)
+ *   · 每张图悬停 🗑 = 单张删(系统回收站, 走全局确认弹窗)
  *   · 组头「删其余」 = 一键删掉组内非★项
  *   · ★保留优先级**可自定义**: 跨文件夹按「保留优先级」拖拽排序(越前越优先保留);
  *     同文件夹看文件名(带画师信息 名字+uid/pid 的优先); 再看分辨率(2026-10-17)
  *   · 组头「非重复」 = 误报忽略 —— 整组两两 id 对持久化, 下次扫描不再出现
  *   · 安全模式(2026-10-17 用户补充): 面板结果也过安全模式审查 —— 每张图带
  *     unsafe 标记(主进程算), 开着 🛡 时敏感图/只剩一张的组整个不显示
+ *   · 原图直显(2026-10-23): 不再请求缩略图, 直接看原图 + 按真实像素比完整显示;
+ *     Ctrl+滚轮改卡片高度, 原图请求单独限流(2 个在飞) + 懒加载 + 分组增量渲染
+ *   · 已忽略的组(2026-10-23): 可以切过去看忽略过哪些, 并逐组恢复
+ *
  * 删除后的组内剪枝统一监听 'tv:trashed'(与各视图同一套广播)。
  */
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
@@ -45,6 +49,11 @@ const error = ref('')
 const result = ref(null)          // { scanned, candidates, ignoredPairs, groups, truncated, elapsedMs }
 const threshold = ref(0.85)
 
+/** 视图: 相似组 / 已忽略的组 */
+const view = ref('groups')
+const ignored = ref(null)         // { groups, pairs, missingPairs, elapsedMs }
+const ignoredLoading = ref(false)
+
 const THRESHOLD_OPTIONS = [0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65].map((v) => ({
   value: v, label: `≥ ${v}（${v >= 0.9 ? '严格' : v >= 0.8 ? '均衡' : '宽松'}）`,
 }))
@@ -64,13 +73,31 @@ async function run() {
 watch(open, (v) => { if (v && !result.value) run() })
 watch(threshold, () => { if (open.value) run() })
 
+/* ---------------- 已忽略的组 ----------------
+ * 忽略表只存 id 对, 主进程按库里的记录还原成组(见 findIgnoredGroups)。
+ * 每次切过去重新拉: 忽略/恢复都改同一份文件, 缓存反而容易对不上。 */
+async function loadIgnored() {
+  ignoredLoading.value = true
+  try {
+    ignored.value = await api.dupIgnoreList()
+  } catch (e) {
+    ui.err('读取已忽略组失败: ' + (e?.message || e))
+  } finally {
+    ignoredLoading.value = false
+  }
+}
+watch(view, (v) => { if (v === 'ignored') loadIgnored() })
+
+/* 结果源: 相似组 / 已忽略组, 下游的安全过滤与排序对两者一视同仁 */
+const sourceGroups = computed(() => (
+  view.value === 'ignored' ? (ignored.value?.groups || []) : (result.value?.groups || [])
+))
+
 /* ---------------- 安全模式审查 ----------------
  * 每张图带主进程算好的 unsafe 0/1/2(与看板数据集同一套词表), 这里按当前
- * 开关/档位过滤: 敏感图剔除后组内不足 2 张的整组隐藏。展示层过滤 ——
- * 关掉开关立刻全回来, 不动结果数据本身。 */
-const rawGroups = computed(() => result.value?.groups || [])
+ * 开关/档位/显示方式过滤: 被隐藏的图剔除后组内不足 2 张的整组隐藏。 */
 const safetyView = computed(() => {
-  const gs = rawGroups.value
+  const gs = sourceGroups.value
   if (!safety.on) return { list: gs, hiddenGroups: 0, hiddenItems: 0 }
   let hg = 0
   let hi = 0
@@ -84,6 +111,41 @@ const safetyView = computed(() => {
   return { list, hiddenGroups: hg, hiddenItems: hi }
 })
 const groups = computed(() => safetyView.value.list)
+
+/* ---------------- 原图尺寸 / Ctrl+滚轮缩放(2026-10-23) ----------------
+ * 原图直接按 px_w:px_h 定卡片宽度, 配 object-fit: contain 完整显示, 不裁不缩水。
+ * 高度 = 用户缩放级别, 宽度跟着真实像素比走; 没有尺寸记录时回落到 3:4。 */
+const IMG_H_KEY = 'tv.dup.imgH'
+const IMG_H_MIN = 120
+const IMG_H_MAX = 900
+const imgH = ref((() => {
+  const n = Number(localStorage.getItem(IMG_H_KEY))
+  return n >= IMG_H_MIN && n <= IMG_H_MAX ? n : 260
+})())
+watch(imgH, (v) => {
+  try { localStorage.setItem(IMG_H_KEY, String(v)) } catch { /* 隐私模式等, 存不进就算了 */ }
+})
+
+function onWheel(e) {
+  if (!e.ctrlKey && !e.metaKey) return
+  e.preventDefault()
+  const dir = e.deltaY < 0 ? 1 : -1
+  imgH.value = Math.max(IMG_H_MIN, Math.min(IMG_H_MAX, imgH.value + dir * 40))
+}
+
+/** 卡片宽度: 保持真实像素比, 控件只调高度 */
+function itemW(it) {
+  const w = Number(it.px_w) || 0
+  const h = Number(it.px_h) || 0
+  const ratio = w > 0 && h > 0 ? w / h : 3 / 4
+  return Math.max(80, Math.min(1200, Math.round(imgH.value * ratio)))
+}
+
+/** 分组增量渲染: 一次挂几百组原图既卡又白下, 先给 12 组, 滚到底手动加 */
+const PAGE_GROUPS = 12
+const shownGroups = ref(PAGE_GROUPS)
+watch(view, () => { shownGroups.value = PAGE_GROUPS })
+watch(result, () => { shownGroups.value = PAGE_GROUPS })
 
 /* ---------------- 保留优先级(可自定义, 2026-10-17) ----------------
  * 「删其余」删谁留谁, 用户说了算:
@@ -128,7 +190,7 @@ function fileScore(name) {
 const folderChips = computed(() => {
   const seen = []
   const seenSet = new Set()
-  for (const g of rawGroups.value) {
+  for (const g of sourceGroups.value) {
     for (const it of g.items) {
       const d = regFolderOf(it)
       const k = d.toLowerCase()
@@ -190,6 +252,8 @@ const decorated = computed(() => {
     return { ...g, _key: `${items[0]?.id}-${gi}`, items }
   })
 })
+const pagedGroups = computed(() => decorated.value.slice(0, shownGroups.value))
+const restGroups = computed(() => Math.max(0, decorated.value.length - shownGroups.value))
 
 /** ★ 的理由(悬停提示): 说清楚为什么留它不留别的 */
 function keepWhy(items) {
@@ -229,11 +293,18 @@ async function delRest(g) {
 
 /** 'tv:trashed' 与删除回执统一走这里: 剪掉组内已删项, 剩不足 2 张的组整个移除 */
 function pruneTrashed(trashed) {
-  if (!trashed?.length || !result.value) return
+  if (!trashed?.length) return
   const gone = new Set(trashed)
-  result.value.groups = result.value.groups
-    .map((g) => ({ ...g, items: g.items.filter((it) => !gone.has(it.path)) }))
-    .filter((g) => g.items.length >= 2)
+  if (result.value) {
+    result.value.groups = result.value.groups
+      .map((g) => ({ ...g, items: g.items.filter((it) => !gone.has(it.path)) }))
+      .filter((g) => g.items.length >= 2)
+  }
+  if (ignored.value) {
+    ignored.value.groups = ignored.value.groups
+      .map((g) => ({ ...g, items: g.items.filter((it) => !gone.has(it.path)) }))
+      .filter((g) => g.items.length >= 2)
+  }
 }
 function onTrashed(e) { pruneTrashed(e?.detail?.paths) }
 window.addEventListener('tv:trashed', onTrashed)
@@ -263,13 +334,30 @@ async function ignoreGroup(g) {
   }
 }
 const ignoredTotal = computed(() => (result.value?.ignoredPairs || 0) + ignoredAdded.value)
-/** 恢复 = 清空忽略表并重扫(之前忽略的全部回来) */
+
+/** 恢复一组(2026-10-23): 删掉这组 id 之间的对, 再扫就会回来 */
+async function restoreGroup(g) {
+  const ids = g.items.map((it) => it.id)
+  try {
+    const r = await api.dupIgnoreRemove(ids)
+    ignored.value = ignored.value
+      ? { ...ignored.value, pairs: Math.max(0, ignored.value.pairs - (r?.removed || 0)) }
+      : null
+    ui.toast(`已恢复这组(${r?.removed || 0} 对) · 重新扫描后会重新出现`, 'ok', 2600)
+    await loadIgnored()
+  } catch (e) {
+    ui.err('恢复失败: ' + (e?.message || e))
+  }
+}
+
+/** 恢复全部 = 清空忽略表并重扫(之前忽略的全部回来) */
 async function unignoreAll() {
   try {
     const r = await api.dupIgnoreClear()
     ignoredAdded.value = 0
     ui.toast(`已恢复 ${r?.removed || 0} 对误报记录, 重新扫描中…`, 'ok')
     await run()
+    if (view.value === 'ignored') await loadIgnored()
   } catch (e) {
     ui.err('恢复失败: ' + (e?.message || e))
   }
@@ -289,28 +377,56 @@ function fmtSize(n) {
 
 <template>
   <TvModal v-model="open" title="🔎 相似图查重" size="xl">
-    <div class="dup">
+    <div class="dup" @wheel="onWheel">
       <!-- 工具条: 控件一行对齐(inline 下拉不再把标签顶到上一行) -->
       <div class="bar">
         <TvSelect v-model="threshold" inline size="sm" label="相似度" :options="THRESHOLD_OPTIONS" />
         <TvButton size="sm" variant="secondary" :loading="loading" @click="run">↻ 重新扫描</TvButton>
-        <span v-if="result" class="sum">
+
+        <!-- 视图切换: 相似组 / 已忽略的组(2026-10-23) -->
+        <div class="seg">
+          <button type="button" :class="{ on: view === 'groups' }" @click="view = 'groups'">
+            相似组{{ result ? ` ${groups.length}` : '' }}
+          </button>
+          <button type="button" :class="{ on: view === 'ignored' }" @click="view = 'ignored'">
+            已忽略{{ ignored ? ` ${ignored.groups.length} 组` : '' }}
+          </button>
+        </div>
+
+        <span v-if="view === 'groups' && result" class="sum">
           扫描 {{ result.scanned.toLocaleString() }} 张 ·
           <b>{{ groups.length }}</b> 组
           <span v-if="safetyView.hiddenGroups" class="sfthide" title="开着安全模式, 命中敏感标签的图/组不显示">（🛡 隐藏 {{ safetyView.hiddenGroups }} 组）</span>
           <template v-if="result.truncated">（已达上限，可提高阈值）</template>
           · {{ (result.elapsedMs / 1000).toFixed(1) }}s
         </span>
-        <span class="spacer" />
-        <TvSafetyToggle />
-        <span
-          v-if="ignoredTotal > 0"
-          class="igchip"
-          title="标记为「非重复」的误报已从结果扣除; 点右侧按钮全部恢复显示"
-        >
-          已忽略 {{ ignoredTotal }} 项
-          <button class="ig-undo" type="button" @click="unignoreAll">↩ 恢复</button>
+        <span v-else-if="view === 'ignored' && ignored" class="sum">
+          共 <b>{{ ignored.groups.length }}</b> 组 / {{ ignored.pairs }} 对
+          <span v-if="ignored.missingPairs" class="faint" title="图已删除或整库重导过, 这些 id 对已经对不上任何图">（{{ ignored.missingPairs }} 对已失效）</span>
+          <span v-if="safetyView.hiddenGroups" class="sfthide">（🛡 隐藏 {{ safetyView.hiddenGroups }} 组）</span>
         </span>
+
+        <span class="spacer" />
+        <span class="zoomhint" title="Ctrl+滚轮可以放大 / 缩小原图卡片">🔍 {{ imgH }}px</span>
+        <TvSafetyToggle />
+        <button
+          v-if="view === 'groups' && ignoredTotal > 0"
+          class="igchip"
+          type="button"
+          title="切到「已忽略」看看忽略过哪些组, 可以逐组恢复"
+          @click="view = 'ignored'"
+        >
+          已忽略 {{ ignoredTotal }} 项 · 查看
+        </button>
+        <button
+          v-else-if="view === 'ignored' && ignored?.pairs"
+          class="igchip"
+          type="button"
+          title="清空忽略表并重新扫描 —— 之前忽略的全部回来"
+          @click="unignoreAll"
+        >
+          ↩ 恢复全部
+        </button>
       </div>
 
       <!-- 保留优先级: 跨文件夹拖拽排序(只在一个组跨多个文件夹时才有得排) -->
@@ -334,30 +450,41 @@ function fmtSize(n) {
         <span class="phint">越前越优先保留; 同文件夹内文件名带画师信息(名字+uid/pid)的优先, 再看分辨率</span>
       </div>
       <div v-else class="hintline">
-        ★ = 建议保留 · 悬停缩略图 🗑 删单张 · 组头「删其余」删非★项 · 「非重复」忽略误报 —— 都进系统回收站/可还原
+        ★ = 建议保留 · 悬停原图 🗑 删单张 · 组头「删其余」删非★项 · 「非重复」忽略误报 —— 都进系统回收站/可还原
+        · <b>Ctrl+滚轮</b>缩放原图
       </div>
 
       <div v-if="error" class="err">扫描失败：{{ error }}</div>
       <div v-else-if="loading && !result" class="empty">正在比对全库标签…（约 2 秒）</div>
-      <div v-else-if="result && !groups.length" class="empty">
-        {{
-          safetyView.hiddenGroups
-            ? `发现的相似组都被安全模式隐藏了（${safetyView.hiddenGroups} 组 / ${safetyView.hiddenItems} 张）—— 关掉 🛡 可见`
-            : '这个阈值下没有发现相似组 —— 试试调低阈值'
-        }}
+      <div v-else-if="view === 'ignored' && ignoredLoading && !ignored" class="empty">正在读取忽略记录…</div>
+      <div v-else-if="view === 'ignored' && !ignored?.pairs" class="empty">
+        还没有忽略过任何图片组 —— 在「相似组」里点「🚫 非重复」的组会出现在这里
+      </div>
+      <div v-else-if="!groups.length" class="empty">
+        <template v-if="view === 'ignored'">忽略记录里的图对都对不上现存图片了（可能已经删掉或整库重导过）</template>
+        <template v-else-if="safetyView.hiddenGroups">
+          发现的相似组都被安全模式隐藏了（{{ safetyView.hiddenGroups }} 组 / {{ safetyView.hiddenItems }} 张）—— 关掉 🛡 可见
+        </template>
+        <template v-else>这个阈值下没有发现相似组 —— 试试调低阈值</template>
       </div>
 
       <div v-else class="list">
-        <div v-for="g in decorated" :key="g._key" class="grp">
+        <div v-for="g in pagedGroups" :key="g._key" class="grp">
           <div class="ghead">
-            <span class="score" :class="{ hi: g.score >= 0.999 }">{{ (g.score * 100).toFixed(1) }}%</span>
+            <span v-if="g.ignored" class="score ig">已忽略</span>
+            <span v-else class="score" :class="{ hi: g.score >= 0.999 }">{{ (g.score * 100).toFixed(1) }}%</span>
             <span class="cnt">{{ g.items.length }} 张</span>
             <span v-if="g.shared?.length" class="shared" :title="g.shared.join(', ')">
               共享: <i v-for="t in g.shared.slice(0, 6)" :key="t">{{ t }}</i>
             </span>
             <span class="gacts">
-              <button class="gbtn" type="button" title="这组不是重复图 —— 忽略后下次扫描不再出现" @click="ignoreGroup(g)">🚫 非重复</button>
-              <button class="gbtn danger" type="button" title="删除组内除★(优先级第1名)外的所有图(进系统回收站)" @click="delRest(g)">🗑 删其余</button>
+              <template v-if="g.ignored">
+                <button class="gbtn" type="button" title="把这组从忽略表移除 —— 重新扫描后会重新出现" @click="restoreGroup(g)">↩ 恢复这组</button>
+              </template>
+              <template v-else>
+                <button class="gbtn" type="button" title="这组不是重复图 —— 忽略后下次扫描不再出现" @click="ignoreGroup(g)">🚫 非重复</button>
+                <button class="gbtn danger" type="button" title="删除组内除★(优先级第1名)外的所有图(进系统回收站)" @click="delRest(g)">🗑 删其余</button>
+              </template>
             </span>
           </div>
           <div class="items">
@@ -365,11 +492,21 @@ function fmtSize(n) {
               v-for="(it, ii) in g.items"
               :key="it.id"
               class="item"
+              :style="{ width: itemW(it) + 'px' }"
               :title="`${it.path}\n${it.px_w}×${it.px_h}${it.size ? ' · ' + fmtSize(it.size) : ''}`"
               @contextmenu="onItemCtx($event, it)"
             >
-              <div class="thumb">
-                <TvImage :path="it.path" :width="200" ratio="1 / 1" @click="openItem(g, it)" />
+              <!-- 原图直显(2026-10-23): width=0 走原图流, contain 完整显示;
+                   原图请求单独限流 + 懒加载, rootMargin 收窄到 300px -->
+              <div class="thumb" :style="{ height: imgH + 'px' }">
+                <TvImage
+                  :path="it.path"
+                  :width="0"
+                  contain
+                  orig-gate
+                  root-margin="300px 0px"
+                  @click="openItem(g, it)"
+                />
                 <button
                   class="del"
                   type="button"
@@ -387,6 +524,12 @@ function fmtSize(n) {
             </div>
           </div>
         </div>
+
+        <div v-if="restGroups" class="moregrp">
+          <TvButton size="sm" variant="secondary" @click="shownGroups += PAGE_GROUPS">
+            显示更多组（还剩 {{ restGroups }} 组）
+          </TvButton>
+        </div>
       </div>
     </div>
   </TvModal>
@@ -403,21 +546,38 @@ function fmtSize(n) {
 .spacer { flex: 1 1 auto; }
 .phint, .hintline { color: var(--muted); font-size: 11px; }
 .hintline { line-height: 1.6; }
+.hintline b { color: var(--text); font-weight: 600; }
 .err { color: var(--danger); font-size: 13px; }
 .empty { color: var(--muted); padding: 48px 0; text-align: center; }
 
-/* 已忽略误报提示 chip */
+/* 视图切换(相似组 / 已忽略) */
+.seg {
+  display: inline-flex; overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--panel2);
+}
+.seg button {
+  background: none; border: 0; cursor: pointer; font-family: inherit;
+  color: var(--muted); font-size: 12px; padding: 4px 10px; line-height: 1.4;
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+
+.zoomhint {
+  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 已忽略误报提示 chip(可点进已忽略视图) */
 .igchip {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; color: var(--muted);
+  font-family: inherit; font-size: 12px; color: var(--muted);
   background: var(--panel3, rgba(128,128,128,.15));
-  border-radius: 999px; padding: 2px 10px;
+  border: 1px solid transparent; border-radius: 999px; padding: 2px 10px;
+  cursor: pointer;
 }
-.ig-undo {
-  border: none; background: none; cursor: pointer;
-  color: var(--accent); font-size: 12px; padding: 0;
-}
-.ig-undo:hover { text-decoration: underline; }
+.igchip:hover { color: var(--accent); border-color: var(--accent); }
 
 /* 保留优先级行: 标签 + 可拖拽文件夹链 + 重置 */
 .prio { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -442,6 +602,7 @@ function fmtSize(n) {
 .phint { flex-basis: 100%; }
 
 .list { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.moregrp { display: flex; justify-content: center; padding: 4px 0 10px; }
 .grp {
   border: 1px solid var(--border, rgba(128,128,128,.25)); border-radius: 8px; padding: 8px 10px;
 }
@@ -451,6 +612,7 @@ function fmtSize(n) {
   background: var(--panel3, rgba(128,128,128,.15));
 }
 .score.hi { background: var(--danger-soft, rgba(239,68,68,.14)); color: var(--danger); }
+.score.ig { background: var(--panel3, rgba(128,128,128,.15)); color: var(--muted); font-weight: 500; font-size: 12px; }
 .cnt { font-size: 12px; color: var(--muted); }
 .shared { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shared i {
@@ -468,11 +630,12 @@ function fmtSize(n) {
 
 .items { display: flex; gap: 8px; flex-wrap: wrap; }
 .item {
-  width: 150px; border: 1px solid var(--border, rgba(128,128,128,.25)); border-radius: 6px;
+  border: 1px solid var(--border, rgba(128,128,128,.25)); border-radius: 6px;
   background: none; overflow: hidden; text-align: left; cursor: pointer;
+  flex: 0 0 auto;
 }
 .item:hover { border-color: var(--accent); }
-.item :deep(.tv-img) { display: block; width: 100%; }
+.item :deep(.tv-img) { display: block; width: 100%; height: 100%; }
 .thumb { position: relative; }
 /* 悬停单张删除: 右上角小圆钮, 不挤压布局 */
 .thumb .del {

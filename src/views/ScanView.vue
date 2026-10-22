@@ -82,6 +82,7 @@ const result = ref(null)             // 扫描结果
 const opening = ref(false)
 const rescanning = ref(false)
 const page = ref(1)
+const winStart = ref(0)              // 当前窗口第一张在 sortedItems 里的下标
 const pageSize = ref(120)
 const sortBy = ref(prefs.sortScan)
 
@@ -190,16 +191,22 @@ const sortedItems = computed(() => {
 })
 
 const totalPages = computed(() => Math.max(1, Math.ceil(sortedItems.value.length / pageSize.value)))
-/* 累加式显示: 显示到第 page 页为止的全部内容(不是只显示这一页)。
- * 滚到底自动 page+1 追加下一页, 已看过的内容不消失、滚动位置不跳。 */
-const pagedItems = computed(() => sortedItems.value.slice(0, page.value * pageSize.value))
+/* 窗口式分页(2026-10-22): 只渲染「当前窗口」[winStart, page*pageSize)。
+ * 旧版是 slice(0, page*pageSize) 一路累加 —— 连翻 8 页就把 8 页全挂在 DOM 里,
+ * 每张卡片都去要缩略图, 主进程同步解码被连续占死, 表现就是翻页卡死(实测 IPC 峰值 6.1s)。
+ * 现在翻页 = 换窗口(旧页卸载、新页从页首开始); 滚到底仍在**窗口尾部**追加下一页。 */
+const pagedItems = computed(() => {
+  const from = Math.min(winStart.value, sortedItems.value.length)
+  const to = Math.min(sortedItems.value.length, page.value * pageSize.value)
+  return sortedItems.value.slice(from, to)
+})
+/** 提示条上的「第 X–Y 张」——窗口式之后已加载 ≠ 从第一张开始 */
+const shownFrom = computed(() => (pagedItems.value.length ? winStart.value + 1 : 0))
+const shownTo = computed(() => winStart.value + pagedItems.value.length)
 /** 光箱翻页用全量顺序(不只当前页) */
 const imgPaths = computed(() => sortedItems.value.map((it) => it.path))
 /* 自适应行高: 每行按真实比例铺满、行高自适应(与首页/系列页/标签页同一套)。
- * 用 pagedItems(增量显示到第 page 页)而不是 sortedItems —— 必须和**实际渲染的内容**
- * 一致, 否则行会被还没显示出来的图撑变形。 */
-/* 自适应行高: 每行按真实比例铺满、行高自适应(与首页/系列页/标签页同一套)。
- * 用 pagedItems(增量显示到第 page 页)而不是 sortedItems —— 必须和**实际渲染的内容**
+ * 用 pagedItems(当前窗口)而不是 sortedItems —— 必须和**实际渲染的内容**
  * 一致, 否则行会被还没显示出来的图撑变形。
  * base 乘上 Ctrl+滚轮的缩放倍率(2026-10-20, 与看板四个网格同一套, 倍率共用
  * tv_grid_zoom)—— base 支持响应式, 倍率一变行高立刻重排。 */
@@ -375,6 +382,7 @@ async function openFolder(f, { refresh = false } = {}) {  if (!f.exists) { ui.wa
   if (refresh) rescanning.value = true
   error.value = ''
   if (refresh) result.value = null
+  winStart.value = 0
   page.value = 1
   filterKw.value = ''   // 换了文件夹就是换了一批图, 上一次的筛选词没有意义了
   selectMode.value = false   // 换文件夹也换了一批图, 选择集没有延续的意义
@@ -414,6 +422,8 @@ function backToList() {
   cur.value = null
   result.value = null
   error.value = ''
+  winStart.value = 0
+  page.value = 1
   selectMode.value = false
   streaming.value = false            // 回列表后后台扫描的推送不再有落点(path 匹配挡住)
   streamInfo.value = null
@@ -423,11 +433,15 @@ function backToList() {
 
 function openImage(it) { lb.open(it.path, { list: imgPaths.value }) }
 
-/* ---------------- 选择模式(批量移动 / 批量删除) ----------------
- * 交互: 工具栏「选择」进出; 选择模式下点击=勾选, Shift=区间选(按当前排序),
- * Ctrl+点击在浏览状态下也能直接勾(顺手进入选择模式); Ctrl+A 全选 / Esc 退出 /
- * Del 批量删除。选择集按 path 记, 排序/筛选变化不影响已勾的。
- * ( TvImageCard 自带 selectable/selected/勾选角标 —— 系列页选择模式同款。 ) */
+/* ---------------- 选择模式(批量移动 / 批量复制 / 批量删除) ----------------
+ * 交互(第十八轮重设计, 2026-10-22): 顶部那颗「☑ 选择」按钮**没有了** —— 原来"右上角开
+ * 模式 → 左边勾图 → 右上角点移动"要横穿屏幕三趟。现在进模式有三条路, 手都不用离开网格:
+ *   · 点卡片左上角的勾选框(hover 才显形) —— 顺手就把这一张勾上;
+ *   · 长按卡片 0.5 秒(见 TvImageCard 的 long-press) —— 不用先知道勾选框在哪;
+ *   · Ctrl+点击(老路子, 照旧)。
+ * 模式内: 点击=勾选, Shift=区间选(按当前排序), Ctrl+A 全选 / Esc 退出 / Del 批量删除。
+ * 操作条浮在网格**底部正中**并在选择模式期间给网格留出避让高度。
+ * 选择集按 path 记, 排序/筛选变化不影响已勾的。 */
 const selectMode = ref(false)
 const selected = ref(new Set())     // path 集合
 const moving = ref(false)           // 批量移动进行中(锁弹窗与按钮)
@@ -436,11 +450,32 @@ const copying = ref(false)          // 批量复制进行中
 const moveOpen = ref(false)         // 目标选择弹窗
 let lastSelIdx = -1                 // Shift 区间选的锚点(当前排序里的下标)
 
-function toggleSelectMode() {
-  selectMode.value = !selectMode.value
-  if (!selectMode.value) selected.value = new Set()
+function enterSelectMode(quiet = false) {
+  if (selectMode.value) return
+  selectMode.value = true
   lastSelIdx = -1
-  ui.toast(selectMode.value ? '☑ 选择模式: 点击勾选, Shift 区间, Ctrl+A 全选, Esc 退出' : '已退出选择模式', 'info', 1800)
+  // quiet: 调用方自己会补一句更贴场景的话(比如长按), 别把通用提示盖上去再叠一层
+  if (!quiet) ui.toast('☑ 选择模式：点击勾选 · Shift 连选 · Ctrl+A 全选 · Esc 退出', 'info', 2000)
+}
+
+function exitSelectMode() {
+  if (!selectMode.value) return
+  selectMode.value = false
+  clearSel()
+  ui.toast('已退出选择模式', 'info', 1400)
+}
+
+/** 勾选框 / 长按 / Ctrl+点 三条路共用: 还没进模式就先进去, 再走同一套勾选逻辑 */
+function pickCard(it, ev, quiet = false) {
+  if (!selectMode.value) enterSelectMode(quiet)
+  toggleSelect(it, ev)
+}
+
+/** 长按卡片: 勾上这一张 + 一句"这就是长按进来的"提示(第一次用的人不该猜发生了什么) */
+function onLongPress(it) {
+  const first = !selectMode.value
+  pickCard(it, null, true)
+  if (first) ui.toast(`长按已进入选择模式，并勾上这张：${it.name || ''}（接着点其他卡片就是继续勾）`, 'info', 2400)
 }
 
 function toggleSelect(it, ev) {
@@ -502,6 +537,14 @@ function clearSel() {
   lastSelIdx = -1
 }
 
+/** 「清空」按钮走这条: 一张都没勾时说人话, 而不是让按钮变灰(2026-10-22 定的规矩) */
+function clearSelClicked() {
+  if (!selected.value.size) { ui.warn('现在已经没有勾选的图了'); return }
+  const n = selected.value.size
+  clearSel()
+  ui.toast(`已清空勾选（原来 ${n} 张）`, 'info', 1600)
+}
+
 /** 卡片点击的唯一入口( TvImageCard @open 把原生事件也带出来了 ):
  *  选择模式里点击=勾选(Shift=区间) / 浏览模式里 Ctrl=勾选并顺手进入选择模式。 */
 function onCardClick(it, ev) {
@@ -510,8 +553,7 @@ function onCardClick(it, ev) {
     return
   }
   if (ev && (ev.ctrlKey || ev.metaKey)) {
-    selectMode.value = true
-    toggleSelect(it, ev)
+    pickCard(it, ev)
     return
   }
   openImage(it)
@@ -520,7 +562,7 @@ function onCardClick(it, ev) {
 /* ---------------- 批量删除(复用 useTrash: 确认弹窗显示 N 张, tv:trashed 联动剔除) ---------------- */
 function batchDelete() {
   const paths = [...selected.value]
-  if (!paths.length) return
+  if (!paths.length) { ui.warn('先勾选至少一张图再删除'); return }
   trash.request(paths).then((trashedList) => {
     // 删成的从选择集里摘掉, 失败的留着可以再试
     const done = new Set(trashedList || [])
@@ -600,55 +642,33 @@ function onScanKey(e) {
     e.preventDefault()
     selectAll()
   } else if (e.key === 'Escape') {
-    selectMode.value = false
-    clearSel()
+    exitSelectMode()
   } else if (e.key === 'Delete') {
     batchDelete()
   }
 }
 
-function gotoPage(p) {
-  page.value = Math.max(1, Math.min(p, totalPages.value))
+/* ---------------- 翻页 = 换窗口(2026-10-22) ----------------
+ * 旧版是累加式 slice(0, page*pageSize), 按钮只能做"滚动定位": ▶ 只是多加载一页,
+ * 连翻几页就把几百张卡片全留在 DOM 里, 每张都去要缩略图 —— 主进程解码占死, 卡死。
+ * 现在只渲染当前窗口: 翻到第 p 页 = 窗口换成 [p 页开头, p 页结尾), 旧页卸载、从页首看。
+ * (⏭ 仍是滚到当前窗口末尾, 到底后哨兵继续追加下一页。) */
+function scrollGridTop() {
   document.querySelector('.scan-body .result-scroll')?.scrollTo({ top: 0 })
 }
 
-/* ---------------- 分页按钮 = 滚动定位(2026-10-16) ----------------
- * 网格是**累加式显示**(slice(0, page*pageSize), 滚到底自动追加), 旧版按钮只改
- * page 数字, 于是 ▶ 只是"多出一页可看"、◀ 把已显示的截掉一页(体感没反应),
- * ⏭ 最危险 —— 会把两万多张一次性全渲染, 直接假死。改成纯滚动语义:
- * 数据不动, 视口滚到"那一页开头"所在的行 —— 按钮说的和做的终于是一回事。 */
-/** 每行第一张在 pagedItems 里的下标(与 scanRows 一一对应), 用来定位"第 n 张在哪一行" */
-const rowStarts = computed(() => {
-  const arr = []
-  let acc = 0
-  for (const row of scanRows.value) { arr.push(acc); acc += row.cells.length }
-  return arr
-})
-
-function scrollToItemIndex(idx) {
-  const grid = rowsEl.value
-  if (!grid || idx < 0) return
-  const starts = rowStarts.value
-  let lo = 0, hi = starts.length - 1, row = 0
-  while (lo <= hi) {                    // 二分: 最后一个 starts[row] <= idx 的行
-    const mid = (lo + hi) >> 1
-    if (starts[mid] <= idx) { row = mid; lo = mid + 1 } else hi = mid - 1
-  }
-  const el = grid.children[row]
-  const scroller = el?.closest('.result-scroll')
-  if (!el || !scroller) return
-  const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 6
-  scroller.scrollTo({ top: Math.max(0, top) })
-}
-
-/** 翻到第 p 页的开头: 内容还没加载就先补页(累加式只增不减), 再滚过去 */
-function turnToPage(p) {
+/** 跳到第 p 页: 换窗口 + 回页首 */
+function gotoPage(p) {
   const t = Math.max(1, Math.min(p, totalPages.value))
-  if (t > page.value) page.value = t
-  nextTick(() => scrollToItemIndex((t - 1) * pageSize.value))
+  winStart.value = (t - 1) * pageSize.value
+  page.value = t
+  scrollGridTop()
 }
 
-/** ⏭: 滚到**已加载内容**的末尾 —— 绝不做"全量渲染到底", 两万张会假死 */
+/** ◀ / ▶ 与 gotoPage 同一套语义(换窗口, 不是滚动定位) */
+function turnToPage(p) { gotoPage(p) }
+
+/** ⏭: 滚到**当前窗口**的末尾 —— 到底后哨兵接上, 继续追加下一页 */
 function scrollToLoadedEnd() {
   document.querySelector('.scan-body .result-scroll')?.scrollTo({ top: 1e9 })
 }
@@ -656,8 +676,9 @@ function scrollToLoadedEnd() {
 const pageOptions = [60, 120, 240, 600]
 
 /* ---------------- 滚到底自动加载下一页 ----------------
- * 网格尾部放一个哨兵元素, 进视口(提前 400px 预载)就自动 page+1。
- * 打开文件夹/改排序/改每页张数时 page 归 1, 哨兵跟着内容重新挂载。 */
+ * 网格尾部放一个哨兵元素, 进视口(提前 400px 预载)就自动 page+1 ——
+ * 只往**当前窗口尾部**追加, 翻过的页不再保留(窗口式, 见 pagedItems)。
+ * 打开文件夹/改排序/改每页张数时窗口与 page 一起归位。 */
 const sentinel = ref(null)
 let gridOb = null
 function loadMore() {
@@ -666,11 +687,13 @@ function loadMore() {
 }
 watch([sortBy, pageSize], () => {
   prefs.sortScan = sortBy.value
+  winStart.value = 0
   page.value = 1
   document.querySelector('.result-scroll')?.scrollTo({ top: 0 })
 })
 /* 改了筛选词也要回第一页并滚到顶 —— 否则会停在第 5 页对着一个空网格 */
 watch(filterKw, () => {
+  winStart.value = 0
   page.value = 1
   document.querySelector('.scan-body .result-scroll')?.scrollTo({ top: 0 })
 })
@@ -696,21 +719,29 @@ function onGone(e) {
   if (!gone.size || !result.value) return
   result.value.items = (result.value.items || []).filter((it) => !gone.has(it.path))
   result.value.total = Math.max(0, (result.value.total || 0) - gone.size)
+  const lastStart = Math.max(0, totalPages.value - 1) * pageSize.value
+  if (winStart.value > lastStart) winStart.value = lastStart
   if (page.value > totalPages.value) page.value = totalPages.value
+  if (page.value * pageSize.value <= winStart.value) {
+    page.value = Math.min(totalPages.value, Math.floor(winStart.value / pageSize.value) + 1)
+  }
 }
 
 /* ---------------- 光箱关掉后回到上次那张 ----------------
  * 红色描边本身由 TvImageCard 读 lb.lastPath 自己画; 这里只解决扫描页特有的
- * 一个问题: 网格是**累加分页**, 用户在光箱里向后翻了很多张时, 高亮那张可能
- * 还没被 slice(0, page*pageSize) 渲染出来 —— 滚动就会扑空。
- * 收到 'tv:lb-closed' 后按下标一次性把 page 补齐到能包含它
- * (累加式显示不会让已加载的内容消失), 滚动由 store 里的 nextTick scrollIntoView 做。 */
+ * 一个问题: 网格是**窗口式分页**, 用户在光箱里向后翻了很多张时, 高亮那张
+ * 可能落在窗口外 —— 滚动就会扑空。收到 'tv:lb-closed' 后把窗口换到它所在的页。
+ * (滚动由 store 里的 nextTick scrollIntoView 做。) */
 function expandPageForPath(p) {
   if (!p || level.value !== 'folder') return false
   const idx = sortedItems.value.findIndex((it) => it.path === p)
   if (idx < 0) return false
-  const need = Math.floor(idx / pageSize.value) + 1
-  if (need > page.value) page.value = need
+  const from = winStart.value
+  const to = Math.min(sortedItems.value.length, page.value * pageSize.value)
+  if (idx >= from && idx < to) return true      // 已经在当前窗口里
+  const t = Math.floor(idx / pageSize.value) + 1
+  winStart.value = (t - 1) * pageSize.value
+  page.value = t
   return true
 }
 
@@ -830,7 +861,7 @@ onActivated(() => {
 </script>
 
 <template>
-  <div class="scan-view">
+  <div class="scan-view" :class="{ 'pick-on': selectMode }">
     <!-- 来源管理的入口(2026-10-04 从顶栏挪来; 2026-10-16 改为只在一级列表页显示:
          原先绝对定位右上角, 和二级文件夹详情的「← 返回」按钮重叠(用户截图反馈)。
          二级视图里改并入头部按钮行, 见下面 head 里的那份)。 -->
@@ -957,14 +988,10 @@ onActivated(() => {
             <span class="now">{{ cur?.name || '' }}</span>
           </div>
           <span class="spacer" />
-          <TvButton
-            size="sm"
-            :variant="selectMode ? 'primary' : 'secondary'"
-            data-test="scan-select-toggle"
-            @click="toggleSelectMode"
-          >
-            ☑ {{ selectMode ? '退出选择' : '选择' }}
-          </TvButton>
+          <!-- 这里原来有一颗「☑ 选择」按钮(2026-10-22 第十八轮去掉)。
+               去掉的理由不是嫌它占地方, 是它把动线切成三趟: 右上角开模式 → 左边勾图
+               → 再回右上角点移动。现在进模式改成在网格里就地发生: 点卡片左上角的勾选框 /
+               长按卡片 / Ctrl+点击, 三条路都把手留在图上。 -->
           <TvButton size="sm" variant="secondary" :loading="rescanning" @click="openFolder(cur, { refresh: true })">
             🔄 重扫这个文件夹
           </TvButton>
@@ -999,48 +1026,9 @@ onActivated(() => {
         </div>
         <TvState v-else-if="!opening && !rawItems.length" state="empty" text="没有可显示的图片" />
         <template v-else>
-          <!-- 批量操作条: 选择模式下出现(置顶常驻, 滚动也看得见) -->
-          <div v-if="selectMode" class="batch-bar" data-test="scan-batch-bar">
-            <span class="bcnt">已选 <b data-test="scan-sel-count">{{ selected.size }}</b> 张</span>
-            <TvButton size="sm" variant="ghost" data-test="scan-sel-all" @click="selectAll">全选</TvButton>
-            <TvButton size="sm" variant="ghost" data-test="scan-sel-invert" @click="invertSel">反选</TvButton>
-            <TvButton
-              size="sm"
-              variant="ghost"
-              data-test="scan-sel-upto"
-              title="从第 1 张一直勾到你正在看的那张(按当前排序; 关掉大图也认得最后看的是哪张)"
-              @click="selectUpToViewed"
-            >选到在看的那张</TvButton>
-            <TvButton size="sm" variant="ghost" :disabled="!selected.size" data-test="scan-sel-clear" @click="clearSel">清空</TvButton>
-            <TvButton size="sm" variant="ghost" data-test="scan-batch-exit" title="退出选择模式(同时清空已选)" @click="toggleSelectMode">✕ 退出</TvButton>
-            <span class="spacer" />
-            <TvButton
-              size="sm"
-              variant="primary"
-              :disabled="!selected.size"
-              :loading="moving"
-              data-test="scan-batch-move"
-              @click="openMove"
-            >📤 移动到…</TvButton>
-            <TvButton
-              size="sm"
-              variant="secondary"
-              :disabled="!selected.size"
-              :loading="copying"
-              data-test="scan-batch-copy"
-              @click="openCopy"
-            >📋 复制到…</TvButton>
-            <TvButton
-              size="sm"
-              variant="danger"
-              :disabled="!selected.size"
-              data-test="scan-batch-trash"
-              @click="batchDelete"
-            >🗑 删除</TvButton>
-          </div>
-
           <!-- 工具条挪到滚动区**外**(2026-10-16 用户反馈: 往下拉图片, 搜索框那排就看不见了)
-               与批量条同款结构性常驻 —— 滚动只发生在 .result-scroll 里, 工具条天生钉在顶上 -->
+               与批量条同款结构性常驻 —— 滚动只发生在 .result-scroll 里, 工具条天生钉在顶上。
+               (批量操作条已经在 2026-10-22 从这里搬走, 改浮在网格底部正中, 见文件末尾的 .pick-dock) -->
           <div class="pager-bar">
             <!-- 按标签 / 文件名筛选: 复用首页/标签页那个带补全的搜索框, 但补全走**本夹的标签池**
                  (扫描图是库外的, 它们的标签在标签库里可能根本不存在; 文件名压根不在标签库里)。
@@ -1066,8 +1054,8 @@ onActivated(() => {
             <TvButton v-if="filterKw" size="sm" variant="ghost" title="清除筛选" @click="filterKw = ''">✕ 清除</TvButton>
             <span class="hint">
               <template v-if="filterTokens.length">筛选出 <b class="hit">{{ nfmt(sortedItems.length) }}</b> / 共 {{ nfmt(rawItems.length) }} 张</template>
-              <template v-else-if="streaming">已加载 {{ nfmt(pagedItems.length) }} / {{ nfmt(streamInfo?.total || rawItems.length) }} 张 · 后台扫描 {{ streamPct }}%</template>
-              <template v-else>已加载 {{ nfmt(pagedItems.length) }} / 共 {{ nfmt(sortedItems.length) }} 张 · 滚到底自动加载</template>
+              <template v-else-if="streaming">显示第 {{ nfmt(shownFrom) }}–{{ nfmt(shownTo) }} 张 / 扫描到 {{ nfmt(streamInfo?.total || rawItems.length) }} 张 · 后台扫描 {{ streamPct }}%</template>
+              <template v-else>显示第 {{ nfmt(shownFrom) }}–{{ nfmt(shownTo) }} 张 / 共 {{ nfmt(sortedItems.length) }} 张 · 滚到底继续加载</template>
             </span>
             <span class="spacer" />
             <TvSafetyToggle :counts="scanHits" />
@@ -1085,13 +1073,12 @@ onActivated(() => {
               label="每页"
               :options="pageOptions.map((n) => ({ value: n, label: String(n) }))"
             />
-            <!-- 分页按钮 = 滚动定位(2026-10-16): 网格是累加式显示, 旧版改页码数字
-                 的做法让 ▶ 看起来"只是变多"、◀ 像没反应、⏭ 更会全量渲染假死。
-                 现在按钮只管把视口滚到对应位置, 数据(累加)不动。 -->
+            <!-- 翻页 = 换窗口(2026-10-22): 只保留当前页的卡片。旧版累加式连翻几页
+                 就是几百张图同时要缩略图, 主进程解码占死 = 卡死。 -->
             <TvButton size="sm" variant="ghost" title="回到第一页(从头开始看)" @click="gotoPage(1)">⏮</TvButton>
-            <TvButton size="sm" variant="ghost" :disabled="page <= 1" title="滚到上一页的开头" @click="turnToPage(page - 1)">◀</TvButton>
-            <TvButton size="sm" variant="ghost" :disabled="page >= totalPages" title="翻到下一页的开头(自动加载那一页)" @click="turnToPage(page + 1)">▶</TvButton>
-            <TvButton size="sm" variant="ghost" title="滚到已加载内容的末尾(不会一次性渲染全部)" @click="scrollToLoadedEnd">⏭</TvButton>
+            <TvButton size="sm" variant="ghost" :disabled="page <= 1" title="上一页" @click="turnToPage(page - 1)">◀</TvButton>
+            <TvButton size="sm" variant="ghost" :disabled="page >= totalPages" title="下一页(从页首开始)" @click="turnToPage(page + 1)">▶</TvButton>
+            <TvButton size="sm" variant="ghost" title="滚到当前窗口的末尾(到底后继续加载)" @click="scrollToLoadedEnd">⏭</TvButton>
           </div>
 
           <!-- 滚动只发生在这一层: 上面两排工具条都在滚动区外, 常驻顶上 -->
@@ -1122,8 +1109,10 @@ onActivated(() => {
                   :tip-limit="24"
                   :selectable="selectMode"
                   :selected="selected.has(c.item.path)"
+                  pickable
                   @open="onCardClick"
-                  @toggle-select="toggleSelect"
+                  @toggle-select="pickCard"
+                  @long-press="onLongPress"
                   @hover="({ text, event }) => ui.showTip(text, event)"
                   @move="ui.moveTip"
                   @leave="ui.hideTip"
@@ -1139,6 +1128,57 @@ onActivated(() => {
           </div>
           </div>
         </template>
+      </div>
+
+      <!-- ============ 批量操作条(选择模式) ============
+           2026-10-22 第十八轮: 从网格**顶上**搬到**底部正中浮着**。
+           为什么: 勾图的动线是从上往下滚, 手停在网格下半部分; 操作条长在顶上就得回头
+           横穿屏幕去点移动 —— 三段折返就是这么来的。现在它出现在手边。
+           怎么做: 外层 .pick-dock 挂在 .scan-view(position:relative)上, absolute 定位,
+           **不在滚动容器里** —— 所以它天生常在, 不需要 sticky
+           (sticky 在带 padding 的滚动容器里钉住后会露一条缝, 10-01 用户截图实锤, 一直弃用)。
+           内层才是 [data-test="scan-batch-bar"] 且保持 position:static —— e2e 里那条
+           "滚动 300px 后位置纹丝不动"的断言因此一字不改照样成立。
+           右边让出 170px: 右下角那根进度胶囊(bottom 96)和浮动导航(bottom 26, z-index 220)
+           都占着那条竖列, 窄窗口下不避让会叠上去。 -->
+      <div v-if="selectMode" class="pick-dock">
+        <div class="batch-bar" data-test="scan-batch-bar">
+          <span class="bcnt">已选 <b data-test="scan-sel-count">{{ selected.size }}</b> 张</span>
+
+          <span class="bdiv" />
+          <TvButton size="sm" variant="ghost" data-test="scan-sel-all" @click="selectAll">全选</TvButton>
+          <TvButton size="sm" variant="ghost" data-test="scan-sel-invert" @click="invertSel">反选</TvButton>
+          <TvButton
+            size="sm"
+            variant="ghost"
+            data-test="scan-sel-upto"
+            title="从第 1 张一直勾到你正在看的那张(按当前排序; 关掉大图也认得最后看的是哪张)"
+            @click="selectUpToViewed"
+          >选到在看的那张</TvButton>
+          <TvButton size="sm" variant="ghost" data-test="scan-sel-clear" @click="clearSelClicked">清空</TvButton>
+
+          <span class="bdiv" />
+          <TvButton
+            size="sm"
+            variant="primary"
+            :loading="moving"
+            data-test="scan-batch-move"
+            @click="openMove"
+          >📤 移动到…</TvButton>
+          <TvButton
+            size="sm"
+            variant="secondary"
+            :loading="copying"
+            data-test="scan-batch-copy"
+            @click="openCopy"
+          >📋 复制到…</TvButton>
+
+          <!-- 删除与移动/复制之间隔一道**带颜色**的分隔线: 不可逆动作不能和常规动作挤在一格里
+               (用户 2026-10-22 明确要求), 再靠右贴到 ✕ 旁边, 顺手划过也划不到它。 -->
+          <span class="bdiv danger" />
+          <TvButton size="sm" variant="danger" data-test="scan-batch-trash" @click="batchDelete">🗑 删除</TvButton>
+          <TvButton size="sm" variant="ghost" data-test="scan-batch-exit" title="退出选择模式(同时清空已选)" @click="exitSelectMode">✕</TvButton>
+        </div>
       </div>
 
 
@@ -1230,18 +1270,32 @@ onActivated(() => {
 .pager-bar .tag-filter { flex: 1 1 300px; max-width: 360px; margin-right: 4px; }
 .pager-bar .hit { color: var(--accent); font-size: 13px; }
 
-/* 批量操作条(选择模式) —— 放在滚动区**外**的结构性常驻: .result 是不滚的 flex 列,
-   滚动只发生在 .result-scroll 里 —— 工具条天生钉在顶上, 连 sticky 都不用
-   (sticky 在带 padding 的滚动容器里钉住后会露出一条缝, 10-01 用户截图实锤, 弃用)。 */
-.batch-bar {
-  flex: 0 0 auto;
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  margin: 0 0 12px; padding: 7px 10px;
-  border-radius: var(--r-sm); background: var(--panel3);
-  border: 1px solid var(--accent-soft, transparent);
+/* 批量操作条(选择模式) —— 见模板里 .pick-dock 那段注释: 浮在网格底部正中, 不 sticky。 */
+.pick-dock {
+  position: absolute; left: 0; right: 0; bottom: 14px; z-index: 40;
+  display: flex; justify-content: center;
+  /* 两侧空白不吞事件, 否则浮层横贯一整条会把最后一行卡片点不动 */
+  pointer-events: none;
 }
-.batch-bar .bcnt { font-size: 12px; color: var(--muted); margin-right: 4px; }
+/* 精确居中, 但最多只占到离右边缘 165px 为止 —— 右下角那根进度胶囊(bottom 96)和
+   浮动导航(bottom 26)占着那条竖列; 窗口窄到装不下一行时让它自己折成两行, 也不挪中心。 */
+.batch-bar {
+  pointer-events: auto;
+  max-width: calc(100% - 330px);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center;
+  padding: 7px 10px;
+  border-radius: var(--r-lg, 10px);
+  background: var(--panel2);
+  border: 1px solid var(--accent-soft, transparent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
+.batch-bar .bcnt { font-size: 12px; color: var(--muted); margin-right: 2px; white-space: nowrap; }
 .batch-bar .bcnt b { color: var(--accent); font-size: 14px; }
+/* 分组: 已选数 │ 选哪些 │ 搬去哪 │ 不可逆动作 —— 竖线就是这几段之间的停顿 */
+.batch-bar .bdiv { width: 1px; height: 18px; flex: none; background: var(--border); margin: 0 4px; }
+.batch-bar .bdiv.danger { background: var(--danger); opacity: .55; }
+/* 网格底部让出一条的高度, 别让浮条盖住最后一行卡片 */
+.scan-view.pick-on .result-scroll { padding-bottom: 78px; }
 
 .load-sentinel { display: flex; justify-content: center; padding: 18px 0; }
 

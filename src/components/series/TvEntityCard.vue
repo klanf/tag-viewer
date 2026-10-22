@@ -45,18 +45,21 @@ const props = defineProps({
   /** 无封面时的占位文案 */
   phText: { type: String, default: '暂无封面' },
 })
-const emit = defineEmits(['open', 'toggle-cart', 'toggle-select', 'cover', 'edit', 'fetch'])
+const emit = defineEmits(['open', 'toggle-cart', 'toggle-select', 'cover', 'edit', 'fetch', 'ban'])
 
 const hasThumb = computed(() => !!props.thumb)
 /* 卡片右上角原来一列摆 4 个按钮(🛒/🖼/✏️/🌐), 用户 2026-10-22 反馈"图标太多了"→ 合并成一个入口;
  * 气泡先挂右上角(压住脸)→ 挪右下角(还是盖住照片下半)→ 最终按用户第三轮反馈**离开图片区**,
  * 放到「26,120 张 · 239 角色」那一行的右端, 展开方式照光箱标签胶囊(行内滑出图标)。
- * **四个按钮的 class 名一个都没改, 而且始终在 DOM 里** —— e2e 与 UI 测试是按
+ * 2026-10-23 用户再改: 购物车是最高频的动作("收藏范围就是加入购物车"), 从「...」里
+ * **挪到卡片右上角常驻**, 「...」留给封面/纠正/联网/屏蔽。
+ *
+ * class 名一个都没改, 而且这些按钮始终在 DOM 里 —— e2e 与 UI 测试是按
  * .cart-btn/.cover-btn/.edit-btn/.fetch-btn 找元素并直接 .click() 的; 若改成
  * v-if 把动作收起来, 这些断言会集体变成"找不到元素"的假失败。 */
 const menuOpen = ref(false)
 const cartable = computed(() => props.inCart !== null)
-const hasActions = computed(() => cartable.value || props.coverable || props.editable || props.fetchable)
+const hasActions = computed(() => props.coverable || props.editable || props.fetchable)
 /** 触发卡片上的任何动作时收起钉住态, 否则点了菜单项气泡还挂着 */
 function act(name) {
   menuOpen.value = false
@@ -81,6 +84,14 @@ function act(name) {
         <img :src="coverDefault" alt="" class="ph-img">
         <span class="ph-txt">{{ phText }}</span>
       </div>
+
+      <!-- 购物车: 常用动作, 常驻右上角(2026-10-23)。选择模式下让位给勾选框 -->
+      <button
+        v-if="cartable && !selectable"
+        :class="['cart-btn', 'cart-fab', { on: inCart }]"
+        :title="inCart ? '移出购物车' : '加入购物车'"
+        @click.stop="emit('toggle-cart')"
+      ><svg viewBox="0 0 24 24"><path d="M3 5h2l2.1 8.6a2 2 0 0 0 2 1.6h7.3a2 2 0 0 0 2-1.5L20.5 8H6.2"/><circle cx="10" cy="19.4" r="1.4"/><circle cx="17" cy="19.4" r="1.4"/></svg></button>
 
       <span v-if="selectable" class="ckbox" @click.stop="emit('toggle-select')">
         <input type="checkbox" :checked="selected" @click.stop="emit('toggle-select')">
@@ -107,23 +118,17 @@ function act(name) {
           :class="['more', { open: menuOpen, busy: fetching }]"
         >
           <button
-            :class="['more-btn', { 'is-cart': inCart }]"
+            :class="['more-btn', { busy: fetching }]"
             :title="fetching ? '正在联网拉封面…' : '更多操作'"
             @click.stop="menuOpen = !menuOpen"
-          >{{ fetching ? '…' : (inCart ? '✓' : '...') }}</button>
+          >{{ fetching ? '…' : '...' }}</button>
 
           <span class="acts">
             <!--
-              四个按钮的 class 名一个没改、且始终在 DOM 里(测试按 .cart-btn/.cover-btn/
+              class 名一个没改、且始终在 DOM 里(测试按 .cart-btn/.cover-btn/
               .edit-btn/.fetch-btn 找元素直接 .click())。文字标签没了 -> 说明全交给 title。
+              购物车已搬去卡片右上角, 这里只剩封面/纠正/联网/屏蔽。
             -->
-            <button
-              v-if="cartable"
-              :class="['cart-btn', 'ic', { on: inCart }]"
-              :title="inCart ? '移出购物车' : '加入购物车'"
-              @click.stop="act('toggle-cart')"
-            ><svg viewBox="0 0 24 24"><path d="M3 5h2l2.1 8.6a2 2 0 0 0 2 1.6h7.3a2 2 0 0 0 2-1.5L20.5 8H6.2"/><circle cx="10" cy="19.4" r="1.4"/><circle cx="17" cy="19.4" r="1.4"/></svg></button>
-
             <button v-if="coverable" class="cover-btn ic" title="挑一张当封面" @click.stop="act('cover')"
             ><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M20.4 15.6l-4.5-4.5-8.4 8.6"/></svg></button>
 
@@ -137,6 +142,14 @@ function act(name) {
               title="联网拉封面：去 Danbooru / Safebooru 搜这个标签，取翻到的图里得分最高的一张"
               @click.stop="act('fetch')"
             ><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.4 2.4 3.6 5.3 3.6 8.5s-1.2 6.1-3.6 8.5c-2.4-2.4-3.6-5.3-3.6-8.5s1.2-6.1 3.6-8.5z"/></svg></button>
+
+            <!-- ban(隐藏)角色: 2026-10-23 用户点名。写 hidden_chars, 桌面确认框在 SeriesView -->
+            <button
+              v-if="editable"
+              class="ban-btn ic"
+              title="屏蔽这个角色（可在 分类管理 → 屏蔽角色 恢复）"
+              @click.stop="act('ban')"
+            ><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6.2 17.8L17.8 6.2"/></svg></button>
           </span>
         </span>
       </div>
@@ -176,9 +189,9 @@ function act(name) {
 .badge.b-ok { color: var(--accent2); }
 .badge.b-warn { color: var(--warn); }
 
-/* ---- .thumb-box: 只装图片区, 给选择框(.ckbox)当定位锚 ----
- * 2026-10-22 第三轮反馈之后, 动作入口已经**搬出图片区**(见下面 .more/.acts), 这里不再挂任何东西 ——
- * 气泡不管挂右上角还是右下角, 只要压在照片上就会糊住脸。 */
+/* ---- .thumb-box: 图片区, 给选择框(.ckbox)与购物车(.cart-fab)当定位锚 ----
+ * 「...」展开的图标条已经**搬出图片区**(见下面 .more/.acts), 这里只留两颗单钮:
+ * 左上勾选框(选择模式) / 右上购物车(2026-10-23 用户点名常驻)。 */
 .thumb-box { position: relative; }
 
 /* ── 动作入口: 抄光箱标签胶囊 TvTagPill 的 .acts(2026-10-22 用户点名「和光箱的 tag 的展开一样」) ──
@@ -198,8 +211,7 @@ function act(name) {
 }
 .ecard:hover .more-btn { color: var(--muted); }
 .more-btn:hover { color: var(--accent); border-color: var(--accent); }
-/* 已加车 / 正在拉取 -> 常亮: 这两种是"卡片现在的状态", 不能等悬停才看得见 */
-.more-btn.is-cart { color: #f2c14e; border-color: rgba(242, 193, 78, .55); }
+/* 正在拉取 -> 常亮: 这是"卡片现在的状态", 不能等悬停才看得见 */
 .more.busy .more-btn { color: var(--accent2); border-color: var(--accent2); }
 
 .acts {
@@ -234,10 +246,33 @@ function act(name) {
 .cart-btn:hover, .cover-btn:hover { color: var(--accent); }
 .edit-btn:hover { color: var(--warn); }
 .fetch-btn:hover { color: var(--accent2); }
-/* 已加车时按钮留着并变金色, 再点一次就是取消(SeriesView 走 cart.toggle) */
-.cart-btn.on { color: #f2c14e; }
+.ban-btn:hover { color: var(--danger, #ef4444); }
 .fetch-btn.busy { color: var(--accent2); cursor: progress; }
 .fetch-btn:disabled { opacity: .85; cursor: progress; }
+
+/* 购物车常驻右上角(2026-10-23): 单颗小圆钮, 不遮脸也不占文字行。
+ * 已加车 -> 金色常亮 + 半透明金底; 再点一次移出(cart.toggle)。 */
+.cart-fab {
+  position: absolute; top: 7px; right: 7px; z-index: 5;
+  width: 26px; height: 26px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(10, 13, 18, .62);
+  border: 1px solid rgba(255, 255, 255, .16);
+  color: #e8eef5; opacity: .86;
+  transition: opacity var(--t-fast), color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+}
+.cart-fab svg {
+  width: 14px; height: 14px;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.cart-fab:hover { opacity: 1; color: var(--accent); border-color: var(--accent); background: rgba(10, 13, 18, .88); }
+.cart-fab.on {
+  opacity: 1; color: #f2c14e;
+  border-color: rgba(242, 193, 78, .75);
+  background: rgba(242, 193, 78, .18);
+}
+.cart-fab.on:hover { color: #ffd76a; }
 
 .ckbox {
   position: absolute; top: 8px; left: 8px; z-index: 5;

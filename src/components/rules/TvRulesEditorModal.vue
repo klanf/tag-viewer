@@ -537,12 +537,15 @@ async function save() {
                     <b class="w-btn" title="加 0.1" @click="bumpW(r, j, 0.1)">＋</b>
                   </span>
                 </span>
+                <!-- ⚠️ 必须把当前行 r 带进去: 第一版写成 @pick="addRepl"(少箭头), 联想项被当成 r、
+                     t 是 undefined, addRepl 里 `if (!v) return` 直接吞掉 —— 表现就是"选了/回车都只是清空输入框"。
+                     两个输入框看着一样, 但模式侧那份一直是对的(见上面 addCore 的写法), 照着抄即可。 -->
                 <TvTagComplete
                   class="chip-add"
                   variant="chips"
                   placeholder="+ 联想添加…"
-                  @pick="addRepl"
-                  @confirm="addRepl"
+                  @pick="(t) => addRepl(r, t)"
+                  @confirm="(t) => addRepl(r, t)"
                 />
               </div>
               <div v-else class="row-sub del-sub">

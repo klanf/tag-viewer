@@ -46,8 +46,8 @@ import { scanFolder, scanCacheStats, purgeScanCachePaths, scanFolderStats } from
 import { previewTagEdit, applyTagEdit } from './core/tagedit.js'
 import { openDb } from './core/store.js'
 import { loadCats, reloadCats, catOf } from './core/tagcats.js'
-import { findDuplicateGroups } from './core/dupcheck.js'
-import { loadIgnorePairs, addIgnorePairs, clearIgnorePairs } from './core/dupignore.js'
+import { findDuplicateGroups, findIgnoredGroups } from './core/dupcheck.js'
+import { loadIgnorePairs, addIgnorePairs, clearIgnorePairs, removeIgnorePairsByIds } from './core/dupignore.js'
 import { copyImageWithNotice, openWithDialog } from './core/clipboardImage.js'
 import {
   runIngest, ingestStatus, pauseIngest, ingestState, queueStats, enqueueFolderUntagged,
@@ -585,13 +585,12 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'booru:auth:test': safe(() => booruAuthTest()),
     /* 批量自动拉封面(2026-10-22): 启动即返回, 进度走 covers:auto:progress 推送 ——
      * 与 tagger:run / ingest:run 同一套形状(见那两处注释), 渲染层关掉弹窗/切页都不影响。
-     * 走 setCover 要读数据集(recordByPath), 所以这三个通道**进** DATA_CHANNELS。 */
-    'covers:auto:run': safe((raw) => {
-      const out = runAutoCovers(raw, { onProgress: (p) => broadcast('covers:auto:progress', p) })
-      // 不 await: 任务可能跑几十分钟, invoke 只能立即回一个"已启动"
-      out.catch((e) => log('批量拉封面异常: ' + (e?.message || e)))
-      return { ok: true, started: true }
-    }),
+     * 走 setCover 要读数据集(recordByPath), 所以这三个通道**进** DATA_CHANNELS。
+     * runAutoCovers 是**同步**的(内部起一个不等的泵): 这样"已经在跑 -> 追加进队列"
+     * 和"排不进(停止中/超上限)"都能当场把结果回给渲染层 —— 以前不 await 让它
+     * 永远只能说"已启动", 用户切系列后再点就静默没反应(2026-10-22 反馈)。 */
+    'covers:auto:run': safe((raw) =>
+      runAutoCovers(raw, { onProgress: (p) => broadcast('covers:auto:progress', p) })),
     'covers:auto:state': safe(() => autoCoversState()),
     'covers:auto:cancel': safe(() => cancelAutoCovers()),
 
@@ -620,6 +619,10 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     // 误报忽略(2026-10-17): 渲染层把整组两两 id 对发来, 持久化到 user/dupcheck_ignore.json
     'dup:ignore:add': safe((raw) => ({ added: addIgnorePairs(raw?.pairs || []) })),
     'dup:ignore:clear': safe(() => ({ removed: clearIgnorePairs() })),
+    // 已忽略的图片组(2026-10-23): 只存了 id 对, 按库里的记录还原成可展示的组
+    'dup:ignore:list': safe(() => findIgnoredGroups(loadIgnorePairs())),
+    // 恢复一组(2026-10-23): 删掉两端都在这组里的 id 对
+    'dup:ignore:remove': safe((raw) => ({ removed: removeIgnorePairsByIds(raw?.ids || []) })),
     // 标签分类映射(2026-10-16): 展示端分组着色用。tags 字典的 cat 列是快照,
     // 空的(新词/分类器当时不可用)现场 classify 补 —— 保证映射永远可用。
     'tags:cats': safe(() => {

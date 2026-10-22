@@ -88,7 +88,9 @@ function unsafeCountOf(results) {
     if (u === 1) core++
     else if (u === 2) edge++
   }
-  v = { core, edge: core + edge }
+  /* total 不是"会隐藏多少张", 是给「不安全模式」算**补集**用的:
+     该模式隐藏 = 总数 - 敏感数。前端把 total 一起收在 counts 里。 */
+  v = { core, edge: core + edge, total: results.length }
   unsafeMemo.set(results, v)
   return v
 }
@@ -760,7 +762,9 @@ export function getScanTagImages(raw = {}) {
     offset,
     returned: Math.min(limit, Math.max(0, items.length - offset)),
     results: items.slice(offset, offset + limit),
-    unsafe: { core: 0, edge: 0 },   // 安全模式在渲染层按 tags 过滤(与扫描页同款)
+    /* 安全模式在渲染层按 tags 过滤(与扫描页同款)。total 让工具栏能算
+       「不安全模式」下会隐藏多少张(总数 - 敏感数); 敏感数由渲染层按 tags 现算。 */
+    unsafe: { core: 0, edge: 0, total: items.length },
   }
 }
 

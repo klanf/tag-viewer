@@ -25,6 +25,8 @@ import { useAppStore } from './useAppStore.js'
 export const useSafetyStore = defineStore('safety', () => {
   const on = ref(false)
   const level = ref('core')        // core | edge
+  /** safe = 隐藏敏感; unsafe = 「不安全模式」, 只显示敏感(取反) */
+  const mode = ref('safe')
   const coreHit = ref(0)           // core 档会隐藏多少张
   const edgeHit = ref(0)           // edge 档会隐藏多少张
   const total = ref(0)             // 数据集总条数(用来算占比)
@@ -42,9 +44,12 @@ export const useSafetyStore = defineStore('safety', () => {
     if (!d) return
     on.value = d.on === true
     level.value = d.level === 'edge' ? 'edge' : 'core'
-    coreHit.value = Number(d.coreHit) || 0
-    edgeHit.value = Number(d.edgeHit) || 0
-    total.value = Number(d.total) || 0
+    mode.value = d.mode === 'unsafe' ? 'unsafe' : 'safe'
+    /* safety:set 只回开关/档位/模式, 不回计数 —— 这里必须"有才覆盖",
+     * 否则每切一次模式, 上面那句「会隐藏 N / M」就被清零成 0/0(2026-10-23 探针抓到)。 */
+    if (d.coreHit !== undefined) coreHit.value = Number(d.coreHit) || 0
+    if (d.edgeHit !== undefined) edgeHit.value = Number(d.edgeHit) || 0
+    if (d.total !== undefined) total.value = Number(d.total) || 0
     if (Array.isArray(d.core)) core.value = d.core
     if (Array.isArray(d.edge)) edge.value = d.edge
   }
@@ -108,8 +113,14 @@ export const useSafetyStore = defineStore('safety', () => {
     return r
   }
 
-  /** 当前档位下会隐藏的张数 */
-  const hiddenCount = computed(() => (level.value === 'edge' ? edgeHit.value : coreHit.value))
+  /** 当前档位 / 模式会隐藏的张数。
+   *  unsafe 模式是取反: 隐藏 = 总数 - 该档位的敏感数。 */
+  const sensitiveCount = computed(() => (level.value === 'edge' ? edgeHit.value : coreHit.value))
+  const hiddenCount = computed(() => (
+    mode.value === 'unsafe'
+      ? Math.max(0, total.value - sensitiveCount.value)
+      : sensitiveCount.value
+  ))
   const hiddenPct = computed(() => (total.value ? (hiddenCount.value / total.value) * 100 : 0))
 
   /**
@@ -129,10 +140,12 @@ export const useSafetyStore = defineStore('safety', () => {
     return u
   }
 
-  /** 一张图在当前设置下是否该隐藏；卡片/视图都调它 */
+  /** 一张图在当前设置下是否该隐藏；卡片/视图都调它。
+   *  不安全模式(2026-10-23) = 把"安全模式会显示的"全藏掉, 只留敏感的。 */
   function isHidden(item) {
     if (!on.value || !item) return false
-    return hiddenBySafety(unsafeOf(item), level.value)
+    const sensitive = hiddenBySafety(unsafeOf(item), level.value)
+    return mode.value === 'unsafe' ? !sensitive : sensitive
   }
 
   /**
@@ -163,8 +176,9 @@ export const useSafetyStore = defineStore('safety', () => {
   }
 
   return {
-    on, level, coreHit, edgeHit, total, core, edge, loaded,
-    load, ensureLoaded, set, loadText, saveText, toggleTag, hiddenCount, hiddenPct,
+    on, level, mode, coreHit, edgeHit, total, core, edge, loaded,
+    load, ensureLoaded, set, loadText, saveText, toggleTag,
+    sensitiveCount, hiddenCount, hiddenPct,
     isHidden, unsafeOf, filterItems, countHits,
   }
 })

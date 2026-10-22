@@ -221,7 +221,11 @@ export function safetyExportStripper(levelOpt = '') {
 
 /* ------------------------------------------------------------ 开关与档位 */
 
-const DEFAULT_STATE = { on: false, level: 'core' }
+/* mode(2026-10-23):
+ *   safe   = 正常口径, 隐藏命中敏感标签的图
+ *   unsafe = 「不安全模式」: **取反** —— 只显示命中敏感标签的图, 其余全隐藏
+ * 两者共用同一份档位(core/edge)与词表; 开关(on)仍是总闸, 关掉时两模式都不生效。 */
+const DEFAULT_STATE = { on: false, level: 'core', mode: 'safe' }
 
 /**
  * 开关与档位。**默认关闭** —— 实测 core 档会藏掉 58% 的图, 这种东西不能默认开。
@@ -237,6 +241,7 @@ export function loadSafetyState() {
       v = {
         on: raw.on === true,
         level: raw.level === 'edge' ? 'edge' : 'core',
+        mode: raw.mode === 'unsafe' ? 'unsafe' : 'safe',
       }
     } catch { /* 坏文件 -> 默认关闭 */ }
     cache.state = { path: p, mtime: mt, value: v }
@@ -249,6 +254,7 @@ export function saveSafetyState(patch = {}) {
   const next = {
     on: patch.on === undefined ? cur.on : patch.on === true,
     level: patch.level === undefined ? cur.level : (patch.level === 'edge' ? 'edge' : 'core'),
+    mode: patch.mode === undefined ? cur.mode : (patch.mode === 'unsafe' ? 'unsafe' : 'safe'),
   }
   fs.writeFileSync(dataFile(STATE_NAME), JSON.stringify(next, null, 2), 'utf8')
   cache.state.mtime = -1

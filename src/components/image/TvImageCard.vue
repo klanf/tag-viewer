@@ -8,7 +8,7 @@
  *   - 系列/标签页没有收藏按钮
  * 所以这里把「收藏按钮」「角标」「标签渲染方式」都做成可选 props。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import TvImage from '../base/TvImage.vue'
 import { clipTags, shortPath, ratioOf } from '@/utils/format.js'
 import { useImageCtxMenu } from '@/composables/useImageCtxMenu.js'
@@ -39,6 +39,13 @@ const props = defineProps({
   selectable: { type: Boolean, default: false },
   selected: { type: Boolean, default: false },
   /**
+   * 「这张卡片随时可以勾」—— 扫描页第十八轮(2026-10-22)重设计的开关。
+   * 打开后浏览态也会渲染勾选框(hover 才显形, 平时不糊满屏), 点它就由父组件决定
+   * 干什么(扫描页 = 顺手进选择模式并勾上这一张), 同时启用长按卡片进选择模式。
+   * 默认关: 首页/系列/标签/收藏那几个网格行为一字不变。
+   */
+  pickable: { type: Boolean, default: false },
+  /**
    * 自适应行高网格(justified rows)里使用。
    * 那种布局下**高度由容器给**(每个单元格上的 `--img-h` = 这一行的行高), 所以图不能再
    * 自己声明 aspect-ratio, 否则两个高度会打架 —— 传 'auto' 就是"不设比例约束"。
@@ -46,7 +53,7 @@ const props = defineProps({
    */
   fill: { type: Boolean, default: false },
 })
-const emit = defineEmits(['open', 'toggle-fav', 'toggle-select', 'hover', 'move', 'leave'])
+const emit = defineEmits(['open', 'toggle-fav', 'toggle-select', 'long-press', 'hover', 'move', 'leave'])
 
 const path = computed(() => props.item.path || '')
 
@@ -91,6 +98,18 @@ onMounted(() => {
     lb.scrollPending = false
     rootEl.value?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
   }
+})
+
+/* 卡片悬停提示 = 「点这里会发生什么」的唯一说明书。
+ * 扫描页去掉顶部「☑ 选择」按钮后(pickable), 怎么开始批量选图只能靠这一句话讲清,
+ * 所以它比其它网格多说两条: 勾选框在哪、长按也行。 */
+const hint = computed(() => {
+  if (isMissing.value) return '文件已不在原位置 —— 可能把图移走了; 收藏已保留, 打开收藏页时会按文件名自动找回'
+  if (props.selectable) return '点击勾选/取消 · Shift 连选上一张到这张'
+  if (props.pickable) {
+    return `${isLastViewed.value ? '上次看到这张(红色呼吸框) · ' : ''}点击预览大图 · 左上角勾选框或按住 0.5 秒 = 开始批量选择`
+  }
+  return isLastViewed.value ? '上次看到这张(红色呼吸框) · 点击预览大图与标签' : '点击预览大图与标签'
 })
 
 const tags = computed(() => props.item.tags || [])
@@ -141,16 +160,95 @@ function onCtx(e) {
     px_h: props.item.px_h,
   })
 }
+
+/* ---------------- 长按卡片(pickable 网格专属, 2026-10-22) ----------------
+ * 为什么要有它: 顶部那颗「☑ 选择」按钮这一轮被去掉了(用户嫌三段横向折返), 于是
+ * 「我怎么开始批量选图」变成必须靠现场发现。勾选框要 hover 才显形, 而长按是这个
+ * 屏幕上人人都会试的直觉手势 —— 它补的就是那份可发现性。
+ *
+ * 三条必须做对, 不然会变成"随便点个图就进了选择模式"或者"长按完大图也弹出来了":
+ *  · 位移超过 10px 立刻取消 —— 用户在拖动网格/滚动时不该触发;
+ *  · 触发后**吞掉紧随其后的那次 click**(标志位 + 兜底定时清除), 否则 mouseup 会
+ *    正常派发 click, 走到 @open 就把大图打开了;
+ *  · 只认主键(button 0), 右键要继续走系统菜单。
+ * 阈值 500ms 是刻意选长的: 比"犹豫一下的正常点击"明显更久, 误触代价才可控。
+ *
+ * ⚠️ move/up 监听挂在 **window** 上而不是卡片上: 手指按住后往旁边拖(正是"我在滚网格
+ * 不是想长按"的那个动作), 指针一旦移出卡片, 卡片自己的 pointermove 就再也收不到了,
+ * 取消逻辑会失灵、松手点也接不住 —— 按下那一刻临时挂到 window, 收尾即摘。 */
+const LONG_PRESS_MS = 500
+const LONG_PRESS_SLOP = 10
+/** 松手后 click 紧随其后(同一毫秒级), 给这一点点余量纯粹是保险: 万一这次没有 click
+ *  (被 pointercancel 吃掉 / 元素刚好被网格移除), 标志位也不能永久挂着。
+ * ⚠️ 这个"兜底"必须从**松手那一刻**起算, 不能从长按触发那一刻起算 —— 长按触发后用户
+ * 想按多久就按多久, 从 500ms 起算的固定窗口会被"按住 2 秒再松手"直接穿过去:
+ *  那时 click 落在标志位早已复位之后, 于是大图被打开、刚勾上的那张还被点掉(实测踩过)。 */
+const CLICK_FALLBACK_MS = 350
+const pressing = ref(false)
+const swallowClick = ref(false)
+let lpTimer = null
+let lpClear = null
+let lpOrigin = null
+
+function onPointerMove(e) {
+  if (!lpOrigin) return
+  if (Math.abs(e.clientX - lpOrigin.x) > LONG_PRESS_SLOP || Math.abs(e.clientY - lpOrigin.y) > LONG_PRESS_SLOP) lpRelease()
+}
+
+/** 手势结束(松手 / 取消 / 拖出门槛 / 组件卸载)。长按**触发**时不叫这个 —— 见 onPointerDown 注释。 */
+function lpRelease() {
+  if (lpTimer) { clearTimeout(lpTimer); lpTimer = null }
+  pressing.value = false
+  lpOrigin = null
+  window.removeEventListener('pointermove', onPointerMove)
+  window.removeEventListener('pointerup', lpRelease)
+  window.removeEventListener('pointercancel', lpRelease)
+  if (swallowClick.value && !lpClear) {
+    lpClear = setTimeout(() => { swallowClick.value = false; lpClear = null }, CLICK_FALLBACK_MS)
+  }
+}
+
+function onPointerDown(e) {
+  if (!props.pickable || e.button !== 0) return
+  lpRelease()
+  swallowClick.value = false     // 新的一次按下: 上一轮"待吞的 click"就此作废
+  window.addEventListener('pointermove', onPointerMove)
+  window.addEventListener('pointerup', lpRelease)
+  window.addEventListener('pointercancel', lpRelease)
+  lpOrigin = { x: e.clientX, y: e.clientY }
+  pressing.value = true
+  lpTimer = setTimeout(() => {
+    lpTimer = null               // 计时器已经跳了, 后面松手时不必再 clear
+    pressing.value = false       // 按压态到此为止, 但手还按着
+    swallowClick.value = true    // 松手会带来一个 click, 必须吞掉
+    // ⚠️ 这里**不能**调 lpRelease(): 一调就把 pointerup 监听摘了, 兜底定时器改从
+    // 「触发」起算 350ms, 于是"按住 2 秒再松手"的 click 落在复位之后 —— 大图照开、
+    // 刚勾上的那张还被点掉(r18 实测踩过)。留着 pointerup, 松手时才真正收工。
+    emit('long-press', props.item, e)
+  }, LONG_PRESS_MS)
+}
+
+function onClick(e) {
+  if (swallowClick.value) {
+    swallowClick.value = false
+    if (lpClear) { clearTimeout(lpClear); lpClear = null }
+    return
+  }
+  emit('open', props.item, e)
+}
+
+onBeforeUnmount(lpRelease)
 </script>
 
 <template>
   <div
     v-if="!hidden"
     ref="rootEl"
-    :class="['card', { selected, 'has-sel': selectable, 'last-viewed': isLastViewed, 'is-missing': isMissing }]"
-    :title="isMissing ? '文件已不在原位置 —— 可能把图移走了; 收藏已保留, 打开收藏页时会按文件名自动找回' : (selectable ? '点击勾选/取消' : (isLastViewed ? '上次看到这张(红色呼吸框) · 点击预览大图与标签' : '点击预览大图与标签'))"
-    @click="emit('open', item, $event)"
+    :class="['card', { selected, 'has-sel': selectable, pickable, pressing, 'last-viewed': isLastViewed, 'is-missing': isMissing }]"
+    :title="hint"
+    @click="onClick"
     @contextmenu="onCtx"
+    @pointerdown="onPointerDown"
     @mouseenter="emit('hover', { text: tipText, event: $event })"
     @mousemove="emit('move', $event)"
     @mouseleave="emit('leave')"
@@ -163,7 +261,15 @@ function onCtx(e) {
       @click.stop="emit('toggle-fav', item)"
     >{{ favorited ? '★' : '☆' }}</button>
 
-    <span v-if="selectable" class="ckbox" @click.stop="emit('toggle-select', item, $event)">
+    <!-- pickable(扫描页)时浏览态也渲染, 但靠 CSS 只在 hover/按压时显形;
+         @pointerdown.stop: 手指/鼠标落在这个小框上就不该再启动卡片的长按计时, 否则
+         按住勾选框 0.5 秒会既触发长按又触发点击, 一张卡被勾上又取消。 -->
+    <span
+      v-if="selectable || pickable"
+      :class="['ckbox', { 'pick-hint': pickable && !selectable }]"
+      @pointerdown.stop
+      @click.stop="emit('toggle-select', item, $event)"
+    >
       <input type="checkbox" :checked="selected" @click.stop="emit('toggle-select', item, $event)">
     </span>
 
@@ -281,11 +387,23 @@ function onCtx(e) {
   width: 22px; height: 22px; border-radius: 5px;
   background: rgba(10, 13, 18, .7);
   display: flex; align-items: center; justify-content: center;
+  transition: opacity var(--t-fast), transform var(--t-fast);
 }
 .ckbox input { accent-color: var(--accent); width: 14px; height: 14px; pointer-events: none; }
 
+/* 浏览态(pickable 网格)先藏起来: 满屏小方框比"少一个入口"更吵(用户 2026-10-22 明确否掉常显)。
+   鼠标一进这张卡片就显形 —— 指针能落到框上, 说明它必然已在卡片内, 不存在"点了一个看不见的框"。
+   按住卡片(pressing)时也提前亮, 让"正在长按"这件事看得见。 */
+.ckbox.pick-hint { opacity: 0; }
+.card:hover .ckbox.pick-hint,
+.card.pressing .ckbox.pick-hint { opacity: 1; }
+.card.pressing .ckbox { transform: scale(1.18); }
+/* 长按会顺带选中底部文件名 → 干脆禁选; 卡片本来就不是拿来复制文字的 */
+.card.pickable { user-select: none; }
+
 /* 来源角标: 左上角 —— 以前在左下角, 正好压住标签区的提示词文字。
-   选择模式下勾选框也占左上角, 徽标往右让一格。 */
+   选择模式下勾选框也占左上角, 徽标往右让一格。
+   pickable 网格**浏览态也让好**: 只在 hover 那一瞬间挪 30px 会跳, 不如常驻。 */
 .src {
   position: absolute; top: 6px; left: 6px; z-index: 4;
   background: rgba(10, 13, 18, .8); color: var(--accent2);
@@ -293,7 +411,7 @@ function onCtx(e) {
   max-width: calc(100% - 12px); overflow: hidden;
   white-space: nowrap; text-overflow: ellipsis;
 }
-.card.has-sel .src { left: 36px; }
+.card.has-sel .src, .card.pickable .src { left: 36px; }
 
 .tags {
   font-size: 10px; color: var(--muted);

@@ -254,3 +254,128 @@ export function findDuplicateGroups(opts = {}) {
     elapsedMs: Date.now() - t0,
   }
 }
+
+/**
+ * 「已忽略的图片组」(2026-10-23 用户需求: 能切过去看看忽略过哪些)
+ * ================================================================
+ * 忽略表只存 id 对, 这里把它还原成组给前端展示:
+ *   1. id 对当边, 并查集合并(与扫描同款) —— 用户点「非重复」时是把整组两两
+ *      都写进去的, 所以同一次忽略的图天然连通;
+ *   2. 按 id 回库查 path/tags/尺寸/来源文件夹, 附 unsafe 标记(安全模式复用);
+ *   3. 两端有任一行查不到的旧对(图已删 / 整库重导)不参与组, 计入 missingPairs。
+ * 分数和共享 tag 当时没落盘, 这里现算组内**公共标签**顶上, 不假装有分数。
+ */
+export function findIgnoredGroups(ignorePairs = new Set()) {
+  const t0 = Date.now()
+  if (!ignorePairs || !ignorePairs.size) {
+    return { groups: [], pairs: 0, missingPairs: 0, elapsedMs: Date.now() - t0 }
+  }
+  const db = openDb()
+  const cols = new Set(db.prepare('PRAGMA table_info(images)').all().map((c) => c.name))
+  const dimSel = ['px_w', 'px_h', 'size'].filter((c) => cols.has(c))
+  const hasGone = cols.has('gone')
+  const hasFolders = (() => {
+    try {
+      return !!db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'folders'`).get()
+    } catch { return false }
+  })()
+
+  const ids = new Set()
+  for (const k of ignorePairs) {
+    const [a, b] = String(k).split('|').map(Number)
+    if (Number.isFinite(a) && Number.isFinite(b) && a !== b) { ids.add(a); ids.add(b) }
+  }
+  if (!ids.size) return { groups: [], pairs: ignorePairs.size, missingPairs: ignorePairs.size, elapsedMs: Date.now() - t0 }
+
+  const rows = []
+  const arr = [...ids]
+  for (let i = 0; i < arr.length; i += 400) {
+    const chunk = arr.slice(i, i + 400)
+    rows.push(...db.prepare(
+      `SELECT i.id, i.path, i.tags${dimSel.length ? ', i.' + dimSel.join(', i.') : ''}${hasFolders ? ', f.path AS folder' : ', NULL AS folder'}
+       FROM images i${hasFolders ? ' LEFT JOIN folders f ON f.id = i.folder_id' : ''}
+       WHERE i.id IN (${chunk.map(() => '?').join(',')})${hasGone ? ' AND i.gone = 0' : ''}`
+    ).all(...chunk))
+  }
+
+  const sm = safetyMatcher()
+  const byId = new Map()
+  for (const r of rows) {
+    const tagArr = String(r.tags || '').split(',').filter(Boolean)
+    byId.set(Number(r.id), {
+      id: r.id,
+      path: r.path,
+      tags: r.tags || '',
+      folder: r.folder || '',
+      px_w: r.px_w || 0,
+      px_h: r.px_h || 0,
+      size: r.size || 0,
+      unsafe: unsafeLevelOf(tagArr, sm) || 0,
+      _tagSet: new Set(tagArr),
+    })
+  }
+
+  const parent = new Map()
+  const find = (x) => {
+    let r = x
+    while (parent.get(r) !== r) r = parent.get(r)
+    while (parent.get(x) !== r) { const n = parent.get(x); parent.set(x, r); x = n }
+    return r
+  }
+  const union = (a, b) => {
+    const ra = find(a); const rb = find(b)
+    if (ra !== rb) parent.set(Math.max(ra, rb), Math.min(ra, rb))
+  }
+  for (const id of byId.keys()) parent.set(id, id)
+
+  let validPairs = 0
+  for (const k of ignorePairs) {
+    const [a, b] = String(k).split('|').map(Number)
+    if (byId.has(a) && byId.has(b)) { union(a, b); validPairs++ }
+  }
+
+  const byRoot = new Map()
+  for (const id of byId.keys()) {
+    const r = find(id)
+    if (!byRoot.has(r)) byRoot.set(r, [])
+    byRoot.get(r).push(id)
+  }
+
+  const groups = []
+  for (const memberIds of byRoot.values()) {
+    if (memberIds.length < 2) continue
+    const items = memberIds.map((id) => byId.get(id))
+    // 公共标签: 从最短的那张图的 tag 集开始过
+    items.sort((x, y) => x._tagSet.size - y._tagSet.size)
+    let common = new Set(items[0]._tagSet)
+    for (const it of items.slice(1)) {
+      common = new Set([...common].filter((t) => it._tagSet.has(t)))
+      if (!common.size) break
+    }
+    items.sort((x, y) => y.px_w * y.px_h - x.px_w * x.px_h || y.size - x.size)
+    groups.push({
+      score: null,
+      shared: [...common].slice(0, 12),
+      ignored: true,
+      items: items.map((it, i) => ({
+        id: it.id,
+        path: it.path,
+        tags: it.tags,
+        folder: it.folder,
+        px_w: it.px_w,
+        px_h: it.px_h,
+        size: it.size,
+        unsafe: it.unsafe,
+        best: i === 0,
+      })),
+    })
+  }
+  groups.sort((a, b) => b.items.length - a.items.length)
+
+  return {
+    groups,
+    pairs: ignorePairs.size,
+    missingPairs: ignorePairs.size - validPairs,
+    elapsedMs: Date.now() - t0,
+  }
+}

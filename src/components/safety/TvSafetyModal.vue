@@ -35,6 +35,9 @@ const newLevel = ref('core')
 const pct = computed(() => (
   safety.total ? `${((safety.hiddenCount / safety.total) * 100).toFixed(1)}%` : '—'
 ))
+const hintText = computed(() => (safety.mode === 'unsafe'
+  ? '开启后只保留命中下面标签的图, 其余全部不渲染 —— 这是安全模式的取反。只影响显示, 库里的数据一行不动, 关掉立刻全回来。'
+  : '开启后, 命中下面标签的图在看板里不再渲染。只影响显示 —— 库里的数据一行不动、统计数字也不重算, 关掉立刻全回来。'))
 
 watch(() => props.modelValue, async (v) => {
   if (!v) return
@@ -58,6 +61,20 @@ async function onToggle(v) {
 async function setLevel(lv) {
   if (safety.level === lv) return
   try { await safety.set({ level: lv }) } catch (e) { note.value = e.message }
+}
+
+/** 切「安全 / 不安全」显示方式。
+ *  选完却不开开关的话画面毫无变化, 用户会以为没生效 —— 所以一并打开过滤。 */
+async function setMode(m) {
+  if (safety.mode === m) return
+  try {
+    await safety.set({ mode: m, on: true })
+    note.value = m === 'unsafe'
+      ? '已切到「不安全模式」并开启 —— 现在只显示命中敏感标签的图'
+      : '已切回「安全模式」并开启 —— 敏感图不再显示'
+  } catch (e) {
+    note.value = e.message
+  }
 }
 
 async function toggleTag(tag, level) {
@@ -114,10 +131,21 @@ async function saveText() {
           :is-switch="true"
           @update:model-value="onToggle"
         />
-        <p class="hint">
-          开启后，命中下面标签的图在看板里<b>不再渲染</b>。只影响显示 ——
-          库里的数据一行不动、统计数字也不重算，关掉立刻全回来。
-        </p>
+        <p class="hint">{{ hintText }}</p>
+      </div>
+
+      <div class="row">
+        <span class="lab">显示方式</span>
+        <TvChip
+          label="安全模式 · 隐藏敏感图"
+          :active="safety.mode === 'safe'"
+          @click="setMode('safe')"
+        />
+        <TvChip
+          label="不安全模式 · 只显示敏感图（取反）"
+          :active="safety.mode === 'unsafe'"
+          @click="setMode('unsafe')"
+        />
       </div>
 
       <div class="row">
@@ -138,6 +166,9 @@ async function saveText() {
         当前档位在<b>整个库</b>里会隐藏
         <b>{{ nfmt(safety.hiddenCount) }}</b> / {{ nfmt(safety.total) }} 张
         <span class="faint">（{{ pct }}）</span>
+        <span v-if="safety.mode === 'unsafe'" class="faint">
+          · 不安全模式下只保留命中该档的 {{ nfmt(safety.sensitiveCount) }} 张
+        </span>
       </div>
       <!-- 这里的口径刻意是"整个库"(改集合看的是全局影响); 各页面工具栏上那个
            数字是"当前列表"的 —— 两者不是一回事, 所以把它写出来, 免得对不上时困惑。 -->
@@ -165,7 +196,7 @@ async function saveText() {
       <section>
         <h4>
           [edge] {{ safety.edge.length }} 个标签
-          <span class="faint">在 core 之上追加 · 实测这一档会藏掉九成图</span>
+          <span class="faint">在 core 之上追加 · 点标签可移出</span>
         </h4>
         <div class="tags">
           <TvChip

@@ -51,7 +51,10 @@ watch(text, (v) => {
       sug.value = list
       // 只有正持有焦点的框才自动展开; blur 后才回来的响应只更新数据不弹下拉
       open.value = focused.value && sug.value.length > 0
-      active.value = open.value && sug.value.length ? 0 : -1
+      /* 不自动高亮第一行(2026-10-22 用户报"回车确定也会清空"): 高亮在 0 时 Enter 永远走
+       * 「选联想项」分支, 用户明明打完了自己的词、按回车想直接确认, 却被换成库里的第一条。
+       * 契约写在下面 hint 里: 直接回车 = 用输入框原文, 想选联想项先按 ↑↓。 */
+      active.value = -1
     } catch { sug.value = []; open.value = false } finally { loading.value = false }
   }, 220)
 })
@@ -71,7 +74,12 @@ function choose(item) {
 function onKey(e) {
   if (open.value && sug.value.length) {
     if (e.key === 'ArrowDown') { e.preventDefault(); active.value = (active.value + 1) % sug.value.length; return }
-    if (e.key === 'ArrowUp') { e.preventDefault(); active.value = (active.value - 1 + sug.value.length) % sug.value.length; return }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      // 没选过(active=-1)时 ↑ 应该落到**最后一条**, 不能算成 len-2
+      active.value = active.value < 0 ? sug.value.length - 1 : (active.value - 1 + sug.value.length) % sug.value.length
+      return
+    }
     if (e.key === 'Enter' && active.value >= 0) { e.preventDefault(); choose(sug.value[active.value]); return }
   }
   if (e.key === 'Enter') {

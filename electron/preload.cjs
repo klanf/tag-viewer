@@ -36,7 +36,7 @@ const CHANNELS = new Set([
   'tags:cats',
   // tag 查重(2026-10-17)
   'dup:scan',
-  'dup:ignore:add', 'dup:ignore:clear',
+  'dup:ignore:add', 'dup:ignore:clear', 'dup:ignore:list', 'dup:ignore:remove',
   // 规则
   'blacklist:get', 'blacklist:save', 'blacklist:toggle',
   'replace:get', 'replace:save', 'bg:get', 'rules:reload', 'rules:test',

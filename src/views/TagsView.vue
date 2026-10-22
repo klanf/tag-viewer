@@ -269,7 +269,11 @@ onMounted(() => {
         />
         <span class="hint">共 {{ nfmt(shownTotal) }} 个标签</span>
         <span v-if="hideBanned && bannedHidden > 0" class="hint faint banned-hint">已隐藏 {{ nfmt(bannedHidden) }} 个已 ban</span>
-        <span v-if="safetyHidden > 0" class="hint faint safety-hint">🛡 已隐藏 {{ nfmt(safetyHidden) }} 个敏感词</span>
+        <span v-if="safetyHidden > 0" class="hint faint safety-hint">
+          {{ safety.mode === 'unsafe'
+            ? `🙈 不安全模式: 已隐藏 ${nfmt(safetyHidden)} 个非敏感词`
+            : `🛡 已隐藏 ${nfmt(safetyHidden)} 个敏感词` }}
+        </span>
         <span v-if="scanMode && scanNote" class="hint faint scan-hint">
           📁 缓存 {{ nfmt(scanNote.withTags) }}/{{ nfmt(scanNote.images) }} 张有标签<template v-if="scanNote.missing?.length"> · ⚠️ {{ scanNote.missing.length }} 个夹还没有缓存(去扫描页打开/重扫一次)</template>
         </span>

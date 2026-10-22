@@ -35,7 +35,7 @@ export function useImageFeed(opts = {}) {
   const total = ref(0)
   /* 当前查询范围内两档各会隐藏多少张 —— 后端算好的(见 core/query.js 的 unsafeCountOf)。
      刻意与 offset/limit 无关: 翻页时这个数不变, 安全模式那个数字才不会随滚动跳。 */
-  const unsafe = ref({ core: 0, edge: 0 })
+  const unsafe = ref({ core: 0, edge: 0, total: 0 })
   const offset = ref(0)
   const page = ref(1)
   const loading = ref(false)
@@ -107,14 +107,14 @@ export function useImageFeed(opts = {}) {
       const d = await doFetch(params(0))
       results.value = d.results || []
       total.value = d.total || 0
-      unsafe.value = d.unsafe || { core: 0, edge: 0 }
+      unsafe.value = d.unsafe || { core: 0, edge: 0, total: 0 }
       fetched.value = results.value.length
       loadedOnce.value = true
     } catch (e) {
       error.value = e.message
       results.value = []
       total.value = 0
-      unsafe.value = { core: 0, edge: 0 }
+      unsafe.value = { core: 0, edge: 0, total: 0 }
       fetched.value = 0
     } finally {
       loading.value = false
@@ -138,7 +138,7 @@ export function useImageFeed(opts = {}) {
       const d = await doFetch(params(offset.value))
       results.value = d.results || []
       total.value = d.total || 0
-      unsafe.value = d.unsafe || { core: 0, edge: 0 }
+      unsafe.value = d.unsafe || { core: 0, edge: 0, total: 0 }
       fetched.value = results.value.length
     } catch (e) {
       error.value = e.message
@@ -178,7 +178,7 @@ export function useImageFeed(opts = {}) {
     results.value = []
     total.value = 0
     fetched.value = 0
-    unsafe.value = { core: 0, edge: 0 }
+    unsafe.value = { core: 0, edge: 0, total: 0 }
     offset.value = 0
     page.value = 1
     loadedOnce.value = false

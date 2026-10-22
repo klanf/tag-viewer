@@ -339,7 +339,19 @@ async function main() {
   console.log('[e2e] CDP 端口 =', PORT)
   // userData 从不清整目录, 改成连上之后清 localStorage + 重载 —— 见 scripts/harness.mjs。
 
-  const child = spawn(exe, ['.', `--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA}`], {
+  const child = spawn(exe, [
+    '.', `--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA}`,
+    /* 关掉 Chromium 对"看不见/被遮挡窗口"的降速(2026-10-22 r18b~r18d 三轮同点复现):
+     *   · 定时器节流(1s 一档)、requestAnimationFrame 停摆、CSS/Transition 的 transitionend 不派发。
+     * 受害的两处都不是功能坏了, 而是**测试窗口在后台**:
+     *     - 「快速移动」圆钮用 <Transition mode="out-in">, 展开要等旧节点离场动画结束;
+     *       后台不派发 transitionend -> 条永远不出现, 重试点击 8s 超时、打断整轮;
+     *     - 购物车缩略图靠 IntersectionObserver 才挂 <img>, 后台不回调 -> "没有 img 元素"。
+     * 真用户在前景窗口里不会碰到, 所以这是**测试环境的坑**, 在这里堵上, 不去改产品代码。 */
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+  ], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     // TV_E2E_CTX_MOVE: 让主进程的右键菜单跳过原生 popup, 直接当成用户点了
@@ -3632,8 +3644,9 @@ async function main() {
      * 这一段就是从首页光箱点标签跳过来的, 所以按浮动导航的「←」应该回到首页,
      * 且光箱重新打开、停在当时那张图上。 */
     const lbRestore = await cdp.eval(`
-      const fbtn = document.querySelector('.float-nav .fbtn')
-      if (!fbtn) return { err: '浮动返回键没渲染' }
+      /* 2026-10-23: 返回键从右下角浮动键搬到顶栏左上角 */
+      const fbtn = document.querySelector('.hdr .back-btn')
+      if (!fbtn || fbtn.disabled) return { err: '左上角返回键没渲染/不可用' }
       fbtn.click()
       await new Promise(r => setTimeout(r, 1400))
       return {
@@ -3723,7 +3736,7 @@ async function main() {
     /* 详情页跳过来的返回: 回详情页, 且**不会**错误地拉起光箱
      * (详情页不是光箱入口, 没有 jump 记忆可消费)。 */
     const detBack = await cdp.eval(`
-      document.querySelector('.float-nav .fbtn')?.click()
+      document.querySelector('.hdr .back-btn')?.click()
       await new Promise(r => setTimeout(r, 1400))
       return { hash: decodeURIComponent(location.hash), onDetail: !!document.querySelector('.detail'), lbOpen: !!document.querySelector('.lightbox') }
     `)
@@ -4466,8 +4479,17 @@ async function main() {
       try {
         await waitFor(cdp, `__hShown()`, { label: '购物车×安全: 关 🛡 显示夹具图', timeout: 20000 })
       } catch { offOk = false }
-      check('购物车×安全: 🛡 关着时被藏封面照常显示(夹具就位, 不误伤)', offOk,
-        offOk ? '夹具图已显示' : '夹具图没显示出来')
+      /* 失败时把"页面上到底显示的是哪张图"打出来 —— (a)(d) 一起红而 (b)(c) 绿,
+         十有八九不是"藏图逻辑坏了", 而是**别的东西先把封面换走了**(横图自愈/候选池),
+         光看"没显示"三个字分辨不了这两种。 */
+      const shownTip = offOk ? '夹具图已显示' : await cdp.eval(`
+        const one = document.querySelector('.cart-view .ci[title="1girl"]')
+        if (!one) return '条目整个不在(选择器没命中)'
+        const im = one.querySelector('img')
+        return '条目在, 显示的是: ' + (im ? decodeURIComponent(im.currentSrc || im.src || '').slice(-58)
+                                         : '没有 img 元素(占位/未渲染)')
+      `).catch(() => '取现场时页面正在重载')
+      check('购物车×安全: 🛡 关着时被藏封面照常显示(夹具就位, 不误伤)', offOk, shownTip)
 
       /* b) 当场打开 🛡: watch 链路把它换掉 */
       let watchOk = true
@@ -4622,11 +4644,25 @@ async function main() {
     check('批量: 预设目录已注入(与右键菜单同一份 settings)', quickAdd?.ok === true,
       JSON.stringify(quickAdd))
 
-    await cdp.eval(`__t.click('[data-test="scan-select-toggle"]'); return true`)
+    /* 第十八轮(2026-10-22)重设计: 顶部那颗「☑ 选择」按钮被去掉了 —— 进选择模式改在
+       网格里就地发生(点卡片左上角的勾选框 / 长按卡片 / Ctrl+点击)。
+       所以这里入口改成勾第一张卡, 而**判据顺带更强了**: 不只"模式开了", 还是"开着并勾上了这一张"。 */
+    const noTopBtn = await cdp.eval(`
+      return { toggle: !!document.querySelector('[data-test="scan-select-toggle"]'),
+               ck: document.querySelectorAll('.scan-view .grid.imgs .card .ckbox').length,
+               cards: document.querySelectorAll('.scan-view .grid.imgs .card').length }
+    `)
+    check('批量: 顶部不再有「☑ 选择」按钮, 但每张卡片都带上了勾选框',
+      !noTopBtn.toggle && noTopBtn.ck === noTopBtn.cards && noTopBtn.cards > 0, JSON.stringify(noTopBtn))
+
+    await cdp.eval(`__t.click('.scan-view .grid.imgs .card .ckbox'); return true`)
     await waitFor(cdp, `!!document.querySelector('[data-test="scan-batch-bar"]')`,
       { label: '批量操作条出现', timeout: 10000 })
     const sel0 = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
-    check('批量: 进入选择模式, 操作条出现且计数 = 0', sel0 === 0, `计数 ${sel0}`)
+    check('批量: 点第一张的勾选框 -> 就地进选择模式并勾上它(计数 = 1)', sel0 === 1, `计数 ${sel0}`)
+    await cdp.eval(`__t.click('[data-test="scan-sel-clear"]'); return true`)
+    const sel0b = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
+    check('批量: 「清空」把刚勾掉的那张摘干净(计数 = 0), 模式仍开着', sel0b === 0, `计数 ${sel0b}`)
 
     /* 10-01 结构性常驻: bar 在滚动区(.result-scroll)外 —— 滚 300px 位置纹丝不动。
        (sticky 方案弃用: 在带 padding 的滚动容器里钉住会露一条缝, 用户截图实锤) */
@@ -4699,8 +4735,9 @@ async function main() {
     await waitFor(cdp, `!!document.querySelector('.lightbox')`, { label: '大图打开(第 2 张)', timeout: 15000 })
     await cdp.eval(`document.querySelector('.lightbox .lb-close').click(); return true`)
     await waitFor(cdp, `!document.querySelector('.lightbox')`, { label: '大图关闭', timeout: 15000 })
-    await cdp.eval(`__t.click('[data-test="scan-select-toggle"]'); return true`)
+    await cdp.eval(`__t.click('.scan-view .grid.imgs .card .ckbox'); return true`)
     await waitFor(cdp, `!!document.querySelector('[data-test="scan-batch-bar"]')`, { label: '重回选择模式', timeout: 10000 })
+    await cdp.eval(`__t.click('[data-test="scan-sel-clear"]'); return true`)
     /* 先手动勾第 3 张, 再点按钮: 判据是**并集**(第 1~2 张并进来, 已勾的那张不能丢) */
     await cdp.eval(`document.querySelectorAll('.scan-view .grid.imgs .card')[2].click(); return true`)
     const uptoPre = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
@@ -4802,13 +4839,14 @@ async function main() {
 
     /* 10-01 工具条 ✕ 退出: 此刻在选择模式、网格还有图(sq 未删) -> 点 ✕ -> 操作条消失。
        ⚠️ 不能放在批量删除之后: 全删空时二级视图切到「没有可显示的图片」空态,
-       toggle 点了也回不到选择模式(操作条只在有图时渲染) —— r13 实锤「重新进入选择模式」超时。 */
+       连卡片都没了, 勾选框也就没有可点的对象, 回不到选择模式(r13 实锤「重新进入选择模式」超时;
+       第十八轮把入口从顶部按钮改成卡片勾选框之后, 这个前提依然成立)。 */
     await cdp.eval(`__t.click('[data-test="scan-batch-exit"]'); return true`)
     await waitFor(cdp, `!document.querySelector('[data-test="scan-batch-bar"]')`,
       { label: '✕ 退出后操作条消失', timeout: 8000 })
     check('批量: 工具条 ✕ 退出按钮可退出选择模式', true, '操作条已消失 · 已清空已选')
-    /* 回到选择模式, 继续批量删除段 */
-    await cdp.eval(`__t.click('[data-test="scan-select-toggle"]'); return true`)
+    /* 回到选择模式, 继续批量删除段(第十八轮入口: 点卡片勾选框, 勾上的那张随后被全选覆盖) */
+    await cdp.eval(`__t.click('.scan-view .grid.imgs .card .ckbox'); return true`)
     await waitFor(cdp, `!!document.querySelector('[data-test="scan-batch-bar"]')`,
       { label: '重新进入选择模式', timeout: 8000 })
 
@@ -4915,10 +4953,24 @@ async function main() {
            (async () => { ... })(), 同步 IIFE (()=>{...})() 的返回值会被当
            语句丢弃 -> 每轮 eval 恒为 undefined -> 必挂(r21 实锤, 表现为
            「最后值: undefined」而非 err)。 */
-        await waitFor(cdp, `
-          if (__t.count('.lightbox .lb-qm .qm-btn[data-test^="qm-btn-"]') > 0) return true
-          document.querySelector('.lightbox [data-test="qm-fab"]')?.click()
-          return false`, { label: '快速移动: 点圆钮展开按钮条(点击重试)', timeout: 8000 })
+        try {
+          await waitFor(cdp, `
+            if (__t.count('.lightbox .lb-qm .qm-btn[data-test^="qm-btn-"]') > 0) return true
+            document.querySelector('.lightbox [data-test="qm-fab"]')?.click()
+            return false`, { label: '快速移动: 点圆钮展开按钮条(点击重试)', timeout: 8000 })
+        } catch (e) {
+          // 这一条挂了会打断整轮, 所以先把"当时页面上还有什么"打进日志再抛
+          const scene = await cdp.eval(`
+            const f = document.querySelector('.lightbox [data-test="qm-fab"]')
+            const r = f ? f.getBoundingClientRect() : null
+            return { lb: !!document.querySelector('.lightbox'), fab: !!f,
+                     rect: r ? { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width) } : null,
+                     bar: !!document.querySelector('.lightbox .qm-bar'),
+                     pos: localStorage.getItem('lb-qm-pos') }
+          `).catch(() => '取现场失败')
+          console.log('[scene] 快速移动圆钮展开超时时的页面状态: ' + JSON.stringify(scene))
+          throw e
+        }
 
         const strip0 = await cdp.eval(`
           return {

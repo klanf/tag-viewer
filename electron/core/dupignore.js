@@ -67,6 +67,26 @@ export function clearIgnorePairs() {
   return n
 }
 
+/**
+ * 恢复一组: 只删「两端都在给定 id 集合里」的对。
+ * 用 id 集合而不是让前端生成两两组合, 入参更小, 也能顺手清掉组内遗留的旧对。
+ */
+export function removeIgnorePairsByIds(ids = []) {
+  const set = new Set((ids || []).map(Number).filter((n) => Number.isFinite(n)))
+  if (set.size < 2) return 0
+  const c = ensure()
+  let n = 0
+  for (const k of [...c.pairs]) {
+    const [a, b] = k.split('|').map(Number)
+    if (set.has(a) && set.has(b)) {
+      c.pairs.delete(k)
+      n++
+    }
+  }
+  if (n) flush()
+  return n
+}
+
 function flush() {
   try {
     const dir = file().replace(/[\\/][^\\/]+$/, '')

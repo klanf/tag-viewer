@@ -22,12 +22,15 @@ import TvSelect from '@/components/base/TvSelect.vue'
 import TvInput from '@/components/base/TvInput.vue'
 import TvTabs from '@/components/base/TvTabs.vue'
 import TvState from '@/components/base/TvState.vue'
+import TvZoomBadge from '@/components/base/TvZoomBadge.vue'
+import TvModal from '@/components/base/TvModal.vue'
 import TvCategoryManager from '@/components/rules/TvCategoryManager.vue'
 import TvCoverPickerModal from '@/components/series/TvCoverPickerModal.vue'
 import TvCharEditModal from '@/components/series/TvCharEditModal.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
 import { useBatchOps } from '@/composables/useBatchOps.js'
 import { useFloatBack } from '@/composables/useFloatBack.js'
+import { useGridZoom } from '@/composables/useGridZoom.js'
 import { useSourceStore } from '@/stores/useSourceStore.js'
 import { useCartStore } from '@/stores/useCartStore.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
@@ -38,6 +41,7 @@ import { useAppStore } from '@/stores/useAppStore.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { api } from '@/utils/api.js'
 import { nfmt, stripZhSeries } from '@/utils/format.js'
+import { readLS, writeLS, LS } from '@/utils/lskey.js'
 
 const src = useSourceStore()
 const cart = useCartStore()
@@ -75,6 +79,17 @@ const scrollChars = ref(0)
 const seriesScrollEl = ref(null)
 const charScrollEl = ref(null)
 const imgScrollEl = ref(null)
+
+/**
+ * 系列/角色两层卡片的 Ctrl+滚轮缩放(2026-10-22 用户要求)。
+ * 复用图片网格那套(同一个 tv_grid_zoom): 卡片基准都是 150px, "同一套审美"
+ * 没理由各记一份。滚轮只挂在这两层的 .scroll 上 —— 图片层有自己的 TvImageGrid
+ * 缩放, 挂在外层会一次滚轮触发两份状态。
+ */
+const { zoom: cardZoom, zoomFlash, onWheel: onCardWheel, reset: resetCardZoom } = useGridZoom()
+const cardGridStyle = computed(() => ({
+  gridTemplateColumns: `repeat(auto-fill, minmax(${Math.round(150 * cardZoom.value)}px, 1fr))`,
+}))
 
 const CATEGORY_LABELS = computed(() => ({
   game: '游戏', anime: '动漫', vtb: 'Vtuber', other: '其他',
@@ -259,7 +274,11 @@ const COVER_SCOPES = [
 const coverScope = ref('nocustom')
 const coverSource = ref('danbooru')
 const coverRating = ref('g')
-const coverSolo = ref(false)
+/** solo 默认开 + 记住选择(2026-10-22 用户要求): 落在 prefs, 不在这里另存一份 */
+const coverSolo = computed({
+  get: () => prefs.coverSolo,
+  set: (v) => { prefs.coverSolo = v },
+})
 /* Danbooru 配没配 API Key —— 面板上那句"能不能又要 solo 又要站方人气排序"要说准。
  * null = 还没问过(打开面板才问, 不为这个多占一条启动路径)。 */
 const booruKeyed = ref(null)
@@ -294,13 +313,28 @@ function scopeCount(v) {
   if (v === 'noimg') return list.filter((c) => c.images === 0).length
   return list.length
 }
+/* 面板上「范围」与「追加范围」是同一个选择(都写 coverScope) —— 选项也共用一份,
+   否则跑起来之后标签从"没自定义过封面的(N)"变成"没自定义过封面的"会让人以为是两回事。
+   ⚠️ 这里是脚本作用域, Ref 不会像模板那样自动解包: 必须 `selected.value.size`。 */
+const coverScopeOptions = computed(() => COVER_SCOPES.map((s) => ({
+  ...s,
+  label: s.value === 'selected' ? `仅选中的(${selected.value.size})` : `${s.label}(${scopeCount(s.value)})`,
+})))
 
 async function runAutoCovers() {
   const t = coverTargets.value
   if (!t.length) { ui.err('这个口径下没有要拉封面的角色(换个口径或先勾选)'); return }
-  if (t.length > 50 && !window.confirm(`要给 ${t.length} 个角色逐个联网拉封面。\n本机到图床是慢链路，粗估要 ${Math.ceil(t.length * 4 / 60)} 分钟，中途可以点「停止」。\n已经设过封面的会被跳过(所以断了可以再点一次接着跑)。\n确定开跑？`)) return
+  /* 任务在跑时这一下是**追加**(2026-10-22 用户反馈「切到另一个系列就加不进来」):
+   * 主进程排队, 跑完手头这条就接上, 不用等整批结束再点一次。 */
+  const running = !!app.autoCover?.running
+  if (t.length > 50 && !window.confirm(running
+    ? `要把 ${t.length} 个角色排进当前这批的队尾。\n整批会变成 ${(app.autoCover.total || 0) + t.length} 个，当前这条拉完就接着来。\n确定追加？`
+    : `要给 ${t.length} 个角色逐个联网拉封面。\n本机到图床是慢链路，粗估要 ${Math.ceil(t.length * 4 / 60)} 分钟，中途可以点「停止」。\n已经设过封面的会被跳过(所以断了可以再点一次接着跑)。\n确定开跑？`)) return
   const r = await app.autoCoverRun(t, { source: coverSource.value, rating: coverRating.value, solo: coverSolo.value })
-  if (r?.error) ui.err(r.error)
+  if (r?.error) { ui.err(r.error); return }
+  if (r?.added) ui.ok(`已排进队尾 ${r.added} 个（本批合计 ${r.total} 个）`, 3200)
+  else if (r?.note) ui.toast(r.note, 'info', 2600)
+  else if (r?.started) ui.ok(`开始拉取 ${t.length} 个封面`, 2200)
 }
 
 async function stopAutoCovers() {
@@ -395,6 +429,53 @@ function toggleCartOne(c) {
 }
 
 function inCart(tag) { return cart.has(tag) }
+
+/* ---------------- 单卡 ban(2026-10-23) ----------------
+ * 与批量隐藏写的是同一份 hidden_chars —— 这个字段是**整数组替换**, 必须把现有列表
+ * 并进来再发, 否则会把之前屏蔽的角色全解屏蔽。
+ * 用户点名要确认弹窗 + 「以后不再提示」: 偏好存 localStorage(纯展示层习惯, 不落数据目录);
+ * 恢复入口不变 —— 分类管理 → 屏蔽角色。 */
+const banTarget = ref(null)
+const banNoAsk = ref(false)
+const banSkipAsk = ref(readLS(LS.charBanSkip.key) === '1')
+const banDisplayName = computed(() => {
+  const c = banTarget.value
+  return c ? (stripZhSeries(charZh.value[c.tag]) || c.name || c.tag) : ''
+})
+
+function askBan(c) {
+  if (banSkipAsk.value) { doBan(c); return }
+  banNoAsk.value = false
+  banTarget.value = c
+}
+
+async function doBan(c) {
+  if (!c) return
+  if (banNoAsk.value) {
+    writeLS(LS.charBanSkip.key, '1')
+    banSkipAsk.value = true
+  }
+  const tag = String(c.tag || '').toLowerCase()
+  const name = stripZhSeries(charZh.value[c.tag]) || c.name || tag
+  banTarget.value = null
+  try {
+    const cur = await api.seriesMeta()
+    const merged = [...new Set([...(cur.hidden_chars || []), tag])]
+    const r = await api.saveSeriesMeta({ hidden_chars: merged })
+    if (r?.error) { ui.err(r.error); return }
+    ui.ok(`已屏蔽 ${name}（可在 分类管理 → 屏蔽角色 恢复）`, 2800)
+    if (selected.value.has(c.tag)) {
+      const s = new Set(selected.value)
+      s.delete(c.tag)
+      selected.value = s
+    }
+    // 静默重拉: 只是让这张卡消失, 别把用户从原位甩回顶部
+    await loadChars(curSeries.value, { silent: true })
+    await loadSeries({ silent: true })
+  } catch (e) {
+    ui.err('屏蔽失败: ' + e.message)
+  }
+}
 
 /* ---------------- 三: 图片 ---------------- */
 const imgFeed = useImageFeed({ infinite: true, pageSize: 60 })
@@ -649,7 +730,7 @@ watch(() => route.query.series, async (name) => {
           <TvButton size="sm" variant="secondary" @click="showCatMgr = true">⚙️ 分类管理</TvButton>
         </div>
 
-        <div ref="seriesScrollEl" class="scroll">
+        <div ref="seriesScrollEl" class="scroll" @wheel="onCardWheel">
           <TvState v-if="loading" state="loading" text="加载中..." />
           <TvState v-else-if="listError" state="error" :text="`加载失败: ${listError}`" />
           <TvState v-else-if="!seriesData?.series.length" state="empty" text="暂无系列数据" />
@@ -658,7 +739,7 @@ watch(() => route.query.series, async (name) => {
             state="empty"
             :text="seriesKw.trim() ? `没有匹配「${seriesKw.trim()}」的系列` : '该分类下没有系列(或分类已被隐藏)'"
           />
-          <div v-else class="grid">
+          <div v-else class="grid" :style="cardGridStyle">
             <TvEntityCard
               v-for="s in shownSeries"
               :key="s.name"
@@ -747,10 +828,7 @@ watch(() => route.query.series, async (name) => {
               size="sm"
               inline
               label="范围"
-              :options="COVER_SCOPES.map((s) => ({
-                ...s,
-                label: s.value === 'selected' ? `仅选中的(${selected.size})` : `${s.label}(${scopeCount(s.value)})`,
-              }))"
+              :options="coverScopeOptions"
             />
             <TvSelect
               v-model="coverSource"
@@ -787,8 +865,15 @@ watch(() => route.query.series, async (name) => {
           </template>
           <template v-else>
             <span class="run">🌐 正在拉封面 <b>{{ autoCover.done }}</b> / {{ autoCover.total }}</span>
+            <span v-if="autoCover.queued" class="hint q">排队 {{ autoCover.queued }}</span>
             <span class="hint">成功 {{ autoCover.ok }} · 跳过 {{ autoCover.skipped }} · 失败 {{ autoCover.failed }}<template v-if="autoCover.current"> · 当前：{{ autoCover.current }}</template></span>
             <span class="spacer" />
+            <!-- 追加(2026-10-22): 跑到一半切到另一个系列, 从这里把它的角色排到队尾。
+                 范围/图源/分级沿用面板里选的那套, 每批目标各自记住(见 coverfetch.js)。 -->
+            <TvSelect v-model="coverScope" size="sm" inline label="追加" :options="coverScopeOptions" />
+            <TvButton size="sm" variant="secondary" @click="runAutoCovers">
+              ＋ 加入队列({{ coverTargets.length }})
+            </TvButton>
             <TvButton size="sm" variant="danger" @click="stopAutoCovers">⏹ 停止</TvButton>
           </template>
           <template v-if="autoCover?.finished && !autoCover.running">
@@ -796,10 +881,10 @@ watch(() => route.query.series, async (name) => {
           </template>
         </div>
 
-        <div ref="charScrollEl" class="scroll">
+        <div ref="charScrollEl" class="scroll" @wheel="onCardWheel">
           <TvState v-if="charsLoading" state="loading" text="加载中..." />
           <TvState v-else-if="!sortedChars.length" state="empty" :text="charsEmptyText" />
-          <div v-else class="grid">
+          <div v-else class="grid" :style="cardGridStyle">
             <TvEntityCard
               v-for="c in sortedChars"
               :key="c.tag"
@@ -824,6 +909,7 @@ watch(() => route.query.series, async (name) => {
               @cover="openCoverPick('chars', c.tag, stripZhSeries(charZh[c.tag]) || c.name, c.thumb)"
               @edit="openCharEdit(c)"
               @fetch="fetchOneCover('chars', c.tag, stripZhSeries(charZh[c.tag]) || c.name)"
+              @ban="askBan(c)"
             />
           </div>
         </div>
@@ -895,6 +981,9 @@ watch(() => route.query.series, async (name) => {
 
     <TvCategoryManager v-model="showCatMgr" :series-list="seriesData?.series || []" @saved="showSeriesList" />
 
+    <!-- 系列/角色两层卡片的缩放徽标(图片层有自己的, 别叠两个) -->
+    <TvZoomBadge v-if="view !== 'images'" :zoom="cardZoom" :show="zoomFlash" @reset="resetCardZoom" />
+
     <MoveTargetModal v-model="imgMoveOpen" :count="imgSel.size" :folders="imgMoveFolders" :busy="imgMoving" @pick="imgDoMove" />
     <MoveTargetModal v-model="imgCopyOpen" mode="copy" :count="imgSel.size" :folders="imgMoveFolders" :busy="imgCopying" @pick="imgDoCopy" />
 
@@ -916,6 +1005,27 @@ watch(() => route.query.series, async (name) => {
       :current="coverPick?.current || ''"
       @saved="onCoverSaved"
     />
+
+    <!-- 单卡 ban 确认(2026-10-23): 「不再提示」勾上后, 以后点 ban 直接隐藏 -->
+    <TvModal
+      :model-value="!!banTarget"
+      title="屏蔽角色"
+      size="sm"
+      @update:model-value="(v) => { if (!v) banTarget = null }"
+    >
+      <div class="ban-modal">
+        <p class="ban-ask">确定要屏蔽 <b>{{ banDisplayName }}</b> 吗？</p>
+        <p class="ban-hint">屏蔽后这个角色不会再出现在系列 / 角色列表里；随时可以在 分类管理 → 屏蔽角色 中恢复。</p>
+        <label class="ban-skip">
+          <input v-model="banNoAsk" type="checkbox">
+          以后不再提示（点 ban 直接屏蔽）
+        </label>
+      </div>
+      <template #footer>
+        <TvButton size="sm" variant="secondary" @click="banTarget = null">取消</TvButton>
+        <TvButton size="sm" variant="danger" @click="doBan(banTarget)">确认屏蔽</TvButton>
+      </template>
+    </TvModal>
   </div>
 </template>
 
@@ -977,4 +1087,15 @@ watch(() => route.query.series, async (name) => {
   gap: 10px;
   align-content: start;
 }
+
+/* ban 确认弹窗(2026-10-23) */
+.ban-modal { display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.65; }
+.ban-ask { margin: 0; }
+.ban-ask b { color: var(--text); }
+.ban-hint { margin: 0; color: var(--muted); font-size: 12px; }
+.ban-skip {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 2px; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none;
+}
+.ban-skip input { accent-color: var(--accent); cursor: pointer; }
 </style>

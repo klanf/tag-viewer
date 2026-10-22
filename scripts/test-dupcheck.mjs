@@ -161,6 +161,54 @@ ok('干净图 unsafe=0', () => {
   assert.ok(g.items.every((it) => it.unsafe === 0))
 })
 
+console.log('⑥b 已忽略组还原: 只存 id 对, 也能还原成可展示的组(2026-10-23)')
+{
+  const ids = ['a.png', 'b.png', 'c.png'].map((n) => idOfName[n])
+  const pairs = new Set()
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      pairs.add([ids[i], ids[j]].sort((x, y) => x - y).join('|'))
+    }
+  }
+  let ig = dupcheck.findIgnoredGroups(pairs)
+  ok('三张图的两个忽略对并成一组', () => {
+    assert.equal(ig.groups.length, 1)
+    assert.deepEqual(
+      ig.groups[0].items.map((it) => path.basename(it.path)).sort(),
+      ['a.png', 'b.png', 'c.png'],
+    )
+  })
+  ok('还原的组带 unsafe / folder / 公共标签(安全模式与排序复用)', () => {
+    const g = ig.groups[0]
+    assert.ok(g.ignored === true)
+    assert.ok(g.items.every((it) => typeof it.unsafe === 'number'))
+    assert.ok(g.items.every((it) => typeof it.folder === 'string'))
+    assert.ok(g.shared.includes(KA), g.shared.join(','))
+  })
+  ok('保留建议 = 分辨率最大, 且组内按分辨率排序', () => {
+    const g = ig.groups[0]
+    assert.equal(path.basename(g.items[0].path), 'a.png')
+    assert.equal(g.items[0].best, true)
+    assert.ok(g.items.slice(1).every((it) => !it.best))
+  })
+  ok('pairs / missingPairs 口径正确(对不上现存图的旧对计入 missing)', () => {
+    assert.equal(ig.pairs, 3)
+    assert.equal(ig.missingPairs, 0)
+    ig = dupcheck.findIgnoredGroups(new Set([...pairs, '999999|1000000']))
+    assert.equal(ig.pairs, 4)
+    assert.equal(ig.missingPairs, 1)
+    assert.equal(ig.groups.length, 1)
+  })
+  const dupignore = await load('electron/core/dupignore.js')
+  dupignore.addIgnorePairs([...pairs])
+  ok('忽略对落盘可回读', () => assert.equal(dupignore.loadIgnorePairs().size, 3))
+  ok('恢复一组 = 只删这组内的对(按 id 集合)', () => {
+    assert.equal(dupignore.removeIgnorePairsByIds([ids[0], ids[1]]), 1)
+    assert.equal(dupignore.loadIgnorePairs().size, 2)
+  })
+  dupignore.clearIgnorePairs()
+}
+
 console.log('⑦ 空库/无候选安全')
 ok('全新空库不炸', () => {
   store.closeDb()   // 库句柄是单例, 先关再换 workspace 才真的指向新目录

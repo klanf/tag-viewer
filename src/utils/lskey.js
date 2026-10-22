@@ -59,6 +59,8 @@ export const LS = Object.freeze({
   tagsHideBanned: { key: 'tv_tags_hide_banned' },
   /** 系列页「显示无本地图的角色」开关(2026-10-06) —— 默认隐藏('0'), 开('1')才显示 0 图角色 */
   seriesShowZero: { key: 'tv_series_show_zero' },
+  /** 角色卡 ban 确认弹窗「以后不再提示」(2026-10-23) —— '1' = 点了直接屏蔽 */
+  charBanSkip: { key: 'tv_char_ban_skip' },
   /** 收藏的标签(2026-10-08) —— JSON 字符串数组, 光箱 pill ★ / 标签页开关共用 */
   tagFavs: { key: 'tv_tag_favs' },
   /** 标签页「只看收藏」开关(2026-10-08) —— 默认关('0') */
@@ -80,6 +82,8 @@ export const LS = Object.freeze({
   lbCopyFilters: { key: 'tv_lb_copy_filters' },
   /** 图片网格缩放(2026-10-20 Ctrl+滚轮) —— 行高基准的倍率(0.45~2.25), 网格四个页面共用 */
   gridZoom: { key: 'tv_grid_zoom' },
+  /** 批量拉封面「只要单人图(solo)」开关(2026-10-22) —— 默认开('1'), 用户关掉('0')才记住 */
+  coverSolo: { key: 'tv_cover_solo' },
   /** 标签页来源筛选(2026-10-21) —— 逗号分隔来源名, 空 = 全部。标签图片页共用同一份 */
   tagsSources: { key: 'tv_tags_sources' },
   /** 标签页扫描文件夹筛选(2026-10-21) —— 逗号分隔文件夹路径, 空 = 不按扫描夹筛。标签图片页共用 */

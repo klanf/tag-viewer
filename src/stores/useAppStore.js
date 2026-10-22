@@ -433,13 +433,19 @@ export const useAppStore = defineStore('app', () => {
    * 批量自动拉封面(2026-10-22): 主进程后台任务, 启动即返回, 之后全靠
    * covers:auto:progress 推送更新状态 —— 所以发起的页面切走/关掉都不影响。
    * targets: [{kind:'chars'|'series', key, label}]
+   *
+   * **跑着的时候也能调**: 主进程会把它排进当前这批的队列(见 coverfetch.js),
+   * 回包带 queued 条数。所以这里不能再拦 `running` —— 拦了就等于"切个系列
+   * 就加不进来了"(用户 2026-10-22 的原话)。
    */
   async function autoCoverRun(targets, opts = {}) {
-    if (autoCover.value?.running) return { error: '已经有一批在跑了' }
     if (!targets?.length) return { error: '没有要处理的角色' }
-    // 先本地点亮: 第一个推送到达前那 1~2 秒界面也得有反应(与 ingestRun 同一个理由)
-    autoCover.value = { running: true, total: targets.length, done: 0, ok: 0, failed: 0, skipped: 0, current: '准备中 ...', errors: [] }
-    return api.coversAutoRun({
+    const wasRunning = !!autoCover.value?.running
+    // 只有开新一批才本地点亮: 追加时已有真实进度, 覆盖成 done=0 会闪一下
+    if (!wasRunning) {
+      autoCover.value = { running: true, total: targets.length, done: 0, ok: 0, failed: 0, skipped: 0, queued: targets.length, current: '准备中 ...', errors: [] }
+    }
+    const r = await api.coversAutoRun({
       targets,
       source: opts.source || 'danbooru',
       rating: opts.rating || 'g',
@@ -447,6 +453,13 @@ export const useAppStore = defineStore('app', () => {
       solo: !!opts.solo,
       skipCustom: opts.skipCustom !== false,
     })
+    if (r?.error) {
+      if (!wasRunning) autoCover.value = { ...(autoCover.value || {}), running: false, current: '' }
+      return r
+    }
+    // 回包本身就是最新快照(含 total/queued): 先落上, 后续推送继续覆盖
+    if (r && typeof r.total === 'number') autoCover.value = r
+    return r
   }
 
   async function autoCoverCancel() {

@@ -61,18 +61,37 @@ const busy = ref(false)
 /** 有没有"当前范围"这个概念 —— 决定 title 怎么写, 也决定数字从哪来 */
 const hasScope = computed(() => !!props.counts && typeof props.counts.core === 'number')
 
-/** 当前档位下、当前范围里会隐藏的张数 */
-const shown = computed(() => {
+/** 当前档位下、当前范围里**会隐藏**的张数 */
+const isUnsafe = computed(() => safety.mode === 'unsafe')
+const modeName = computed(() => (isUnsafe.value ? '不安全模式' : '安全模式'))
+/** 当前范围里命中敏感标签的张数(两档按 level 取) */
+const scopedSensitive = computed(() => {
   const c = props.counts
   if (hasScope.value) return (safety.level === 'edge' ? c.edge : c.core) || 0
-  return safety.hiddenCount
+  return safety.sensitiveCount
+})
+const scopedTotal = computed(() => {
+  const c = props.counts
+  if (hasScope.value && typeof c.total === 'number') return c.total
+  return safety.total
+})
+const shown = computed(() => {
+  if (!isUnsafe.value) return scopedSensitive.value
+  return Math.max(0, scopedTotal.value - scopedSensitive.value)
 })
 
 const scopeTip = computed(() => (hasScope.value ? '当前列表' : '整个库'))
 
-const cntTip = computed(() => (safety.on
-  ? `${scopeTip.value}里已隐藏 ${nfmt(shown.value)} 张(${safety.level} 档)`
-  : `${scopeTip.value}里有 ${nfmt(shown.value)} 张命中「${safety.level}」档 · 打开后被隐藏`))
+const cntTip = computed(() => {
+  if (isUnsafe.value) {
+    return safety.on
+      ? `${scopeTip.value}里已隐藏 ${nfmt(shown.value)} 张 · 只留命中「${safety.level}」档的 ${nfmt(scopedSensitive.value)} 张`
+      : `${scopeTip.value}里有 ${nfmt(scopedSensitive.value)} 张命中「${safety.level}」档 · 打开不安全模式后只显示这些, 隐藏其余 ${nfmt(shown.value)} 张`
+  }
+  return safety.on
+    ? `${scopeTip.value}里已隐藏 ${nfmt(shown.value)} 张(${safety.level} 档)`
+    : `${scopeTip.value}里有 ${nfmt(shown.value)} 张命中「${safety.level}」档 · 打开后被隐藏`
+})
 
 async function toggle() {
   busy.value = true
@@ -81,11 +100,17 @@ async function toggle() {
     await safety.set({ on: next })
     if (next) {
       const n = shown.value
-      ui.toast(n
-        ? `🛡 安全模式已开 · ${scopeTip.value}隐藏 ${nfmt(n)} 张(${safety.level} 档)`
-        : '🛡 安全模式已开(当前范围没命中任何图)', 'ok', 2600)
+      if (isUnsafe.value) {
+        ui.toast(n
+          ? `🙈 不安全模式已开 · ${scopeTip.value}只留 ${nfmt(scopedSensitive.value)} 张敏感图, 隐藏 ${nfmt(n)} 张`
+          : `🙈 不安全模式已开(当前范围没有可显示的敏感图)`, 'ok', 2800)
+      } else {
+        ui.toast(n
+          ? `🛡 安全模式已开 · ${scopeTip.value}隐藏 ${nfmt(n)} 张(${safety.level} 档)`
+          : '🛡 安全模式已开(当前范围没命中任何图)', 'ok', 2600)
+      }
     } else {
-      ui.toast('安全模式已关 · 全部图片回来了', 'info', 1800)
+      ui.toast(`${modeName.value}已关 · 全部图片回来了`, 'info', 1800)
     }
   } catch (e) {
     ui.err('切换安全模式失败: ' + e.message)
@@ -100,17 +125,19 @@ async function toggle() {
     <button
       class="st-btn"
       :title="safety.on
-        ? `安全模式已开(${safety.level} 档) · 点一下关掉, 全部图片立刻回来`
-        : '安全模式: 打开后按标签集合隐藏露骨内容(只影响显示, 不动库里的数据)'"
+        ? `${modeName}已开(${safety.level} 档) · 点一下关掉, 全部图片立刻回来`
+        : (isUnsafe
+          ? '不安全模式: 只显示命中敏感标签的图(安全模式的取反) —— 只影响显示, 不动库里的数据'
+          : '安全模式: 打开后按标签集合隐藏露骨内容(只影响显示, 不动库里的数据)')"
       :disabled="busy"
       @click="toggle"
     >
-      <span class="st-ico">🛡</span>
-      <span v-if="!iconOnly">安全{{ safety.on ? '已开' : '模式' }}</span>
+      <span class="st-ico">{{ isUnsafe ? '🙈' : '🛡' }}</span>
+      <span v-if="!iconOnly">{{ isUnsafe ? (safety.on ? '仅敏感' : '不安全模式') : `安全${safety.on ? '已开' : '模式'}` }}</span>
     </button>
     <button
       class="st-set"
-      title="安全模式设置: 档位与敏感标签集合"
+      title="安全模式设置: 显示方式 / 档位 / 敏感标签集合"
       @click="showSet = true"
     >⚙</button>
     <!-- 关着也显示(淡色) = "打开会隐藏这么多"的预览 —— 见文件头第 3 条 -->

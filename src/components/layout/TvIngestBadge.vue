@@ -2,26 +2,32 @@
 /**
  * 后台任务提示 —— 右下角小胶囊
  * =============================
- * 目前有两个后台任务共用这根胶囊(谁在跑显示谁, 都不在跑显示最近结束的那个):
+ * 目前有三个后台任务共用这根胶囊(谁在跑显示谁, 都不在跑显示最近结束的那个):
  *   · 增量同步 —— 磁盘与 tags.db 对齐(见 electron/core/ingest.js)
  *   · WD14 反推 —— 消费 tag_queue, 给裸图打标签(见 electron/core/tagger.js)
+ *   · 在线封面 —— 批量给角色/系列拉封面(见 electron/core/coverfetch.js)
  *
- * 为什么必须让用户看得见: 这两个过程都会在**启动后自动**跑, 首轮分别是
+ * 为什么必须让用户看得见: 前两个过程都会在**启动后自动**跑, 首轮分别是
  * "枚举几万个文件" 与 "加载 1.27GB 模型再逐张推理"。如果界面上什么都不发生,
  * 会被当成卡死 —— 与当初「双击没反应」是同一类体验问题。
+ * 第三个是用户手动发起、动辄几十分钟的联网任务, 原先**只有角色页顶部那一行**能看,
+ * 切到别的页就彻底失联(任务照跑, 用户看不见) —— 2026-10-22 用户问"拉图片没有进度 UI 吗"
+ * 就是这个。挂到这里来, 任何页面都能看见跑到第几个、以及跑完的摘要。
  *
- * 为什么不做成弹窗/遮罩: 两者都不阻塞使用, 用户完全可以边看边等。
+ * 为什么不做成弹窗/遮罩: 三者都不阻塞使用, 用户完全可以边看边等。
  * 所以只占右下角一根胶囊, 跑完显示几秒摘要就自己消失。
  *
  * 位置刻意放在浮动导航(bottom 26 / z-index 220)之上, 两者不重叠。
  */
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/useAppStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { nfmt } from '@/utils/format.js'
 import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 
 const app = useAppStore()
+const router = useRouter()
 
 /** 完成/失败后的摘要保留时长: 太短看不清数字, 太长挡视线 */
 const LINGER_MS = 6000
@@ -38,19 +44,46 @@ const dismissed = ref(false)
 let timer = null
 
 /**
+ * 把在线封面那套状态(running/finished/cancelled 三个布尔)翻译成胶囊本来就认的
+ * phase 模型, 这样进度条、⏹、摘要滞留、出错不自动消失这些机制全都白拿, 不用另写一套。
+ * finishedAt 是"这轮什么时候结束的"(coverfetch.js 里加的这个字段) —— 三个任务都没在跑时
+ * 靠它挑出结束最晚的那个。
+ */
+const cover = computed(() => {
+  const a = app.autoCover
+  if (!a) return null
+  const allFailed = !!a.finished && Number(a.failed) > 0 && !Number(a.ok)
+  return {
+    ...a,
+    phase: a.running ? 'running' : a.finished ? (allFailed ? 'error' : 'done') : 'idle',
+    lastRunAt: Number(a.finishedAt) || 0,
+    note: a.errors?.length ? `${a.errors[0]}${a.errors.length > 1 ? `（共 ${a.errors.length} 条失败）` : ''}` : '',
+  }
+})
+
+/**
  * 选一个要展示的任务。
  * 优先"正在跑的"; 都结束了就选**结束时间更晚**的那个 —— 否则同步先跑完、
  * 反推还在跑的时候, 胶囊会错误地停在同步的摘要上。
+ *
+ * 在线封面排最前: 它是用户**主动点下来**的、要等几十分钟的事;
+ * 开机自动跑的同步/反推这时候多半也在跑, 但"我刚点的那批到哪了"才是他此刻想知道的。
  */
 const task = computed(() => {
   const ig = app.ingest
   const tg = app.tagger
+  const cv = cover.value
   const rIg = !!ig && RUNNING_PHASES.has(ig.phase)
   const rTg = !!tg && RUNNING_PHASES.has(tg.phase)
+  const rCv = !!cv && cv.phase === 'running'
+  if (rCv) return { kind: 'cover', s: cv }
   if (rTg) return { kind: 'tag', s: tg }
   if (rIg) return { kind: 'sync', s: ig }
-  const a = ig ? Number(ig.lastRunAt) || 0 : -1
-  const b = tg ? Number(tg.lastRunAt) || 0 : -1
+  const endOf = (x) => (x ? Number(x.lastRunAt) || 0 : -1)
+  const a = endOf(ig)
+  const b = endOf(tg)
+  const c = endOf(cv)
+  if (c >= a && c >= b && cv) return { kind: 'cover', s: cv }
   if (b > a) return { kind: 'tag', s: tg }
   if (ig) return { kind: 'sync', s: ig }
   return { kind: 'tag', s: tg }
@@ -59,6 +92,7 @@ const task = computed(() => {
 const kind = computed(() => task.value.kind)
 const s = computed(() => task.value.s || {})
 const isTag = computed(() => kind.value === 'tag')
+const isCover = computed(() => kind.value === 'cover')
 const running = computed(() => RUNNING_PHASES.has(s.value.phase))
 const failed = computed(() => s.value.phase === 'error')
 /** 反推特有的"没坏, 只是这条路走不通" —— 缺 python / 模型时是它 */
@@ -77,7 +111,10 @@ const TAG_PHASE_TEXT = {
   infer: '正在反推标签',
   'rebuild-tags': '正在重建标签字典',
 }
-const title = computed(() => (isTag.value ? TAG_PHASE_TEXT : SYNC_PHASE_TEXT)[s.value.phase] || (isTag.value ? '反推' : '同步'))
+const title = computed(() => {
+  if (isCover.value) return '正在拉在线封面'
+  return (isTag.value ? TAG_PHASE_TEXT : SYNC_PHASE_TEXT)[s.value.phase] || (isTag.value ? '反推' : '同步')
+})
 
 /** 当前阶段的百分比。没有 total 时退化成"第 n / m 个目录"(同步)或不定进度(反推探活) */
 const pct = computed(() => {
@@ -137,6 +174,15 @@ async function runNow() {
   } catch { /* 失败时主进程会推 error 状态 */ }
 }
 
+/** 在线封面不能像同步/反推那样"就地再跑一次" —— 拉哪些角色是范围/图源/分级三个选择定下来的,
+ *  在胶囊里默默用上一轮的口径重跑反而吓人。所以这句只把人带回角色页。 */
+function goSeries() {
+  show.value = false
+  linger.value = false
+  dismissed.value = true
+  router.push('/series')
+}
+
 /**
  * 停止本次任务(2026-10-16): 后端早就有了 pauseTagger / pauseIngest —— 循环每处理
  * 一张就检查标志位, 置位后处理完当前这张就收工, **剩余留在队列里**, 下次点
@@ -148,7 +194,9 @@ async function stopNow() {
   if (stopping.value) return
   stopping.value = true
   try {
-    const r = isTag.value ? await app.taggerPause() : await app.ingestPause()
+    const r = isCover.value
+      ? await app.autoCoverCancel()
+      : isTag.value ? await app.taggerPause() : await app.ingestPause()
     if (r && r.ok === false) useUiStore().warn(r.error || '没有正在跑的任务')
   } catch { /* 主进程会推状态 */ } finally {
     stopping.value = false
@@ -172,25 +220,36 @@ onBeforeUnmount(clearTimer)
             v-if="running"
             class="x stop"
             :disabled="stopping"
-            :title="`停止本次${isTag ? '反推' : '同步'}(已处理的会保留, 剩下的留在队列里下次接着跑)`"
+            :title="isCover ? '停止本次拉取(已拉好的会保留, 剩下的下次从断点接着拉)' : `停止本次${isTag ? '反推' : '同步'}(已处理的会保留, 剩下的留在队列里下次接着跑)`"
             @click="stopNow"
           >⏹</button>
           <button class="x" title="收起(任务会继续)" @click="close">✕</button>
         </div>
         <div class="bar"><i :style="{ width: pct + '%' }" /></div>
         <div class="note">
-          {{ s.folder || '' }}<template v-if="!isTag && !s.folder && s.total"> · {{ nfmt(s.done) }}/{{ nfmt(s.total) }}</template>
+          {{ isCover ? (s.current || '准备中 ...') : (s.folder || '') }}<template v-if="!isTag && !isCover && !s.folder && s.total"> · {{ nfmt(s.done) }}/{{ nfmt(s.total) }}</template><template v-if="isCover"> · 成功 {{ nfmt(s.ok) }} / 跳过 {{ nfmt(s.skipped) }} / 失败 {{ nfmt(s.failed) }}</template>
         </div>
       </template>
 
       <!-- 完成/失败: 摘要 -->
       <template v-else>
         <div class="row">
-          <b v-if="failed" class="bad">{{ isTag ? '❌ 反推失败' : '❌ 同步失败' }}</b>
+          <b v-if="failed" class="bad">{{ isCover ? '❌ 在线封面全批失败' : isTag ? '❌ 反推失败' : '❌ 同步失败' }}</b>
           <b v-else-if="degraded" class="warn">⚠️ 反推已跳过</b>
+          <b v-else-if="isCover" class="good">{{ s.cancelled ? '⏹ 在线封面已停止' : '✅ 在线封面完成' }}</b>
           <b v-else class="good">{{ isTag ? '✅ 反推完成' : '✅ 同步完成' }}</b>
           <button class="x" @click="close">✕</button>
         </div>
+
+        <!-- 在线封面的摘要: 三个数就是这轮的结果, 失败时把第一条原因贴出来 -->
+        <template v-if="isCover && !failed">
+          <div class="note">
+            共 <b>{{ nfmt(s.total) }}</b> 个 · 成功 <b>{{ nfmt(s.ok) }}</b>
+            <template v-if="s.skipped"> · 跳过 <b>{{ nfmt(s.skipped) }}</b></template>
+            <template v-if="s.failed"> · 失败 <b>{{ nfmt(s.failed) }}</b></template>
+          </div>
+          <div v-if="s.note" class="note wrap">{{ s.note }}</div>
+        </template>
 
         <!-- 降级: 不是错误, 只是这台机器上没条件反推 -->
         <template v-if="degraded">
@@ -225,7 +284,8 @@ onBeforeUnmount(clearTimer)
         </template>
 
         <div class="note dim">
-          <a href="#" @click.prevent="runNow">{{ isTag ? '再反推一次' : '再同步一次' }}</a>
+          <a v-if="isCover" href="#" @click.prevent="goSeries">去角色页看结果 / 接着拉 →</a>
+          <a v-else href="#" @click.prevent="runNow">{{ isTag ? '再反推一次' : '再同步一次' }}</a>
         </div>
       </template>
     </div>

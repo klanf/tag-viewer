@@ -71,9 +71,11 @@ export function unsafeOfTags(tags, matcher) {
  * 刻意收一个 `unsafeOf` 取值函数而不是直接读 `item.unsafe`：库内记录是数值直读，
  * 库外图（扫描页 / 收藏快照）得按标签现算 —— 两种取值方式共用这一份计数逻辑。
  *
+ * `total` 不是命中数, 是给「不安全模式」算补集用的: 该模式隐藏 = total - 敏感数。
+ *
  * @param {Array} list
  * @param {(item:any)=>number} unsafeOf 取一张图的敏感级别 0/1/2
- * @returns {{core:number, edge:number}}
+ * @returns {{core:number, edge:number, total:number}}
  */
 export function countHits(list, unsafeOf) {
   const arr = Array.isArray(list) ? list : []
@@ -84,5 +86,5 @@ export function countHits(list, unsafeOf) {
     if (u === 1) core++
     else if (u === 2) edge++
   }
-  return { core, edge: core + edge }
+  return { core, edge: core + edge, total: arr.length }
 }

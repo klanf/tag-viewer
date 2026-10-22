@@ -19,10 +19,17 @@ export const usePrefsStore = defineStore('prefs', () => {
    * 这些角色可以入购物车但没有图可看; 默认关是为了列表干净、口径与旧版一致。
    */
   const seriesShowZero = ref(readLS(LS.seriesShowZero.key) === '1')
+  /**
+   * 批量拉封面「只要单人图(solo)」(2026-10-22) —— 默认**开**。
+   * 群像/对打图当角色封面经常认不出是谁, 用户点名要默认带上; 关掉的选择也记住,
+   * 下次不会又自己打开。
+   */
+  const coverSolo = ref(readLS(LS.coverSolo.key) !== '0')
 
   watch(bgAuto, (v) => writeLS(LS.bgAuto.key, v ? '1' : '0'))
   watch(trashAsk, (v) => writeLS(LS.trashAsk.key, v ? '1' : '0'))
   watch(seriesShowZero, (v) => writeLS(LS.seriesShowZero.key, v ? '1' : '0'))
+  watch(coverSolo, (v) => writeLS(LS.coverSolo.key, v ? '1' : '0'))
 
   /**
    * 光箱「复制标签」的过滤配置(2026-10-19) —— JSON 存 localStorage, 读时过白名单。
@@ -96,7 +103,7 @@ export const usePrefsStore = defineStore('prefs', () => {
   }
 
   return {
-    bgAuto, gridPageSize, trashAsk, maybeAddBg, seriesShowZero, lbCopyFilters,
+    bgAuto, gridPageSize, trashAsk, maybeAddBg, seriesShowZero, lbCopyFilters, coverSolo,
     sortHome, sortScan, sortSeries, sortTagImgs, sortSeriesChars, seriesImgPageSize,
   }
 })
