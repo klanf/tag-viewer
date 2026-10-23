@@ -19,6 +19,7 @@ import { useCartStore } from '@/stores/useCartStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useRoute, useRouter } from 'vue-router'
 import { runFloatBack } from '@/composables/useFloatBack.js'
+import { usePathStore } from '@/stores/usePathStore.js'
 import { nfmt } from '@/utils/format.js'
 import { api } from '@/utils/api.js'
 import { openAppSettings } from '@/composables/useAppSettings.js'
@@ -45,6 +46,14 @@ onMounted(() => {
   window.addEventListener('popstate', refreshBack)
 })
 onBeforeUnmount(() => window.removeEventListener('popstate', refreshBack))
+
+/* 有路径栏的页面, 返回箭头只在路径最左边 —— 顶栏这颗就不出现(两个箭头会打架)。
+ * 顶栏自己的一级页(看板/系列/标签/扫描/收藏/购物车)也是根页面: 没有"上一级",
+ * 一律不出现箭头。详细/命中页等没有路径栏的次级页仍由这里兜底。 */
+const path = usePathStore()
+const ROOT_NAV = new Set(['home', 'series', 'tags', 'scan', 'favs', 'cart'])
+const hasPathBar = computed(() => path.has(route.name))
+const showHeaderBack = computed(() => !hasPathBar.value && !ROOT_NAV.has(route.name))
 
 /* 2026-10-04: 「来源」曾在这里占一格, 用户反馈不常用(要改开关/追平时才进),
  * 已挪到**扫描页标题旁**的按钮 —— 那两处本来就是同一类操作(管目录),
@@ -102,6 +111,7 @@ async function openDataDir() {
   <header class="hdr">
     <!-- 左上角返回(2026-10-23): 换掉原来右下角的浮动 ←; 不可返回时只隐藏、仍占位 -->
     <button
+      v-if="showHeaderBack"
       class="back-btn"
       :class="{ hidden: !canBack }"
       :disabled="!canBack"

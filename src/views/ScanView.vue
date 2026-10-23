@@ -40,7 +40,9 @@ import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import TvZoomBadge from '@/components/base/TvZoomBadge.vue'
 import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
-import { useFloatBack } from '@/composables/useFloatBack.js'
+import TagImagesPanel from '@/components/tag/TagImagesPanel.vue'
+import { usePagePath } from '@/composables/usePagePath.js'
+import { useTagHost } from '@/composables/useTagHost.js'
 import { api, onPush } from '@/utils/api.js'
 import { nfmt } from '@/utils/format.js'
 import { LS } from '@/utils/lskey.js'
@@ -67,6 +69,58 @@ const taggerMissingText = computed(() => (app.tagger?.config?.missing || []).joi
 
 /* ---------------- 一级: 文件夹库 ---------------- */
 const level = ref('list')            // list | folder
+
+/* 来源内 tag 页(2026-10-23): 文件夹里的大图点标签 = 就地翻到「扫描 > 文件夹 > 标签」,
+ * 标签页光箱里再点标签可以继续往下叠(扫描 > 文件夹 > A > B)。
+ * 每层记下 from(开这一层时的光箱 + 翻页列表): 返回箭头退一层并把光箱原样拉回来;
+ * 点文件夹 crumb / 回扫描列表是直接跳过去, 不恢复光箱。 */
+let tagSeq = 0
+const tagLevels = ref([])          // [{ id, tag, from: { imgPath, list } | null }]
+const curTag = computed(() => tagLevels.value[tagLevels.value.length - 1]?.tag || '')
+const topLevel = computed(() => tagLevels.value[tagLevels.value.length - 1] || null)
+
+function openTagPage(tag) {
+  if (!tag) return
+  tagLevels.value.push({
+    id: ++tagSeq,
+    tag: String(tag),
+    /* 光箱此刻还开着(gotoTag 先调宿主再 close): 记下这一层返回时要恢复的图和翻页列表 */
+    from: lb.path ? { imgPath: lb.path, list: lb.list.length > 1 ? [...lb.list] : null } : null,
+  })
+}
+function restoreFrom(lv) {
+  const f = lv?.from
+  if (!f?.imgPath) return
+  /* 等 tag 页收起、文件夹图集渲染回来再开, 不然光箱会被同一帧的渲染盖住 */
+  nextTick(() => lb.open(f.imgPath, { list: f.list || [f.imgPath] }))
+}
+/** 返回箭头: 退一层并恢复开那一层时的光箱 */
+function backFromTagPage() {
+  restoreFrom(tagLevels.value.pop())
+}
+/** 点祖先 tag crumb: 直接回到那一层, 不恢复光箱 */
+function goTagLevel(i) {
+  if (i < 0 || i >= tagLevels.value.length - 1) return
+  tagLevels.value.splice(i + 1)
+}
+/** 回文件夹图集: 整栈清空, 并恢复第一层打开时的光箱(与点文件夹 crumb 的老行为一致) */
+function backToRootPage() {
+  const first = tagLevels.value[0]
+  tagLevels.value = []
+  restoreFrom(first)
+}
+/** 回扫描列表: 整栈清空, 不恢复光箱 */
+function clearTagPages() {
+  tagLevels.value = []
+}
+useTagHost('scan', openTagPage)
+function onTagRenamedInPage(t) {
+  if (topLevel.value) topLevel.value.tag = String(t)
+}
+/** 当前层被删: 只收起这一层, 不恢复光箱 */
+function onTagDeletedInPage() {
+  tagLevels.value.pop()
+}
 const folders = ref([])
 const loadingList = ref(false)
 const listError = ref('')
@@ -749,19 +803,8 @@ function onLbClosed(e) {
   expandPageForPath(e.detail?.path)
 }
 
-/* 二级(图片网格)是组件内部状态, 路由回退感知不到 ——
-   浮动导航的「返回」在这里优先回到文件夹列表。
-   必须先判"当前就在扫描页": 本视图在 keep-alive 白名单里, 处理器在切走之后
-   还留在栈上(useFloatBack 只在真正卸载时注销), 不判的话在**别的页面**按返回
-   会被它抢走 —— 表现为"在首页按返回, 结果扫描页的层级被清了一层"。 */
-useFloatBack(() => {
-  if (route.name !== 'scan') return false
-  if (level.value !== 'folder') return false
-  // 正在筛选时, 第一次按返回只清筛选(网格恢复全量), 再按一次才回文件夹列表
-  if (filterKw.value) { filterKw.value = ''; return true }
-  backToList()
-  return true
-})
+/* 二级(图片网格)是组件内部状态, 层级返回现在由全局路径栏的箭头接管
+   (扫描 > 文件夹 > 标签); 筛选是页面内子状态, 用工具栏上的「✕ 清除」。 */
 
 /* 元数据解析进度: worker 在主进程之外解析, 进度推到渲染端画进度条。
    只在二级(文件夹内容)接收 —— 一级页的「添加文件夹」已有逐个文字进度。 */
@@ -858,15 +901,39 @@ onActivated(() => {
   loadFolders()
   if (level.value === 'list') kickStatsRefresh()
 })
+
+/** tag 栈的一串 crumb: 祖先层点了直接跳回那层(不恢复光箱), 栈顶挂复制按钮 */
+function tagCrumbs(stack) {
+  return stack.map((lv, i) => (i === stack.length - 1
+    ? { label: lv.tag, copy: lv.tag, copyLabel: '标签名' }
+    : { label: lv.tag, onClick: () => goTagLevel(i), back: backFromTagPage }))
+}
+
+/* 路径栏: 扫描 > 文件夹 > 标签…(标签页是就地翻开的, 关掉仍在原文件夹) */
+usePagePath('scan', computed(() => {
+  const stack = tagLevels.value
+  const crumbs = [{
+    label: '扫描',
+    onClick: () => { clearTagPages(); backToList() },
+    back: stack.length ? backFromTagPage : undefined,
+  }]
+  if (level.value !== 'folder' || !cur.value) return [...crumbs, ...tagCrumbs(stack)]
+  crumbs.push({
+    label: cur.value.name || cur.value.path,
+    onClick: () => { if (stack.length) backToRootPage() },
+    back: stack.length ? backFromTagPage : backToList,
+  })
+  return [...crumbs, ...tagCrumbs(stack)]
+}))
 </script>
 
 <template>
-  <div class="scan-view" :class="{ 'pick-on': selectMode }">
+  <div class="scan-view" :class="{ 'pick-on': selectMode, 'tag-mode': tagLevels.length }">
     <!-- 来源管理的入口(2026-10-04 从顶栏挪来; 2026-10-16 改为只在一级列表页显示:
          原先绝对定位右上角, 和二级文件夹详情的「← 返回」按钮重叠(用户截图反馈)。
          二级视图里改并入头部按钮行, 见下面 head 里的那份)。 -->
     <RouterLink
-      v-if="level === 'list'"
+      v-if="!tagLevels.length && level === 'list'"
       to="/sources"
       class="to-sources"
       data-test="goto-sources"
@@ -874,7 +941,7 @@ onActivated(() => {
     >🗄️ 来源管理</RouterLink>
 
     <!-- ==================== 一级: 文件夹库 ==================== -->
-    <template v-if="level === 'list'">
+    <template v-if="!tagLevels.length && level === 'list'">
       <div class="panel bar-panel">
         <h2>📂 扫描文件夹</h2>
         <div class="tip">
@@ -979,14 +1046,9 @@ onActivated(() => {
     </template>
 
     <!-- ==================== 二级: 文件夹里的图片 ==================== -->
-    <template v-else>
+    <template v-else-if="!tagLevels.length">
       <div class="panel bar-panel">
         <div class="head">
-          <div class="crumb">
-            <span class="link" @click="backToList">全部文件夹</span>
-            <span class="sep">&gt;</span>
-            <span class="now">{{ cur?.name || '' }}</span>
-          </div>
           <span class="spacer" />
           <!-- 这里原来有一颗「☑ 选择」按钮(2026-10-22 第十八轮去掉)。
                去掉的理由不是嫌它占地方, 是它把动线切成三趟: 右上角开模式 → 左边勾图
@@ -1001,7 +1063,6 @@ onActivated(() => {
             data-test="goto-sources-folder"
             title="文件夹登记表: 登记来源/扫描夹、开关用途、追平"
           >🗄️ 来源管理</RouterLink>
-          <TvButton size="sm" variant="secondary" @click="backToList">← 返回</TvButton>
         </div>
 
         <div class="path-line" :title="cur?.path">{{ cur?.path }}</div>
@@ -1198,6 +1259,17 @@ onActivated(() => {
         @pick="doCopy"
       />
     </template>
+
+    <!-- 只渲染栈顶; key 用层 id —— 换一层就是新面板, 不把上一层的批量勾选带过来 -->
+    <TagImagesPanel
+      v-else-if="topLevel"
+      :key="topLevel.id"
+      :tag="curTag"
+      use-source-scan
+      :active="route.name === 'scan'"
+      @renamed="onTagRenamedInPage"
+      @deleted="onTagDeletedInPage"
+    />
   </div>
 </template>
 
@@ -1209,6 +1281,8 @@ onActivated(() => {
   padding: 12px;
   overflow: hidden;
 }
+/* 标签次级页自带内边距; 外层再留 12px 会变成双层白边 */
+.scan-view.tag-mode { padding: 0; gap: 0; }
 .bar-panel { flex: 0 0 auto; padding: 14px; }
 .bar-panel h2 { font-size: 16px; margin-bottom: 6px; }
 .tip { color: var(--muted); font-size: 12px; line-height: 1.7; margin-bottom: 12px; }
@@ -1252,11 +1326,6 @@ onActivated(() => {
   padding: 6px 12px;
 }
 .to-sources-inline:hover { color: var(--accent); border-color: var(--accent); }
-.crumb { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
-.crumb .link { color: var(--accent); cursor: pointer; }
-.crumb .link:hover { text-decoration: underline; }
-.crumb .now { color: var(--text); }
-.crumb .sep { color: var(--faint); }
 .spacer { flex: 1 1 auto; }
 
 .list-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; }

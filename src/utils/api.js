@@ -126,7 +126,7 @@ export const api = {
   // Danbooru API Key: 三个通道都只过「摘要」, 明文密钥留在主进程(见 booru-auth.js)
   booruAuthGet: () => call('booru:auth:get'),
   booruAuthSet: (body) => call('booru:auth:set', body),
-  booruAuthTest: () => call('booru:auth:test'),
+  booruAuthTest: (creds) => call('booru:auth:test', creds),
   // 批量自动拉封面(2026-10-22): run 启动即返回, 进度走 covers:auto:progress 推送
   coversAutoRun: (body) => call('covers:auto:run', body),
   coversAutoState: () => call('covers:auto:state'),
@@ -155,6 +155,8 @@ export const api = {
   dupIgnoreClear: () => call('dup:ignore:clear'),
   dupIgnoreList: () => call('dup:ignore:list'),
   dupIgnoreRemove: (ids) => call('dup:ignore:remove', { ids }),
+  dupIgnoreBlock: (ids) => call('dup:ignore:block', { ids }),
+  dupBlockClear: () => call('dup:block:clear'),
   tagsEditPreview: (body) => call('tags:edit:preview', body),
   tagsEditApply: (body) => call('tags:edit:apply', body),
   tagsForPath: (path) => call('tags:forPath', { path }),

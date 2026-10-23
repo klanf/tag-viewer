@@ -22,7 +22,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { dataFile } from './workspace.js'
-import { danbooruAuthHeader } from './booru-auth.js'
+import { danbooruAuthHeader, authHeaderOf, resolveBooruAuth } from './booru-auth.js'
 
 const UA = 'tag-viewer/1.0 (cover picker)'
 const API_TIMEOUT_MS = 20000
@@ -129,22 +129,39 @@ async function fetchJson(url, tries = 2, extraHeaders = null) {
       if (i + 1 < tries) await sleep(1200)
     }
   }
-  if (!res) return { error: `连不上该站(${lastErr}，已重试 ${tries} 次)。换个源再试：Danbooru 与 Safebooru 通不畅的时候不一样` }
-  if (res.status === 429) return { error: '该站限流中(HTTP 429)，歇一会儿再搜或换个源' }
+  if (!res) return { status: 0, error: `连不上该站(${lastErr}，已重试 ${tries} 次)。换个源再试：Danbooru 与 Safebooru 通不畅的时候不一样` }
+  if (res.status === 429) return { status: 429, error: '该站限流中(HTTP 429)，歇一会儿再搜或换个源' }
   if (res.status === 401) {
     // 带了凭据还被 401 = Key 本身不对, 与"网络不通""匿名被拒"是三回事, 分开说
-    return { error: sentAuth
+    return { status: 401, error: sentAuth
       ? '用户名与 API Key 不匹配(HTTP 401)：确认是 Danbooru 本人账号的 Key、复制时没带空格'
       : '该站要求提供凭据(HTTP 401)' }
   }
   if (res.status === 403) {
     // 填了 Key 还 403, 十有八九是用户名/密钥不匹配(或复制时带了空格), 说清楚点省得用户去猜网络
-    return { error: sentAuth
+    return { status: 403, error: sentAuth
       ? '该站拒绝了这组凭据(HTTP 403)，检查设置里的用户名与 API Key 是否成对、有没有多复制空格'
       : '该站拒绝匿名访问(HTTP 403)，试试 Safebooru 源' }
   }
-  if (res.status === 404) return { error: '没这个标签(404)' }
-  if (!res.ok) return { error: `HTTP ${res.status}` }
+  if (res.status === 404) return { status: 404, error: '没这个标签(404)' }
+  if (res.status === 422) {
+    /* Danbooru 的 422 不是一个笼统的"参数错": 响应体里明确写了原因
+     * (最常见是匿名超过 2 个普通标签: PostQuery::TagLimitError)。
+     * 2026-10-24 用户真机只看到「HTTP 422」, 没法判断是凭据没生效还是网络改写,
+     * 所以把站方的 message 和 error code 带出来。读 body 失败就退回状态码。 */
+    let detail = ''
+    try {
+      const t = await res.text()
+      try {
+        const j = JSON.parse(t)
+        const msg = String(j?.message || j?.error || '').trim()
+        const code = String(j?.error || '').trim()
+        detail = msg && code && code !== msg ? `${msg}（${code}）` : msg
+      } catch { detail = t.trim().slice(0, 180) }
+    } catch { /* body 读不到就只说状态码 */ }
+    return { status: 422, error: detail ? `HTTP 422：${detail}` : 'HTTP 422（站点拒绝了这个查询，没给原因）' }
+  }
+  if (!res.ok) return { status: res.status, error: `HTTP ${res.status}` }
   /* 读 body 也要包起来(2026-10-22): AbortSignal.timeout 覆盖的是整个请求, 头已经到手、
    * 正文还在慢慢吐的时候到点, 抛的是 res.text() 里的 TimeoutError。原先这一句在 try 外面,
    * 于是**界面拿到的是 IPC 异常**而不是"换个源再试"这句话 —— 表现是点了搜索之后满屏空白、
@@ -154,7 +171,7 @@ async function fetchJson(url, tries = 2, extraHeaders = null) {
     text = await res.text()
   } catch (e) {
     const code = e?.cause?.code || e?.name || ''
-    return { error: `读到一半断了(${/TIMEOUT/i.test(code) ? '超时' : code || '网络错误'})，换个源或稍后再试` }
+    return { status: 0, error: `读到一半断了(${/TIMEOUT/i.test(code) ? '超时' : code || '网络错误'})，换个源或稍后再试` }
   }
   if (!text.trim()) return { posts: [] }          // Safebooru 无结果 = 200 + 空 body
   let json
@@ -196,7 +213,11 @@ export async function booruSearch(raw = {}) {
    *     登录后额度放开, 才能写「角色 + solo + 画师 + rating」这种;
    *   · order=score: **匿名完全无效**(七个取值返回同一批最新图), 登录后才生效,
    *     这时候"人气"是站方排的, 不是我们在几十张里自己比的。 */
-  const authHeader = source === 'danbooru' ? danbooruAuthHeader() : null
+  /* authHeader 显式传 null = 强制匿名(测试连接用); 不传 = 读已保存的凭据。
+   * 显式传入是为了让「测试连接」能测**界面上刚填、还没保存**的那一份 Key。 */
+  const authHeader = source === 'danbooru'
+    ? (raw.authHeader !== undefined ? raw.authHeader : danbooruAuthHeader())
+    : null
   const credentialed = !!authHeader
   const ordinary = tags.filter((t) => !t.includes(':')).length
   const cap = source === 'danbooru' && !credentialed ? 2 : 6
@@ -222,7 +243,7 @@ export async function booruSearch(raw = {}) {
     const over = source === 'danbooru' && !credentialed && ordinary > cap
     return {
       error: over ? `${r.error} —— Danbooru 匿名只允许 ${cap} 个普通标签(这次带了 ${ordinary} 个，rating: 这类不算)，去 设置 → 在线封面 填 API Key 就能放开` : r.error,
-      source, label: cfg.label, credentialed,
+      source, label: cfg.label, credentialed, status: r.status || 0,
     }
   }
 
@@ -242,18 +263,58 @@ export async function booruSearch(raw = {}) {
 }
 
 /**
- * 「测试连接」: 用一条**匿名必定发不出去**的三标签查询来验证凭据真的生效。
- * 光看"有没有填 Key"没用 —— 填错一样 403; 用常见标签搜也不用担心搜不到图。
+ * 「测试连接」(2026-10-22, 2026-10-24 调整)
+ * ==========================================
+ * 三标签查询是「匿名必定发不出去」的探针(匿名上限 2 个普通标签):
+ *   · 200 -> 凭据真的生效;
+ *   · 401 -> Authorization 确实发了, 但用户名/Key 不匹配;
+ *   · 422 -> 站点仍按匿名处理 —— 可能是没带凭据、带了一份站方不认的凭据,
+ *     也可能是换了网络/代理之后 Authorization 头在路上被丢了(2026-10-24 用户真机: 换网络后 422)。
+ * 所以 422 时再用同一条凭据发一个**两标签**查询复核: 能通说明站点确实在做匿名判定,
+ * 也就是这组 Key 没生效, 把网络/Key 两种可能都说清楚, 而不是只丢一个 HTTP 422。
+ *
+ * raw 支持 { login, apiKey }: 测的是界面上当前填的那份(即便还没点保存);
+ * 留空的字段沿用已保存的。没有凭据时只测网络(两标签匿名合法), 不再把匿名当失败。
  */
-export async function booruAuthTest() {
-  const s = await booruSearch({ source: 'danbooru', tags: ['1girl', 'solo', 'long_hair'], rating: 'all', limit: 1 })
-  if (s.error) return { ok: false, error: s.error, credentialed: !!s.credentialed }
+export async function booruAuthTest(raw = {}) {
+  const { login, apiKey } = resolveBooruAuth(raw)
+  const header = authHeaderOf(login, apiKey)
+
+  if (!header) {
+    const anon = await booruSearch({
+      source: 'danbooru', tags: ['1girl', 'solo'], rating: 'all', limit: 1, authHeader: null,
+    })
+    if (anon.error) return { ok: false, error: anon.error, credentialed: false, sentAuth: false, status: anon.status || 0 }
+    return { ok: true, credentialed: false, sentAuth: false, hits: (anon.posts || []).length }
+  }
+
+  const s = await booruSearch({
+    source: 'danbooru', tags: ['1girl', 'solo', 'long_hair'], rating: 'all', limit: 1, authHeader: header,
+  })
+  if (!s.error) {
+    return {
+      ok: true,
+      credentialed: true,
+      sentAuth: true,
+      order: s.order,
+      /** 返回条数 > 0 说明这条三标签查询被站方接受了(匿名会被截成两个标签或 403) */
+      hits: (s.posts || []).length,
+    }
+  }
+  if (s.status === 422) {
+    const probe = await booruSearch({
+      source: 'danbooru', tags: ['1girl', 'solo'], rating: 'all', limit: 1, authHeader: header,
+    })
+    if (!probe.error) {
+      return {
+        ok: false, credentialed: true, sentAuth: true, status: 422,
+        error: `凭据没生效：站点仍按匿名处理（三标签查询被拒）。可能是当前网络/代理把登录信息丢了（刚换过网络尤其常见），或 Key 已失效、用户名与这个 Key 不配对 —— 先点「测试连接」重试一次，仍然这样就去 Danbooru 重新生成一个 Key。站点原话：${s.error}`,
+      }
+    }
+  }
   return {
-    ok: true,
-    credentialed: !!s.credentialed,
-    order: s.order,
-    /** 返回条数 > 0 说明这条三标签查询被站方接受了(匿名会被截成两个标签或 403) */
-    hits: (s.posts || []).length,
+    ok: false, credentialed: true, sentAuth: true,
+    status: s.status || 0, error: s.error,
   }
 }
 

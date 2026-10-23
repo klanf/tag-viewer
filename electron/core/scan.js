@@ -263,9 +263,12 @@ export function scanFolderStats(paths) {
  * contains/any 一致: q 的任一子串出现在任一标签里即命中(q 空 = 全部)。
  * paths 为空 = 全部缓存。父夹/子夹重叠照旧按文件路径去重。
  *
+ * source 是图内元数据来源('comfyui' 等)—— 卡片左上角的生成器徽章用, 与扫描页
+ * 同一字段名(扫描页 items 也叫 source); 缓存里存在 src 上。
+ *
  * @param {string[]} paths 文件夹绝对路径; 空 = 全部缓存
  * @param {string[]} qTags 已小写的搜索词
- * @returns {{path:string, m:number, s:number, tags:string[]}[]}
+ * @returns {{path:string, m:number, s:number, tags:string[], source:string}[]}
  */
 export function collectScanFolderImages(paths, qTags) {
   const P = loadPersist()
@@ -276,7 +279,7 @@ export function collectScanFolderImages(paths, qTags) {
     seen.add(fp)
     const tags = Array.isArray(e?.t) ? e.t : []
     if (qTags.length && !qTags.some((n) => tags.some((t) => String(t).toLowerCase().indexOf(n) >= 0))) return
-    out.push({ path: fp, m: Number(e?.m) || 0, s: Number(e?.s) || 0, tags })
+    out.push({ path: fp, m: Number(e?.m) || 0, s: Number(e?.s) || 0, tags, source: String(e?.src || '') })
   }
   if (Array.isArray(paths) && paths.length) {
     for (const p of paths) for (const [fp, e] of iterEntries(P, p)) add(fp, e)

@@ -11,7 +11,7 @@
  * 标签旁的 ⓘ 气泡(悬停看、点一下钉住), 每一行只留"当前值 + 控件"。
  * 偏好回读复用 app:settings:set 空补丁(白名单无命中 = 等价无操作落盘, 顺带返回 settings)。
  */
-import { ref, reactive, watch, computed } from 'vue'
+import { ref, reactive, watch, computed, nextTick } from 'vue'
 import TvDrawer from '@/components/base/TvDrawer.vue'
 import TvInfoTip from '@/components/base/TvInfoTip.vue'
 import TvButton from '@/components/base/TvButton.vue'
@@ -52,7 +52,23 @@ const authMsgTone = ref('dim')
  * 没有 booru:auth:*, invoke 直接抛「未授权的 channel」—— 那时界面若照样显示"匿名访问",
  * 用户就会以为是自己没填对, 实际是这个应用实例根本没这段代码(2026-10-22 排查用户"保存了还是匿名")。 */
 const authReadErr = ref('')
+/* 已保存的 Key 用掩码展示(2026-10-24 用户反馈: 空输入框 + "留空表示不改动" 有歧义)。
+ * 点「更改」才换成可编辑的密码框; 取消/保存成功后回到掩码。 */
+const keyEditing = ref(false)
+const keyInputEl = ref(null)
+const showKeyMask = computed(() => authState.value.hasKey && !keyEditing.value && !authReadErr.value)
 
+function startEditKey() {
+  auth.apiKey = ''
+  keyEditing.value = true
+  authMsg.value = ''
+  nextTick(() => keyInputEl.value?.focus())
+}
+function cancelEditKey() {
+  auth.apiKey = ''
+  keyEditing.value = false
+  authMsg.value = ''
+}
 /** 能不能保存: 两个都填了, 或者只改用户名但 Key 早就存过(留空=沿用) */
 const authReady = computed(() => {
   const l = auth.login.trim()
@@ -71,6 +87,7 @@ async function loadAuth() {
     authState.value = { login: r?.login || '', hasKey: !!r?.hasKey }
     auth.login = r?.login || ''
     authReadErr.value = ''
+    keyEditing.value = false
   } catch (e) {
     authReadErr.value = e?.message || String(e)
   }
@@ -90,6 +107,7 @@ async function saveAuth() {
     const r = await api.booruAuthSet({ login: auth.login, apiKey: auth.apiKey })
     authState.value = { login: r?.login || '', hasKey: !!r?.hasKey }
     auth.apiKey = ''                      // 存完就清空输入框, 别让明文留在界面上
+    keyEditing.value = false              // 回到「••••」掩码态
     authMsgTone.value = 'ok'
     authMsg.value = r?.hasKey ? '已保存（只存在本机主进程目录）' : '已清除，回到匿名访问'
     return true
@@ -106,6 +124,7 @@ async function clearAuth() {
   try {
     await api.booruAuthSet({ clear: true })
     auth.apiKey = ''
+    keyEditing.value = false
     authState.value = { login: '', hasKey: false }
     auth.login = ''
     authMsgTone.value = 'ok'
@@ -121,7 +140,9 @@ async function testAuth() {
   authBusy.value = true
   authMsg.value = ''
   try {
-    const r = await api.booruAuthTest()
+    /* 测「当前输入框里的」凭据(没保存也算), 留空的字段由主进程沿用已保存的。
+     * 这样「改完 Key 直接点测试」不会再悄悄去测旧 Key, 少一层摸不着头脑。 */
+    const r = await api.booruAuthTest({ login: auth.login, apiKey: auth.apiKey })
     if (r?.ok) {
       authMsgTone.value = 'ok'
       authMsg.value = r.credentialed
@@ -404,7 +425,8 @@ const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider'
             不进数据目录、不进仓库、界面也读不回来原值；不想用了点「清除」回到匿名。<br>
             ⌨️ <b>用户名和 Key 要成对填</b>（Danbooru 的 Key 必须跟登录名一起用，只填一个等于没配）；
             填完点「保存凭据」或下面的「保存设置」都算数，看「当前状态」变成
-            <b>已配置 你的用户名</b> 才算真存上了。
+            <b>已配置 你的用户名</b> 才算真存上了。保存后 Key 只显示成 <b>••••</b>（不回显），
+            要换点旁边的「更改」；「测试连接」测的是输入框里当前这份（没保存也算）。
           </TvInfoTip>
         </h3>
 
@@ -424,7 +446,24 @@ const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider'
         </div>
         <div class="row">
           <span class="k">API Key</span>
-          <span class="v grow"><input v-model="auth.apiKey" class="txt" type="password" autocomplete="off" spellcheck="false" :placeholder="authState.hasKey ? '已保存过，留空表示不改动' : '粘贴 Key'" /></span>
+          <span class="v grow keyrow">
+            <template v-if="showKeyMask">
+              <span class="keymask" title="Key 已保存，不回显原值">••••••••••••••••<i>已保存</i></span>
+              <button class="linkbtn" type="button" @click="startEditKey">更改</button>
+            </template>
+            <template v-else>
+              <input
+                ref="keyInputEl"
+                v-model="auth.apiKey"
+                class="txt"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                :placeholder="authState.hasKey ? '粘贴新 Key（保存后以 •••• 显示）' : '粘贴 Key'"
+              />
+              <button v-if="authState.hasKey" class="linkbtn" type="button" @click="cancelEditKey">取消更改</button>
+            </template>
+          </span>
         </div>
         <div class="row">
           <span class="k">&nbsp;</span>
@@ -434,7 +473,7 @@ const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider'
               @click="saveAuth">
               {{ authBusy ? '处理中…' : '保存凭据' }}
             </TvButton>
-            <TvButton size="sm" variant="secondary" :disabled="authBusy" @click="testAuth">测试连接</TvButton>
+            <TvButton size="sm" variant="secondary" :disabled="authBusy" title="测的是输入框里当前这份（没保存也算）；留空则用已保存的" @click="testAuth">测试连接</TvButton>
             <TvButton v-if="authState.hasKey" size="sm" variant="secondary" :disabled="authBusy" @click="clearAuth">清除</TvButton>
             <span v-if="authNeed && !authMsg" class="dim">{{ authNeed }}</span>
             <span v-if="authMsg" :class="['authmsg', authMsgTone]">{{ authMsg }}</span>
@@ -520,6 +559,18 @@ h3 {
   background: var(--panel); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--r-sm);
 }
+/* 已保存的 Key: 只显示掩码, 不给可编辑的空框制造"我是不是要重填"的歧义 */
+.keyrow { align-items: center; gap: 6px; }
+.keymask {
+  flex: 1 1 auto; min-width: 0; max-width: 320px;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 8px; font-size: 12px; letter-spacing: 1.5px;
+  background: var(--panel2); color: var(--faint);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  cursor: default;
+}
+.keymask i { font-style: normal; font-size: 10px; letter-spacing: 0; margin-left: auto; }
+.keyrow .linkbtn { white-space: nowrap; }
 .authmsg { font-size: 12px; }
 .authmsg.ok { color: var(--accent); }
 .authmsg.warn { color: var(--danger, #c0392b); }

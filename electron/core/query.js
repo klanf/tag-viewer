@@ -730,7 +730,7 @@ export function getScanTagList(raw = {}) {
  * —— 图只能从扫描缓存出: 条目 {path -> {m,s,t,src}}, t 是扫描时 promptToTags
  * 规范化好的标签。命中语义与库搜索的 contains/any 一致, 返回形状与 doSearch
  * 对齐({total, offset, returned, results, unsafe}), useImageFeed 换个 fetcher
- * 就能跑。results 条目 {path, m, s, tags} —— 卡片/光箱与扫描页同款通用
+ * 就能跑。results 条目 {path, m, s, tags, source} —— 卡片/光箱与扫描页同款通用
  * (无像素尺寸, 卡片比例回落 9/16, 与扫描页一致)。
  */
 export function getScanTagImages(raw = {}) {

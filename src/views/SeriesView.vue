@@ -10,7 +10,7 @@
  * 原版用 window.scrollY 记忆滚动位置, 这个 SPA 里滚动发生在面板内部,
  * 所以改成记录/恢复面板的 scrollTop —— 返回时同样"回到刚才的位置"。
  */
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import TvSourceChips from '@/components/filter/TvSourceChips.vue'
 import TvEntityCard from '@/components/series/TvEntityCard.vue'
@@ -27,10 +27,12 @@ import TvModal from '@/components/base/TvModal.vue'
 import TvCategoryManager from '@/components/rules/TvCategoryManager.vue'
 import TvCoverPickerModal from '@/components/series/TvCoverPickerModal.vue'
 import TvCharEditModal from '@/components/series/TvCharEditModal.vue'
+import TagImagesPanel from '@/components/tag/TagImagesPanel.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
 import { useBatchOps } from '@/composables/useBatchOps.js'
-import { useFloatBack } from '@/composables/useFloatBack.js'
 import { useGridZoom } from '@/composables/useGridZoom.js'
+import { usePagePath } from '@/composables/usePagePath.js'
+import { useTagHost } from '@/composables/useTagHost.js'
 import { useSourceStore } from '@/stores/useSourceStore.js'
 import { useCartStore } from '@/stores/useCartStore.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
@@ -57,15 +59,60 @@ const view = ref('series')        // series | chars | images
 const loading = ref(false)
 const listError = ref('')
 
-/* 三层视图是组件内状态(不产生路由历史), 浮动返回按层级回退:
-   图片网格 -> 角色列表 -> 全部系列; 都不在顶层才走路由回退。
-   不接管的话 router.back() 会跳过这些层级, 直接回到上一个路由
-   (比如之前用过的扫描页) —— 不是用户期望的「回到上一级」。 */
-useFloatBack(() => {
-  if (view.value === 'images') { backToChars(); return true }
-  if (view.value === 'chars') { showSeriesList(); return true }
-  return false
-})
+/* ---------------- 来源内 tag 页 + 全局路径栏(2026-10-23) ----------------
+ * 在某一层的图集光箱里点标签 = 就地翻到下一层「该标签的图片」, 层级接着当前上下文:
+ *   全部系列 > 系列 > 角色 > 标签
+ * 标签页的光箱里再点标签可以继续往下叠(全部系列 > 系列 > 角色 > A > B)。
+ * 每层记下 from(开这一层时的光箱 + 翻页列表): 返回箭头退一层并把光箱原样拉回来;
+ * 点祖先 crumb / 回角色图集是直接跳过去, 不恢复光箱。 */
+let tagSeq = 0
+const tagLevels = ref([])          // [{ id, tag, from: { imgPath, list } | null }]
+const curTag = computed(() => tagLevels.value[tagLevels.value.length - 1]?.tag || '')
+const topLevel = computed(() => tagLevels.value[tagLevels.value.length - 1] || null)
+
+function openTagPage(tag) {
+  if (!tag) return
+  tagLevels.value.push({
+    id: ++tagSeq,
+    tag: String(tag),
+    /* 光箱此刻还开着(gotoTag 先调宿主再 close): 记下这一层返回时要恢复的图和翻页列表 */
+    from: lb.path ? { imgPath: lb.path, list: lb.list.length > 1 ? [...lb.list] : null } : null,
+  })
+}
+function restoreFrom(lv) {
+  const f = lv?.from
+  if (!f?.imgPath) return
+  /* 等 tag 页收起、图集渲染回来再开, 不然光箱会被同一帧的渲染盖住 */
+  nextTick(() => lb.open(f.imgPath, { list: f.list || [f.imgPath] }))
+}
+/** 返回箭头: 退一层并恢复开那一层时的光箱 */
+function backFromTagPage() {
+  restoreFrom(tagLevels.value.pop())
+}
+/** 点祖先 tag crumb: 直接回到那一层, 不恢复光箱 */
+function goTagLevel(i) {
+  if (i < 0 || i >= tagLevels.value.length - 1) return
+  tagLevels.value.splice(i + 1)
+}
+/** 回角色图集: 整栈清空, 并恢复第一层打开时的光箱(与点角色 crumb 的老行为一致) */
+function backToRootPage() {
+  const first = tagLevels.value[0]
+  tagLevels.value = []
+  restoreFrom(first)
+}
+/** 点系列 / 全部系列: 整栈清空, 不恢复光箱 */
+function clearTagPages() {
+  tagLevels.value = []
+}
+useTagHost('series', openTagPage)
+function onTagRenamedInPage(t) {
+  if (topLevel.value) topLevel.value.tag = String(t)
+}
+/** 当前层被删: 只收起这一层, 不恢复光箱 */
+function onTagDeletedInPage() {
+  tagLevels.value.pop()
+}
+
 
 /* ---------------- 一: 系列列表 ---------------- */
 const seriesData = ref(null)
@@ -540,20 +587,11 @@ function onSeriesKey(e) {
 onMounted(() => window.addEventListener('keydown', onSeriesKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onSeriesKey))
 
-/** 面包屑 */
+/** 角色列表工具栏上那句「系列中文名 (英文名) · N 个角色」 */
 const crumb = computed(() => ({
   series: curSeries.value,
   seriesZh: curSeriesZh.value,
-  char: curChar.value?.name || '',
-  charTag: curChar.value?.tag || '',
 }))
-
-/** 面包屑悬停复制: 复制该层的 tag 名(系列用英文 tag, 角色用名字) */
-function copyCrumb(text, label) {
-  if (!text) return
-  ui.copy(text)
-  ui.ok(`📋 已复制${label}: ${text}`, 'ok', 1400)
-}
 
 /** 来源变化: 系列/角色/图片全部重算 */
 async function onSourceChange() {
@@ -665,40 +703,54 @@ watch(() => route.query.series, async (name) => {
     if (hit) openSeries(hit)
   }
 })
+
+/** tag 栈的一串 crumb: 祖先层点了直接跳回那层(不恢复光箱), 栈顶挂复制按钮 */
+function tagCrumbs(stack) {
+  return stack.map((lv, i) => (i === stack.length - 1
+    ? { label: lv.tag, copy: lv.tag, copyLabel: '标签名' }
+    : { label: lv.tag, onClick: () => goTagLevel(i), back: backFromTagPage }))
+}
+
+/* 路径栏的内容(放在末尾: 引用了上面所有的层级状态与返回函数) */
+usePagePath('series', computed(() => {
+  const stack = tagLevels.value
+  const inTag = stack.length > 0
+  const crumbs = [{
+    label: '全部系列',
+    onClick: () => { clearTagPages(); showSeriesList() },
+    back: inTag ? backFromTagPage : undefined,
+  }]
+  if (!curSeries.value) return [...crumbs, ...tagCrumbs(stack)]
+  const zh = curSeriesZh.value
+  crumbs.push({
+    label: zh || curSeries.value,
+    sub: zh ? curSeries.value : '',
+    copy: curSeries.value,
+    copyLabel: '系列名',
+    onClick: () => {
+      clearTagPages()
+      if (view.value === 'images') backToChars()
+    },
+    // 箭头 = 真的退一层: 图片层退回角色列表; 标签页退回去是光箱那一页
+    back: inTag ? backFromTagPage : (view.value === 'images' ? backToChars : undefined),
+  })
+  if (view.value !== 'images' || !curChar.value) return [...crumbs, ...tagCrumbs(stack)]
+  crumbs.push({
+    label: curChar.value.tag,
+    copy: curChar.value.tag,
+    copyLabel: '角色 tag',
+    onClick: () => { if (inTag) backToRootPage() },
+    back: inTag ? backFromTagPage : undefined,
+  })
+  return [...crumbs, ...tagCrumbs(stack)]
+}))
 </script>
 
 <template>
   <div class="series-view">
-    <!-- 顶栏: 面包屑 + 来源 -->
+    <template v-if="!tagLevels.length">
+    <!-- 顶栏: 来源 + 安全模式(路径已搬到全局路径栏) -->
     <div class="head">
-      <div class="crumb">
-        <span class="link" @click="showSeriesList">全部系列</span>
-        <template v-if="crumb.series">
-          <span class="sep">&gt;</span>
-          <span class="crumb-item">
-            <span class="link" @click="backToChars">
-              {{ crumb.seriesZh || crumb.series }}
-              <span v-if="crumb.seriesZh" class="name-en">{{ crumb.series }}</span>
-            </span>
-            <button
-              class="crumb-copy"
-              :title="`复制系列名(${crumb.series})`"
-              @click="copyCrumb(crumb.series, '系列名')"
-            >📋</button>
-          </span>
-        </template>
-        <template v-if="view === 'images' && crumb.char">
-          <span class="sep">&gt;</span>
-          <span class="crumb-item">
-            <span class="now">{{ crumb.char }}</span>
-            <button
-              class="crumb-copy"
-              :title="`复制角色 tag(${crumb.charTag})`"
-              @click="copyCrumb(crumb.charTag, '角色 tag')"
-            >📋</button>
-          </span>
-        </template>
-      </div>
       <TvSourceChips
         v-model="src.selected"
         :sources="src.list"
@@ -940,7 +992,6 @@ watch(() => route.query.series, async (name) => {
             :options="[60, 120, 240].map((n) => ({ value: n, label: String(n) }))"
           />
           <TvButton size="sm" variant="ghost" title="批量选择: 勾选后批量移动/复制/删除(浏览状态下 Ctrl+点击也可直接勾)" @click="imgToggleSelectMode">☑ 选择</TvButton>
-          <TvButton size="sm" variant="secondary" @click="backToChars">← 返回角色列表</TvButton>
         </div>
 
         <!-- 批量操作条: 选择模式下出现, 钉在滚动区外 -->
@@ -978,11 +1029,24 @@ watch(() => route.query.series, async (name) => {
         </div>
       </template>
     </div>
+    </template>
+
+    <!-- 标签次级页(2026-10-23): 图集光箱点标签 = 就地翻开, 层级接着当前系列/角色。
+         只渲染栈顶; key 用层 id —— 换一层就是新面板, 不把上一层的批量勾选带过来。 -->
+    <TagImagesPanel
+      v-else-if="topLevel"
+      :key="topLevel.id"
+      :tag="curTag"
+      use-source-scan
+      :active="route.name === 'series'"
+      @renamed="onTagRenamedInPage"
+      @deleted="onTagDeletedInPage"
+    />
 
     <TvCategoryManager v-model="showCatMgr" :series-list="seriesData?.series || []" @saved="showSeriesList" />
 
     <!-- 系列/角色两层卡片的缩放徽标(图片层有自己的, 别叠两个) -->
-    <TvZoomBadge v-if="view !== 'images'" :zoom="cardZoom" :show="zoomFlash" @reset="resetCardZoom" />
+    <TvZoomBadge v-if="!tagLevels.length && view !== 'images'" :zoom="cardZoom" :show="zoomFlash" @reset="resetCardZoom" />
 
     <MoveTargetModal v-model="imgMoveOpen" :count="imgSel.size" :folders="imgMoveFolders" :busy="imgMoving" @pick="imgDoMove" />
     <MoveTargetModal v-model="imgCopyOpen" mode="copy" :count="imgSel.size" :folders="imgMoveFolders" :busy="imgCopying" @pick="imgDoCopy" />
@@ -1037,11 +1101,6 @@ watch(() => route.query.series, async (name) => {
   overflow: hidden;
 }
 .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 0 0 auto; }
-.crumb { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
-.crumb .link { color: var(--accent); cursor: pointer; }
-.crumb .link:hover { text-decoration: underline; }
-.crumb .now { color: var(--text); }
-.crumb .sep { color: var(--faint); }
 
 .body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px; }
 

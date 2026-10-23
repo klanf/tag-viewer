@@ -13,6 +13,7 @@
  */
 import { onMounted } from 'vue'
 import TvAppHeader from '@/components/layout/TvAppHeader.vue'
+import TvPathBar from '@/components/layout/TvPathBar.vue'
 import TvToastHost from '@/components/layout/TvToastHost.vue'
 import TvBootOverlay from '@/components/layout/TvBootOverlay.vue'
 import TvLightbox from '@/components/image/TvLightbox.vue'
@@ -38,6 +39,7 @@ watch(() => ruleAdd.open, (v) => { if (!v) ruleAdd.prefill = null })
 <template>
   <div class="shell">
     <TvAppHeader />
+    <TvPathBar />
 
     <main class="stage">
       <RouterView v-slot="{ Component }">

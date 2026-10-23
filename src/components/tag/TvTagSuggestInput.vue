@@ -117,6 +117,9 @@ const chips = computed(() => segsOf(props.modelValue).slice(0, -1).map((s) => s.
 const activeSeg = computed(() => segsOf(props.modelValue)[segsOf(props.modelValue).length - 1] ?? '')
 const chipsSet = computed(() => new Set(chips.value))
 const hasAny = computed(() => Boolean(props.modelValue.trim()))
+/* 已有"定格成胶囊"的词才算有内容: 输入框里那段还没敲逗号, 清空后就该回到历史。
+   （不能看 hasAny —— 清空那一 tick props 还是旧值, 会把刚打开的历史下拉又关上。） */
+const hasChips = computed(() => chips.value.length > 0)
 
 /** 当前联想关键词: multi 只看正在打的段, 老模式整串就是词 */
 function currentKw() {
@@ -128,7 +131,7 @@ function currentKw() {
 function chipPrefix() { return chips.value.length ? chips.value.join(',') + ',' : '' }
 
 const showHistory = computed(() =>
-  props.history && mode.value === 'history' && !(props.multi && hasAny.value))
+  props.history && mode.value === 'history' && !(props.multi && hasChips.value))
 const histItems = computed(() => hist.list.value)
 
 function show() { open.value = true }
@@ -152,7 +155,7 @@ async function fetchSuggest() {
   if (!kw || !props.suggest) {
     mode.value = 'history'
     // multi 且已有胶囊: 空段没有可联想的东西, 收起下拉(胶囊本身已可见), 别弹历史/空态
-    if (props.multi && hasAny.value) { hide(); return }
+    if (props.multi && hasChips.value) { hide(); return }
     if (props.history) show()
     else hide()
     return
@@ -213,7 +216,7 @@ function onFocus(e) {
   const v = String(el && 'value' in el ? el.value : (props.multi ? activeSeg.value : props.modelValue) || '').trim()
   if (!props.multi && v && el.select) el.select()
   if (v) fetchSuggest()
-  else if (props.multi && hasAny.value) hide()
+  else if (props.multi && hasChips.value) hide()
   else if (props.history) { mode.value = 'history'; show() }
 }
 

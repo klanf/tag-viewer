@@ -32,6 +32,7 @@ import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import { useTagFavStore } from '@/stores/useTagFavStore.js'
 import { useSourceScanFilter } from '@/composables/useSourceScanFilter.js'
+import { usePagePath } from '@/composables/usePagePath.js'
 import { api } from '@/utils/api.js'
 import { readLS, writeLS, LS } from '@/utils/lskey.js'
 import { nfmt } from '@/utils/format.js'
@@ -40,6 +41,9 @@ const ui = useUiStore()
 const router = useRouter()
 const safety = useSafetyStore()
 const tagFav = useTagFavStore()
+
+/* 标签区根页: 路径栏只有「全部标签」, 没有返回箭头 */
+usePagePath('tags', computed(() => [{ label: '全部标签' }]))
 
 const kw = ref('')
 const BATCH = 300
@@ -230,13 +234,6 @@ onMounted(() => {
 </script>
 <template>
   <div class="tags-view">
-    <div class="head">
-      <div class="crumb">
-        <span class="now">全部标签</span>
-      </div>
-      <span class="spacer" />
-    </div>
-
     <div class="panel body">
       <div class="bar">
         <div class="kw">
@@ -318,10 +315,6 @@ onMounted(() => {
   padding: 12px;
   overflow: hidden;
 }
-.head { display: flex; align-items: center; flex: 0 0 auto; }
-.crumb { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
-.crumb .now { color: var(--text); }
-.spacer { flex: 1 1 auto; }
 
 .body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px; }
 .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; flex: 0 0 auto; }

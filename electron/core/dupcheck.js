@@ -20,6 +20,7 @@
  */
 import { openDb } from './store.js'
 import { loadCats, catOf } from './tagcats.js'
+import fs from 'node:fs'
 // 安全模式标记: 与数据集同一套词表/判定(safetyMatcher 带 mtime 缓存), 给每张图
 // 附 unsafe 0/1/2, 前端拿它接安全模式过滤(查重面板不该成为露骨内容的漏网之鱼)。
 import { safetyMatcher, unsafeLevelOf } from './safety.js'
@@ -34,6 +35,33 @@ function segOf(name) {
   return s
 }
 
+/**
+ * 文件创建/修改时间 —— 「组内保留规则」选创建时间时要按真实时间排。
+ * 只对最终返回的组成员 stat(组数有上限), 失败就用库里的 mtime 兜底。
+ */
+function annotateTimes(groups) {
+  const cache = new Map()
+  const timesOf = (p) => {
+    let v = cache.get(p)
+    if (!v) {
+      v = { bt: 0, mt: 0 }
+      try {
+        const st = fs.statSync(p)
+        v = { bt: Math.round(st.birthtimeMs) || 0, mt: Math.round(st.mtimeMs) || 0 }
+      } catch { /* 文件可能已被移走, 用库里的 mtime */ }
+      cache.set(p, v)
+    }
+    return v
+  }
+  for (const g of groups) {
+    for (const it of g.items) {
+      const t = timesOf(it.path)
+      it.bt = t.bt || it.mtime_ms || 0
+      it.mt = t.mt || it.mtime_ms || 0
+    }
+  }
+}
+
 export function findDuplicateGroups(opts = {}) {
   const {
     rareMax = 50,        // df<=此值的 tag 视为「罕见」, 参与候选配对
@@ -41,13 +69,14 @@ export function findDuplicateGroups(opts = {}) {
     threshold = 0.85,    // 加权 Jaccard 阈值
     maxGroups = 2000,    // 返回组数上限(防极端库卡 UI); 真库 0.85 下实测 542 组
     ignorePairs = null,  // Set<string> "小id|大id" —— 用户标记过的误报对, 命中即跳过
+    blockedPairs = null, // 其中属于「永久忽略」的那部分, 只用于把计数分开报给界面
   } = opts
 
   const t0 = Date.now()
   const db = openDb()
-  // 列探测: px_w/px_h/size 是追加列, 全新空库可能还没有(老库由迁移补齐)
+  // 列探测: px_w/px_h/size 等是追加列, 全新空库可能还没有(老库由迁移补齐)
   const cols = new Set(db.prepare('PRAGMA table_info(images)').all().map((c) => c.name))
-  const dimSel = ['px_w', 'px_h', 'size'].filter((c) => cols.has(c))
+  const dimSel = ['px_w', 'px_h', 'size', 'mtime_ms', 'img_src'].filter((c) => cols.has(c))
   const hasGone = cols.has('gone')
   // 可见性与 readRecords(看板数据集)保持同一口径(2026-10-17 用户拍板「只扫看板可见图」):
   //   gone=0 且 (folder_id 为空 或 所在文件夹没把「看板来源」注销)。
@@ -167,6 +196,7 @@ export function findDuplicateGroups(opts = {}) {
   // 上面 pass2 用了 u*2^30+v 的乘法键(小行号在前), 与解码保持同一编码
   let nCandidates = 0
   let nIgnored = 0
+  let nBlocked = 0
   const groups = []
   const bestPairShared = new Map() // root -> { tags:[], score }
 
@@ -202,7 +232,11 @@ export function findDuplicateGroups(opts = {}) {
       const ia = Number(rows[a].id)
       const ib = Number(rows[b].id)
       const pk = ia < ib ? `${ia}|${ib}` : `${ib}|${ia}`
-      if (ignorePairs.has(pk)) { nIgnored++; continue }
+      if (ignorePairs.has(pk)) {
+        if (blockedPairs && blockedPairs.has(pk)) nBlocked++
+        else nIgnored++
+        continue
+      }
     }
     union(a, b)
     sharedNames.sort((x, y) => wArr[y] - wArr[x])
@@ -235,6 +269,8 @@ export function findDuplicateGroups(opts = {}) {
         px_w: rows[k].px_w || 0,
         px_h: rows[k].px_h || 0,
         size: rows[k].size || 0,
+        mtime_ms: Number(rows[k].mtime_ms) || 0,
+        img_src: String(rows[k].img_src || ''),
         unsafe: unsafeArr[k] || 0,
         best: false,
       }))
@@ -245,11 +281,14 @@ export function findDuplicateGroups(opts = {}) {
   }
   groups.sort((a, b) => b.score - a.score)
   const truncated = groups.length > maxGroups
+  const outGroups = groups.slice(0, maxGroups)
+  annotateTimes(outGroups)
   return {
     scanned: N,
     candidates: nCandidates,
     ignoredPairs: nIgnored,
-    groups: groups.slice(0, maxGroups),
+    blockedPairs: nBlocked,
+    groups: outGroups,
     truncated,
     elapsedMs: Date.now() - t0,
   }
@@ -272,7 +311,7 @@ export function findIgnoredGroups(ignorePairs = new Set()) {
   }
   const db = openDb()
   const cols = new Set(db.prepare('PRAGMA table_info(images)').all().map((c) => c.name))
-  const dimSel = ['px_w', 'px_h', 'size'].filter((c) => cols.has(c))
+  const dimSel = ['px_w', 'px_h', 'size', 'mtime_ms', 'img_src'].filter((c) => cols.has(c))
   const hasGone = cols.has('gone')
   const hasFolders = (() => {
     try {
@@ -310,6 +349,8 @@ export function findIgnoredGroups(ignorePairs = new Set()) {
       px_w: r.px_w || 0,
       px_h: r.px_h || 0,
       size: r.size || 0,
+      mtime_ms: Number(r.mtime_ms) || 0,
+      img_src: String(r.img_src || ''),
       unsafe: unsafeLevelOf(tagArr, sm) || 0,
       _tagSet: new Set(tagArr),
     })
@@ -365,12 +406,15 @@ export function findIgnoredGroups(ignorePairs = new Set()) {
         px_w: it.px_w,
         px_h: it.px_h,
         size: it.size,
+        mtime_ms: it.mtime_ms,
+        img_src: it.img_src,
         unsafe: it.unsafe,
         best: i === 0,
       })),
     })
   }
   groups.sort((a, b) => b.items.length - a.items.length)
+  annotateTimes(groups)
 
   return {
     groups,

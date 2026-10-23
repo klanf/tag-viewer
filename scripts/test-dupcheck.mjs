@@ -146,6 +146,19 @@ r = dupcheck.findDuplicateGroups({ threshold: 0.65, ignorePairs: new Set(['99999
 ok('未命中的忽略对不影响结果', () => assert.deepEqual(groupIds(r).sort(), ['a.png+b.png+c.png', 'e.png+f.png']))
 ok('未命中时 ignoredPairs=0', () => assert.equal(r.ignoredPairs, 0))
 
+console.log('⑤b 永久忽略: 同样跳过, 但计入 blockedPairs 而不是 ignoredPairs(2026-10-24)')
+r = dupcheck.findDuplicateGroups({ threshold: 0.65, ignorePairs: new Set([efKey]), blockedPairs: new Set([efKey]) })
+ok('永久忽略的组同样不出现在相似组里', () => assert.ok(!groupOf(r, 'e.png') && !groupOf(r, 'f.png')))
+ok('blockedPairs=1, ignoredPairs=0(界面上分开说)', () => {
+  assert.equal(r.blockedPairs, 1)
+  assert.equal(r.ignoredPairs, 0)
+})
+r = dupcheck.findDuplicateGroups({ threshold: 0.65, ignorePairs: new Set([efKey]) })
+ok('不传 blockedPairs 时同一对仍按普通忽略计数', () => {
+  assert.equal(r.ignoredPairs, 1)
+  assert.equal(r.blockedPairs, 0)
+})
+
 console.log('⑥ 安全模式标记: 每张图带 unsafe(2026-10-17 用户补充)')
 // 在此前断言跑完后再插敏感图, 免得动前面所有 scanned 计数
 ins.run(P('s1.png'), 'nude,silver_hair,long_hair', 0, 500, 500, 100)

@@ -13,7 +13,7 @@
  *     旧版踩过坑: 只在当前页过滤会导致结果空掉
  *   · 导出时剔除黑名单、应用替换规则、按需补背景标签(都由主进程完成)
  */
-import { ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, onActivated, onDeactivated } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import TvSourceChips from '@/components/filter/TvSourceChips.vue'
 import TvWd14Banner from '@/components/board/TvWd14Banner.vue'
@@ -31,9 +31,12 @@ import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
 import TvRulesEditorModal from '@/components/rules/TvRulesEditorModal.vue'
 import TvExportPresetsModal from '@/components/export/TvExportPresetsModal.vue'
 import TvDupPanel from '@/components/dup/TvDupPanel.vue'
+import TagImagesPanel from '@/components/tag/TagImagesPanel.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
 import { useSearchHistory } from '@/composables/useSearchHistory.js'
 import { useBatchOps } from '@/composables/useBatchOps.js'
+import { usePagePath } from '@/composables/usePagePath.js'
+import { useTagHost } from '@/composables/useTagHost.js'
 import { LS } from '@/utils/lskey.js'
 import { useAppStore } from '@/stores/useAppStore.js'
 import { useSourceStore } from '@/stores/useSourceStore.js'
@@ -58,6 +61,70 @@ const ui = useUiStore()
 const safety = useSafetyStore()
 const hist = useSearchHistory()
 
+/* ---------------- 来源内 tag 页(2026-10-23) ----------------
+ * 在看板光箱里点标签 = 就地翻开一页「看板 > 该标签」, 不换路由、顶部 tab 不动。
+ * 在 tag 页的光箱里再点标签 = **继续往下叠一层**(看板 > A > B), 每一层一路 crumb。
+ *
+ * 每层记下 from(开这一层时正开着的光箱 + 翻页列表): 返回箭头退一层, 把那一层的
+ * 光箱原样拉回来 —— 点标签是往下翻一层, 不是把光箱关掉。点祖先 crumb / 回根页
+ * 是"直接跳过去", 不恢复光箱。
+ *
+ * 模板只渲染栈顶那一层; 退回上一层会重新取数(列表从头开始), 换来的是每层
+ * 独立的筛选/选择状态, 不会把上一层的批量勾选带进来。 */
+let tagSeq = 0
+const tagLevels = ref([])          // [{ id, tag, from: { imgPath, list } | null }]
+const curTag = computed(() => tagLevels.value[tagLevels.value.length - 1]?.tag || '')
+const topLevel = computed(() => tagLevels.value[tagLevels.value.length - 1] || null)
+
+function openTagPage(tag) {
+  if (!tag) return
+  tagLevels.value.push({
+    id: ++tagSeq,
+    tag: String(tag),
+    /* 光箱此刻还开着(gotoTag 先调宿主再 close): 记下这一层返回时要恢复的图和翻页列表 */
+    from: lb.path ? { imgPath: lb.path, list: lb.list.length > 1 ? [...lb.list] : null } : null,
+  })
+}
+function restoreFrom(lv) {
+  const f = lv?.from
+  if (!f?.imgPath) return
+  /* 等 tag 页收起、来源网格渲染回来再开, 不然光箱会被同一帧的渲染盖住 */
+  nextTick(() => lb.open(f.imgPath, { list: f.list || [f.imgPath] }))
+}
+/** 返回箭头: 退一层并恢复开那一层时的光箱 */
+function backFromTagPage() {
+  restoreFrom(tagLevels.value.pop())
+}
+/** 点祖先 tag crumb: 直接回到那一层, 不恢复光箱 */
+function goTagLevel(i) {
+  if (i < 0 || i >= tagLevels.value.length - 1) return
+  tagLevels.value.splice(i + 1)
+}
+/** 回看板根页: 整栈清空, 不恢复光箱 */
+function clearTagPages() {
+  tagLevels.value = []
+}
+useTagHost('home', openTagPage)
+
+usePagePath('home', computed(() => {
+  const stack = tagLevels.value
+  if (!stack.length) return [{ label: '看板' }]
+  return [
+    { label: '看板', onClick: clearTagPages, back: backFromTagPage },
+    ...stack.map((lv, i) => (i === stack.length - 1
+      ? { label: lv.tag, copy: lv.tag, copyLabel: '标签名' }
+      : { label: lv.tag, onClick: () => goTagLevel(i), back: backFromTagPage })),
+  ]
+}))
+
+function onTagRenamedInPage(t) {
+  if (topLevel.value) topLevel.value.tag = String(t)
+}
+/** 当前层被删: 只收起这一层, 不恢复光箱(退到上一层 tag 页或看板) */
+function onTagDeletedInPage() {
+  tagLevels.value.pop()
+}
+
 /* ---------------- 筛选表单 ---------------- */
 const q = ref('')
 const mode = ref('all')
@@ -78,6 +145,22 @@ const showReplace = ref(false)
 const showPresets = ref(false)
 const showDup = ref(false)         // 相似图查重面板(2026-10-17)
 const exportMenu = ref(false)      // 「⬇ 导出标签 ▾」下拉是否展开
+const menuUp = ref(false)          // 下方放不下时翻到按钮上方开(路径栏占了 38px 后, 竖向余量不够了)
+const exportRow = ref(null)
+
+async function toggleExportMenu() {
+  if (exportMenu.value) { exportMenu.value = false; return }
+  menuUp.value = false
+  exportMenu.value = true
+  await nextTick()
+  const row = exportRow.value?.getBoundingClientRect()
+  const menu = exportRow.value?.querySelector('.menu')?.getBoundingClientRect()
+  if (!row || !menu) return
+  const below = window.innerHeight - row.bottom - 10
+  const above = row.top - 10
+  menuUp.value = menu.height > below && above > below
+}
+
 const autoPresetCount = ref(0)     // 开了「黑名单变更后自动导出」的预设数(按钮上显示)
 const exporting = ref(0)      // 0=空闲 1=纯标签 2=带路径
 const stripCharExport = ref(true)  // 导出时剔除角色/系列标签(含无括号角色, 走角色库)
@@ -392,7 +475,9 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 </script>
 
 <template>
-  <div class="home">
+  <div class="home" :class="{ 'tag-mode': tagLevels.length }">
+    <!-- 看板本体: 打开标签页时整块收起(状态都还在, 关掉即可原样回来) -->
+    <template v-if="!tagLevels.length">
     <!-- ---------------- 左栏 ---------------- -->
     <aside class="left">
       <TvSourceChips
@@ -489,7 +574,7 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
             >✕ 清空</TvButton>
           </div>
 
-          <div class="brow">
+          <div ref="exportRow" class="brow">
             <div class="split">
               <TvButton :loading="exporting !== 0" @click="doExport(false)">⬇ 导出标签</TvButton>
               <button
@@ -498,7 +583,7 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
                 :class="{ on: exportMenu }"
                 :aria-expanded="exportMenu ? 'true' : 'false'"
                 title="更多导出方式 / 导出选项"
-                @click="exportMenu = !exportMenu"
+                @click="toggleExportMenu"
               ><span class="chev" :class="{ up: exportMenu }">▾</span></button>
             </div>
 
@@ -509,7 +594,7 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
               两条说明文字和复选框 label 会立刻被挤成两三行(实测过)。
             -->
             <div v-if="exportMenu" class="menu-off" @click="exportMenu = false" />
-            <div v-if="exportMenu" class="menu">
+            <div v-if="exportMenu" class="menu" :class="{ up: menuUp }">
               <button class="mi" type="button" :disabled="exporting !== 0" @click="pickExport(false)">
                 <span class="mt">⬇ 导出标签</span>
                 <span class="mh">每行一组逗号分隔的标签</span>
@@ -680,6 +765,19 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
       title="换一批(随机重排, 参数不变)"
       @click="shuffle"
     >🎲</button>
+    </template>
+
+    <!-- 标签次级页(2026-10-23): 光箱点标签 = 就地翻开, 顶部 tab 仍是看板、光箱不叠层。
+         只渲染栈顶; key 用层 id —— 换一层就是新面板, 不把上一层的批量勾选带过来。 -->
+    <TagImagesPanel
+      v-else-if="topLevel"
+      :key="topLevel.id"
+      :tag="curTag"
+      use-source-scan
+      :active="route.name === 'home'"
+      @renamed="onTagRenamedInPage"
+      @deleted="onTagDeletedInPage"
+    />
 
     <TvRulesEditorModal v-model="showBlacklist" kind="blacklist" @saved="doSearch" />
     <TvRulesEditorModal v-model="showReplace" kind="replace" @saved="doSearch" />
@@ -703,6 +801,8 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
   padding: 12px;
   overflow: hidden;
 }
+/* 标签次级页自带内边距; 外层留 12px 会变成双层白边 */
+.home.tag-mode { padding: 0; gap: 0; }
 
 .left {
   flex: 0 0 372px; width: 372px;
@@ -762,6 +862,8 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--r-sm); box-shadow: var(--shadow-1);
 }
+/* 下方余量不够时翻到按钮上方(见 toggleExportMenu) —— 别让侧栏底沿把菜单切掉 */
+.menu.up { top: auto; bottom: calc(100% + 6px); }
 .mi {
   display: flex; flex-direction: column; gap: 1px;
   width: 100%; padding: 6px 8px;

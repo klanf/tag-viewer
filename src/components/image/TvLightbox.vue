@@ -25,7 +25,7 @@
  *   · 底部居中显示 "第 n / 共 m 张", 可点箭头
  */
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import TvButton from '../base/TvButton.vue'
 import TvTagList from '../tag/TvTagList.vue'
 import TvTagPill from '../tag/TvTagPill.vue'
@@ -39,6 +39,7 @@ import { useTagFavStore } from '@/stores/useTagFavStore.js'
 import { useImageCtxMenu } from '@/composables/useImageCtxMenu.js'
 import { useTrash } from '@/composables/useTrash.js'
 import { useCharCart } from '@/composables/useCharCart.js'
+import { openTagInHost } from '@/composables/useTagHost.js'
 import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 import TvCopySplit from '../tag/TvCopySplit.vue'
 import TvQuickMoveBar from './TvQuickMoveBar.vue'
@@ -48,6 +49,7 @@ const lb = useLightboxStore()
 const ui = useUiStore()
 const app = useAppStore()
 const router = useRouter()
+const route = useRoute()
 const charCart = useCharCart()
 const tagFav = useTagFavStore()
 
@@ -185,19 +187,33 @@ watch(() => lb.visible, async (v) => {
 })
 
 /**
- * 点标签 = 去该标签的图片**子页面**(与标签页里点标签是同一个入口)。
+ * 点标签 = 去该标签的图片**次级页**。
  *
- * 两件必须做的事:
- *   · 先 lb.close() —— 光箱是 Teleport 到 body 的, 不关就会盖在新路由的页面上
- *   · 库外图片(扫描夹/收藏里那些没进过库的)要打个招呼: 它们自己不在结果里,
- *     跳过去看到的是"标签库中含有这个名字的图", 不说一句会以为是跳错了
+ * 两种落点(2026-10-23):
+ *   · 看板 / 系列 / 扫描 —— **就地翻开**, 不换路由、顶部 tab 不动, 层级接着当前上下文
+ *     (如 全部系列 > 蔚蓝档案 > airi_(band) > breasts)。
+ *   · 独立标签页 / 其它页 —— 仍跳到 /tags/:tag。
+ *
+ * 两条落点的返回**都要回到光箱那一页**(2026-10-23 用户纠正): 用户点标签只是
+ * "往下翻一层", 不是把光箱关掉。跳走前的现场由两边各自记:
+ *   · 就地开页 —— 宿主在 openTagPage 里**同步**快照当前图 + 翻页列表(此时光箱还没关),
+ *     返回箭头退层时恢复; 层可以一直往下叠, 每层各存各的。
+ *   · 路由跳转 —— 走 rememberJump / takeJump(全局只有一份, 由独立标签页消费)。
+ *
+ * 无论走哪条, 都要先 lb.close() —— 光箱 Teleport 到 body, 不关会盖在新页面上。
+ * 库外图片(扫描夹/收藏里那些没进过库的)要打个招呼: 标签页按全库口径出图,
+ * 这张图自己不在结果里, 不说一句会以为是跳错了。
  */
 function gotoTag(tag, hit = false) {
   if (!tag) return
   const external = !!lb.data?.external
-  lb.rememberJump(tag)   // 返回键要恢复光箱(定位到这张图 + 翻页列表), 先记下
+  const hostPage = route.name === 'home' || route.name === 'series' || route.name === 'scan'
+  /* 就地开页要在 close() 之前调: 宿主此刻同步快照光箱现场(逐层各存一份)。
+     没接住才记全局的跳转记忆 —— 同一份别被就地开页写成过期数据, 之后误拉起光箱。 */
+  const openedInPlace = hostPage && openTagInHost(route.name, tag)
+  if (!openedInPlace) lb.rememberJump(tag)
   lb.close()
-  router.push({ name: 'tag-images', params: { tag } })
+  if (!openedInPlace) router.push({ name: 'tag-images', params: { tag } })
   if (external) {
     ui.toast(`「${tag}」· 这张图不在标签库中, 下面是库里含该标签的图`, 'info', 2800)
   } else if (tagSet.value === 'meta' && !hit) {

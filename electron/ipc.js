@@ -47,7 +47,10 @@ import { previewTagEdit, applyTagEdit } from './core/tagedit.js'
 import { openDb } from './core/store.js'
 import { loadCats, reloadCats, catOf } from './core/tagcats.js'
 import { findDuplicateGroups, findIgnoredGroups } from './core/dupcheck.js'
-import { loadIgnorePairs, addIgnorePairs, clearIgnorePairs, removeIgnorePairsByIds } from './core/dupignore.js'
+import {
+  loadIgnorePairs, addIgnorePairs, clearIgnorePairs, removeIgnorePairsByIds,
+  loadBlockedPairs, blockIgnorePairsByIds, clearBlockedPairs,
+} from './core/dupignore.js'
 import { copyImageWithNotice, openWithDialog } from './core/clipboardImage.js'
 import {
   runIngest, ingestStatus, pauseIngest, ingestState, queueStats, enqueueFolderUntagged,
@@ -582,7 +585,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
      * 不进渲染层缓存, 免得跟着每条 app:settings:set 的回包到处跑。 */
     'booru:auth:get': safe(() => booruAuthSummary()),
     'booru:auth:set': safe((raw) => writeBooruAuth(raw)),
-    'booru:auth:test': safe(() => booruAuthTest()),
+    'booru:auth:test': safe((raw) => booruAuthTest(raw || {})),
     /* 批量自动拉封面(2026-10-22): 启动即返回, 进度走 covers:auto:progress 推送 ——
      * 与 tagger:run / ingest:run 同一套形状(见那两处注释), 渲染层关掉弹窗/切页都不影响。
      * 走 setCover 要读数据集(recordByPath), 所以这三个通道**进** DATA_CHANNELS。
@@ -610,19 +613,32 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     // 阈值走参数, 结果 { scanned, candidates, ignoredPairs, groups:[{score,shared,items}], elapsedMs }
     'dup:scan': safe((raw) => {
       const o = raw || {}
+      const ignored = loadIgnorePairs()
+      const blocked = loadBlockedPairs()
       return findDuplicateGroups({
         threshold: Number(o.threshold) > 0 ? Number(o.threshold) : 0.85,
         maxGroups: Number(o.maxGroups) > 0 ? Number(o.maxGroups) : 2000,
-        ignorePairs: loadIgnorePairs(),
+        ignorePairs: new Set([...ignored, ...blocked]),
+        blockedPairs: blocked,
       })
     }),
     // 误报忽略(2026-10-17): 渲染层把整组两两 id 对发来, 持久化到 user/dupcheck_ignore.json
     'dup:ignore:add': safe((raw) => ({ added: addIgnorePairs(raw?.pairs || []) })),
     'dup:ignore:clear': safe(() => ({ removed: clearIgnorePairs() })),
-    // 已忽略的图片组(2026-10-23): 只存了 id 对, 按库里的记录还原成可展示的组
-    'dup:ignore:list': safe(() => findIgnoredGroups(loadIgnorePairs())),
+    // 已忽略的图片组(2026-10-23): 只存了 id 对, 按库里的记录还原成可展示的组。
+    // 永久忽略那档不列组(2026-10-24), 只回个数给界面做「全部恢复」。
+    'dup:ignore:list': safe(() => {
+      const ignored = loadIgnorePairs()
+      const blocked = loadBlockedPairs()
+      const r = findIgnoredGroups(ignored)
+      const blockedGroups = blocked.size ? findIgnoredGroups(blocked).groups.length : 0
+      return { ...r, blockedPairs: blocked.size, blockedGroups }
+    }),
     // 恢复一组(2026-10-23): 删掉两端都在这组里的 id 对
     'dup:ignore:remove': safe((raw) => ({ removed: removeIgnorePairsByIds(raw?.ids || []) })),
+    // 删记录 = 永久忽略(2026-10-24): 从已忽略里删掉这组, 并阻止它再出现在查重的任何列表里
+    'dup:ignore:block': safe((raw) => blockIgnorePairsByIds(raw?.ids || [])),
+    'dup:block:clear': safe(() => ({ removed: clearBlockedPairs() })),
     // 标签分类映射(2026-10-16): 展示端分组着色用。tags 字典的 cat 列是快照,
     // 空的(新词/分类器当时不可用)现场 classify 补 —— 保证映射永远可用。
     'tags:cats': safe(() => {

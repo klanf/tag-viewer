@@ -34,11 +34,28 @@ export function readBooruAuth() {
   } catch { return { login: '', apiKey: '' } }
 }
 
+/** 任意一组用户名 + Key -> Basic 头; 没配齐返回 null */
+export function authHeaderOf(login, apiKey) {
+  if (!login || !apiKey) return null
+  return 'Basic ' + Buffer.from(`${login}:${apiKey}`, 'utf8').toString('base64')
+}
+
 /** 给 fetch 用的 Authorization 头; 没配齐返回 null(调用方据此决定"匿名形状"的请求) */
 export function danbooruAuthHeader() {
   const { login, apiKey } = readBooruAuth()
-  if (!login || !apiKey) return null
-  return 'Basic ' + Buffer.from(`${login}:${apiKey}`, 'utf8').toString('base64')
+  return authHeaderOf(login, apiKey)
+}
+
+/**
+ * 把「界面上当前填的」和「磁盘上已存的」合成一份 —— 测试连接用。
+ * 某个字段留空 = 沿用已存的那个; 两个都填 = 用界面上这份(哪怕还没点保存)。
+ */
+export function resolveBooruAuth(raw = {}) {
+  const cur = readBooruAuth()
+  return {
+    login: String(raw?.login || '').trim() || cur.login,
+    apiKey: String(raw?.apiKey || '').trim() || cur.apiKey,
+  }
 }
 
 /** 只回摘要 —— 这个返回值会过 IPC 到渲染层, 绝不能带明文密钥 */

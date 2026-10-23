@@ -554,21 +554,33 @@ async function main() {
       `banned=${lb.banned} · 浮层🚫=${lb.bannedBan}`)
     await cdp.shot('02-lightbox')
 
-    /* 复制下拉真的能切到"去ban"并复制(用 main 进程读剪贴板核对):
-     * 2026-09-20 起三个复制按钮收成 主按钮+箭头菜单, 点菜单项 = 切模式并立即复制。 */
+    /* 复制设置面板(2026-10-19 二次简化: 三个快捷档并进过滤勾选)。
+     * 箭头展开 = 过滤面板; 勾「去 ban」后主按钮悬停文案跟着变; 点主按钮能复制。
+     * 剪贴板逐字内容由 copy-filtered 的专门测试覆盖, 这里只核对这条链路不报错。 */
     const clip = await cdp.eval(`
       __t.click('.lightbox .lb-copy-row .cs-arrow')
       await new Promise(r => setTimeout(r, 350))
-      const mi = [...document.querySelectorAll('.lightbox .cs-menu .mi')]
-        .find((e) => /去ban/.test(e.textContent))
-      if (!mi) return { err: '菜单里没有去ban项', items: [...document.querySelectorAll('.lightbox .cs-menu .mi')].map((e) => e.textContent.trim()) }
-      mi.click()
-      await new Promise(r => setTimeout(r, 500))
-      return await window.tv.invoke('clipboard:write', { text: '' })
+      const panel = document.querySelector('.lightbox .cs-menu .cpy-panel')
+      const labels = panel ? panel.textContent.replace(/\\s+/g, ' ') : ''
+      const ban = panel ? [...panel.querySelectorAll('label')].find(l => l.textContent.includes('去 ban')) : null
+      if (!ban) return { err: '复制下拉里没有过滤面板', labels }
+      const inp = ban.querySelector('input')
+      const was = !!inp.checked
+      if (!was) inp.click()
+      await new Promise(r => setTimeout(r, 300))
+      const titleOn = document.querySelector('.lightbox .cs-main')?.getAttribute('title') || ''
+      document.querySelector('.lightbox .cs-main').click()
+      await new Promise(r => setTimeout(r, 700))
+      const toast = document.querySelector('.toast')?.textContent || ''
+      if (inp.checked !== was) inp.click()
+      return { err: '', labels, titleOn, toast }
     `)
-    check('复制下拉: 菜单切到去ban并复制成功', !!clip?.ok && !clip?.err, JSON.stringify(clip).slice(0, 160))
-    check('复制下拉: 菜单项选中后成为主按钮的当前模式',
-      (await cdp.eval(`return __t.text('.lightbox .cs-main')`)).includes('去ban'), '')
+    check('复制面板: 下拉里是过滤勾选(去 ban / 剔角色 / 只复制安全标签)',
+      !clip.err && /去 ban/.test(clip.labels) && /剔角色/.test(clip.labels) && /只复制安全标签/.test(clip.labels),
+      clip.err || (clip.labels || '').slice(0, 120))
+    check('复制面板: 勾上「去 ban」后主按钮按该配置复制并回报',
+      !clip.err && /去ban/.test(clip.titleOn) && /已复制/.test(clip.toast),
+      clip.err || `title=${clip.titleOn} · toast=${clip.toast}`)
 
     /* ---------------- 3b. 光箱底部控件息屏 + 标签 ★ 收藏(2026-10-08) ----------------
      * 息屏契约(三次收敛): 控件只因光标进入图片区**底部控件带**而现形——画面
@@ -625,7 +637,8 @@ async function main() {
     check('光箱息屏: 光标压在 lb-pos 上常驻不停 3s 不隐藏', idle.sticky === false, `idle类=${idle.sticky}`)
 
     /* 标签 ★ 收藏(光箱入口): 点第一个未 ban pill 悬停浮层里的 ★(程序化点击不受
-       pointer-events 限制, 与 🛒 测试同一套路), 断言 localStorage 落盘 + 内联常驻 ★ 出现。 */
+       pointer-events 限制, 与 🛒 测试同一套路), 断言 localStorage 落盘 + 右上角常驻
+       ★ 角标出现(2026-10-17 起点亮态只走角标, 内联 ★ 已删)。 */
     const star = await cdp.eval(`
       const pill = document.querySelector('.lightbox .lb-tags .pill:not(.banned)')
       const fv = pill?.querySelector('.acts .fv')
@@ -637,14 +650,14 @@ async function main() {
       const ls = JSON.parse(localStorage.getItem('tv_tag_favs') || '[]')
       return {
         clicked: true, tag, ls,
-        stOn: !!pill.querySelector('.st.fv.on'),          // 内联常驻 ★(已收藏态)
-        actsFv: !!pill.querySelector('.acts .fv'),        // 悬停浮层里仍有(取消入口)
+        cornerOn: !!pill.querySelector('.corner.fav'),     // 右上角常驻 ★ 角标(已收藏态)
+        actsFv: !!pill.querySelector('.acts .fv'),         // 悬停浮层里仍有(取消入口)
       }
     `)
     check('光箱: 标签 pill ★ 收藏落盘 localStorage(tv_tag_favs)',
       star.clicked && star.ls.includes(star.tag), `tag=${star.tag} · ls=${JSON.stringify(star.ls)}`)
-    check('光箱: 已收藏 pill 出现内联常驻 ★(且悬停浮层里保留取消入口)',
-      star.stOn && star.actsFv, `内联★=${star.stOn} · 浮层★=${star.actsFv}`)
+    check('光箱: 已收藏 pill 出现右上角常驻 ★ 角标(且悬停浮层里保留取消入口)',
+      star.cornerOn && star.actsFv, `角标★=${star.cornerOn} · 浮层★=${star.actsFv}`)
 
     await cdp.eval(`document.querySelector('.lightbox .lb-close').click(); return true`)
     check('大图预览可关闭', !(await cdp.eval(`return !!document.querySelector('.lightbox')`)))
@@ -1040,12 +1053,14 @@ async function main() {
       check('无图角色: 打开后按新口径渲染 + 状态已记住', shownOk && lsOn === '1',
         `卡片渲染=${shownOk} · ls=${lsOn}`)
 
-      // 0 图角色卡带「仅手动补充」角标(仅当真的有 0 图角色)
+      // 0 图角色卡带角标(仅当真的有 0 图角色)。两种来源: 角色库补全 = 「库内角色」,
+      // 纯手工补充 = 「仅手动补充」—— 都算"明确标注了 0 图身份"。
       if (zeroExists) {
         const hasBadge = await cdp.eval(`
-          return [...document.querySelectorAll('.ecard .badge')].some(b => b.textContent.includes('仅手动补充'))
+          return [...document.querySelectorAll('.ecard .badge')]
+            .some(b => /仅手动补充|库内角色/.test(b.textContent))
         `)
-        check('无图角色: 0 图角色卡带「仅手动补充」角标', !!hasBadge)
+        check('无图角色: 0 图角色卡带「仅手动补充 / 库内角色」角标', !!hasBadge)
       }
 
       // 关掉还原
@@ -1077,7 +1092,11 @@ async function main() {
     /* 无限滚动: 滚到底应追加。
      * 别写成「滚一次 + 死等 2500ms」—— 滚动发生时容器可能还没到可滚动状态,
      * 或 IntersectionObserver 晚一拍回调, 于是偶发 60 -> 60 的假红。
-     * 这里改成轮询: 反复滚到底, 直到卡片数增长或超时。 */
+     * 这里改成轮询: 反复滚到底, 直到卡片数增长或超时。
+     * 再补一刀: 窗口被别的应用盖住时 Chromium 可能不出帧, IO 回调也跟着不派发
+     * (2026-10-23 实测 60 -> 60 卡满 15s, 同一份代码上一轮 404ms 就过了)。
+     * --no-shot 下没人调 bringToFront, 这里显式拉一次, 保证在渲染生命周期里。 */
+    try { await cdp.send('Page.bringToFront', {}, 3000) } catch { /* 不支持就算了 */ }
     const scrollRes = await cdp.eval(`
       const el = document.querySelector('.series-view .scroll')
       const start = __t.count('.grid .card')
@@ -1095,14 +1114,14 @@ async function main() {
       `${scrollRes.start} -> ${scrollRes.n} (用 ${scrollRes.ms}ms)`)
 
     /* 分类管理 */
-    await cdp.eval(`__t.clickText('.crumb .link', '全部系列'); return true`)
+    await cdp.eval(`__t.clickText('[data-test="path-crumb"]', '全部系列'); return true`)
     await waitFor(cdp, `__t.count('.ecard') > 0`, { label: '回到系列列表', timeout: 40000 })
     const catMgr = await cdp.eval(`
       __t.clickText('.cat-bar .tv-btn', '分类管理')
       await new Promise(r => setTimeout(r, 1500))
       return { tabs: __t.count('.mask .tv-tabs .tab'), combos: __t.count('.mask .combo'), title: __t.text('.mask .head') }
     `)
-    check('分类管理: 三个页签 + 下拉已渲染', catMgr.tabs === 3 && catMgr.combos >= 2,
+    check('分类管理: 四个页签 + 下拉已渲染', catMgr.tabs === 4 && catMgr.combos >= 2,
       `${catMgr.tabs} 页签 / ${catMgr.combos} 下拉`)
     await cdp.shot('08-category-manager')
     await cdp.eval(`document.querySelector('.mask .x').click(); return true`)
@@ -1213,7 +1232,7 @@ async function main() {
         n: __t.count('.tag-list .pill'),
         ls,
         lsSw: localStorage.getItem('tv_tags_fav_only'),
-        stOn: __t.count('.tag-list .pill .st.fv.on'),
+        stOn: __t.count('.tag-list .pill .corner.fav'),
         rows: [...document.querySelectorAll('.tag-list .pill')].map((p) => p.dataset.tag),
         label: ([...document.querySelectorAll('.tags-view .bar .tv-chip')]
           .find((e) => e.textContent.includes('只看收藏')))?.textContent.trim(),
@@ -1221,13 +1240,13 @@ async function main() {
     `)
     check('标签收藏: 「只看收藏」开启后列表恰好是收藏的那几个',
       favOnly.n === favOnly.ls.length && favOnly.stOn === favOnly.ls.length,
-      `渲染 ${favOnly.n} 个 ${JSON.stringify(favOnly.rows)} · ls=${JSON.stringify(favOnly.ls)} · 常驻★=${favOnly.stOn}`)
+      `渲染 ${favOnly.n} 个 ${JSON.stringify(favOnly.rows)} · ls=${JSON.stringify(favOnly.ls)} · 常驻★角标=${favOnly.stOn}`)
     check('标签收藏: 开关态写进 localStorage(tv_tags_fav_only)',
       favOnly.lsSw === '1' && favOnly.label.includes('只看收藏'), `键=${favOnly.lsSw} · 文案="${favOnly.label}"`)
 
     // 在 favOnly 视图里取消一个 -> 条目当场消失 + ls 同步回落
     const unstar = await cdp.eval(`
-      const pill = document.querySelector('.tag-list .pill .st.fv.on')
+      const pill = document.querySelector('.tag-list .pill .corner.fav')
       if (!pill) return { clicked: false }
       const tag = pill.closest('.pill').dataset.tag
       pill.click()
@@ -1260,8 +1279,8 @@ async function main() {
         total: __t.text('.cnt'),
         hash: decodeURIComponent(location.hash),
         isSub: !!document.querySelector('.tag-images-view'),
-        parent: __t.text('.tag-images-view .crumb .link'),
-        crumb: __t.text('.tag-images-view .crumb .now'),
+        parent: __t.text('[data-test="path-crumb"]'),
+        crumb: __t.text('[data-test="path-current"]'),
         navOn: __t.text('.hdr .nv.on'),
       }
     `)
@@ -1278,7 +1297,7 @@ async function main() {
     /* 10-01 标签编辑弹窗(改名/删除的入口)。这段**只读**: 打开 -> 预览影响 -> 取消,
        不真的执行改名/删除 —— 写路径已由 scripts/test-tagedit.mjs 在副本库上覆盖,
        界面层只钉"入口在、弹窗开、预览出数"。 */
-    await cdp.eval(`__t.clickText('.tag-images-view .head .tv-btn', '编辑标签'); return true`)
+    await cdp.eval(`__t.clickText('.tag-images-view .tag-panel .bar .tv-btn', '编辑标签'); return true`)
     await waitFor(cdp, `!!document.querySelector('.mask .box')`, { label: '标签编辑弹窗', timeout: 8000 })
     const tagEditUi = await cdp.eval(`
       // rename 模式下预览要求目标名非空(主进程校验) —— 填个占位名, 依然只读不执行
@@ -1984,9 +2003,10 @@ async function main() {
       (homeBtns.cbAfter || []).length === 5
       && (homeBtns.cbAfter || []).every((v, i) => v !== (homeBtns.cbBefore || [])[i]),
       `${JSON.stringify(homeBtns.cbBefore)} → ${JSON.stringify(homeBtns.cbAfter)}`)
-    check('首页动作区: 替换/预设导出降级为文字链, 且关下拉后不留遮罩',
-      (homeBtns.lnk || []).length === 2 && homeBtns.lnk.some((t) => t.includes('替换'))
+    check('首页动作区: 替换/预设导出/查重降级为文字链, 且关下拉后不留遮罩',
+      (homeBtns.lnk || []).length === 3 && homeBtns.lnk.some((t) => t.includes('替换'))
       && homeBtns.lnk.some((t) => t.includes('预设导出'))
+      && homeBtns.lnk.some((t) => t.includes('查重'))
       && homeBtns.menuClosed === true && homeBtns.tipLinks === 0,
       `${(homeBtns.lnk || []).join('、')} · menuClosed=${homeBtns.menuClosed} · tip 里的链接数=${homeBtns.tipLinks}`)
 
@@ -2002,6 +2022,8 @@ async function main() {
       }
     `)
     check('购物车: 条目已渲染', cartView.items > 0, `${cartView.count} · ${cartView.groups} 个系列分组`)
+    check('导航: 购物车是一级页, 顶栏不出返回箭头(根页面没有"上一级")',
+      (await cdp.eval(`return !document.querySelector('[data-test="hdr-back"]')`)) === true, '')
     await cdp.shot('11-cart')
 
     /* 换封面 🖼(2026-10-06): 与系列页同款挑选窗, 点一张 = 自定义封面 + 购物车 thumb 写回。
@@ -2180,7 +2202,7 @@ async function main() {
     await cdp.eval(`__t.click('.ci'); return true`)
     await waitFor(cdp, `location.hash.indexOf('#/tags/') === 0 && __t.count('.grid .card') > 0`,
       { label: '购物车条目跳转标签图片页', timeout: 30000 })
-    const navCheck = await cdp.eval(`return { hash: location.hash, tag: __t.text('.now') }`)
+    const navCheck = await cdp.eval(`return { hash: location.hash, tag: __t.text('[data-test="path-current"]') }`)
     check('购物车: 点条目跳到该角色的图片页(不再直接开光箱)',
       navCheck.hash.indexOf('#/tags/') === 0 && navCheck.tag.length > 0,
       `${navCheck.hash} · 标签=${navCheck.tag}`)
@@ -2407,7 +2429,7 @@ async function main() {
         keys: __t.count('.scan-view .grid.imgs .card .tags.keys'),
         chars: __t.count('.scan-view .grid.imgs .card .tags.keys .ch'),
         pager: __t.text('.scan-view .pager-bar .hint').replace(/\\s+/g, ' '),
-        back: __t.count('.scan-view .crumb .link'),
+        back: __t.count('[data-test="pathbar"] [data-test="path-crumb"]'),
       }
     `)
     check('扫描: 5 张图全部列出', scanRes.cards === 5, `${scanRes.cards} 张`)
@@ -2806,7 +2828,7 @@ async function main() {
     const ka = await cdp.eval(`
       return {
         cards: __t.count('.scan-view .grid.imgs .card'),
-        crumb: __t.text('.scan-view .crumb .now'),
+        crumb: __t.text('[data-test="path-current"]'),
       }
     `)
     check('扫描页: 切走再切回, 图片网格还在(keep-alive)', ka.cards > 0 && !!ka.crumb,
@@ -3014,7 +3036,7 @@ async function main() {
 
     // 返回文件夹列表
     const backList = await cdp.eval(`
-      __t.clickText('.scan-view .crumb .link', '全部文件夹')
+      __t.clickText('[data-test="path-crumb"]', '扫描')
       await new Promise(r => setTimeout(r, 600))
       return { cards: __t.count('.scan-view .grid.folders .ecard') }
     `)
@@ -3080,6 +3102,8 @@ async function main() {
     `)
     check('收藏: 网格套了独立滚动容器(overflow-y:auto, 页能往下滚)',
       favsScroll.has && favsScroll.oy === 'auto', JSON.stringify(favsScroll))
+    check('导航: 收藏页是一级页, 顶栏不出返回箭头(根页面没有"上一级")',
+      (await cdp.eval(`return !document.querySelector('[data-test="hdr-back"]')`)) === true, '')
     // 卡片在找回跑完才渲染(防止对失效路径发缩略图请求), 等它出图
     await waitFor(cdp, `__t.count('.favs-view .grid .card') > 0`, { label: '收藏卡片(找回完成后渲染)', timeout: 30000 })
     const favsRes = await cdp.eval(`
@@ -3538,7 +3562,7 @@ async function main() {
          超时。所以先退回一级(面包屑那个「全部文件夹」)。 */
       await cdp.eval(`
         if (!document.querySelector('.scan-view .grid.folders')) {
-          const back = document.querySelector('.scan-view .crumb .link')
+          const back = document.querySelector('[data-test="path-back"]')
           if (back) back.click()
         }
         return true
@@ -3582,16 +3606,20 @@ async function main() {
      * (2026-09-23 二跑里标签跳转整段 11 条失败, 根因就是这里没回家)。 */
     await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
 
-    /* ---------------- 11c. 点标签跳去该标签的图片列表(2026-09-20 需求) ----------------
-     * 光箱 / 详情页的标签: 点**标签本体** = 跳转, 点标签上的 📋 = 只复制那一个。
+    /* ---------------- 11c. 点标签 = 就地翻开的次级页(2026-10-23 导航改版) ----------------
+     * 光箱 / 详情页的标签: 点**标签本体** = 进入, 点标签上的 📋 = 只复制那一个。
      *
-     * 落点是**下一级子页面** /tags/xxx(2026-09-20 第二轮需求: "拆出来作为更深的子页面,
-     * 就像标签页点 tag 跳转那样")。除了"跳对了", 还要钉住这几件与层级有关的事:
-     *   · 地址栏是路径形式(不是 ?tag= 挂在标签列表上)
-     *   · 面包屑「全部标签 > 该标签」, 页面根是 .tag-images-view
+     * 2026-10-23 改版后的落点:
+     *   · 看板 / 系列 / 扫描里 —— **就地翻开**, 不换路由、顶部 tab 不动, 路径栏接着
+     *     当前上下文(看板 > 该标签; 系列里还有 系列 > 角色 两级), 关掉回原页面。
+     *   · 独立标签页 / 详情页 —— 仍跳 /tags/xxx(深链/老地址的兼容不变)。
+     *
+     * 这里要钉住的层级语义:
+     *   · 地址栏不变(就地页不是路由), 光箱自动关闭; 返回时**回到光箱那一页**
+     *     (同一张图 + 同一翻页位置, 2026-10-23 用户纠正)
+     *   · 路径栏「看板 > 该标签」, 返回箭头在路径最左; 顶栏不再出第二个箭头
      *   · 标签名里的 `/` 不会被拆成两段路径(`bb_(fate/extra)` 这类真标签存在)
      *   · 旧的 ?tag= 地址仍能打开(重定向到子页面)
-     * 点一下能"回到列表"不在这里测 —— 标签列表进子页面那条路在段 7 已测过(history.back)。
      *
      * 取标签名不能读 pill 的文本: 角色 pill 显示时会砍掉 _(系列) 尾巴; 也不能无脑读
      * title —— 被 ban 的 pill 的 title 是"已 ban(导出时剔除)"。所以挑一个 title 以
@@ -3608,62 +3636,76 @@ async function main() {
       if (!pill) return { err: '光箱里没有可用的标签 pill' }
       const tag = (pill.getAttribute('title') || '').split(': ').pop()
       const path = __t.text('.lightbox .lb-path')
+      const pos = __t.text('.lightbox .lb-pos')
       const hasCopyIcon = !!pill.querySelector('.cp')
       // ① 先点 📋: 应当**只复制、不跳转**(光箱还开着)
       pill.querySelector('.cp').click()
       await new Promise(r => setTimeout(r, 700))
       const afterCopy = { open: !!document.querySelector('.lightbox'), hash: location.hash }
-      // ② 再点标签本体: 应当跳走, 光箱自己关掉
+      // ② 再点标签本体: 应当就地翻开标签页, 光箱自己关掉
       pill.click()
       await new Promise(r => setTimeout(r, 2200))
+      const crumbs = [...document.querySelectorAll('[data-test="pathbar"] .crumb')]
+        .map((e) => e.textContent.trim())
       return {
-        err: '', tag, path, hasCopyIcon, afterCopy,
+        err: '', tag, path, pos, hasCopyIcon, afterCopy,
         closed: !document.querySelector('.lightbox'),
         hash: decodeURIComponent(location.hash),
-        isSub: !!document.querySelector('.tag-images-view'),
-        crumb: __t.text('.tag-images-view .crumb .now'),
-        parent: __t.text('.tag-images-view .crumb .link'),
-        total: __t.text('.tag-images-view .bar .cnt'),
+        inSource: !!document.querySelector('.home .tag-panel'),
+        crumbs,
+        back: !!document.querySelector('[data-test="path-back"]'),
+        hdrBack: !!document.querySelector('.hdr .back-btn'),
+        total: __t.text('.home .tag-panel .bar .cnt'),
       }
     `)
     check('标签跳转: 光箱的标签上挂着 📋 复制图标', tagJump.hasCopyIcon === true,
       tagJump.err || (tagJump.hasCopyIcon ? '在' : '不在'))
     check('标签跳转: 点 📋 只复制不跳转(光箱还开着)',
-      tagJump.afterCopy?.open === true && !(tagJump.afterCopy?.hash || '').includes('/tags/'),
+      tagJump.afterCopy?.open === true && tagJump.afterCopy?.hash === '#/',
       tagJump.afterCopy?.hash)
-    check('标签跳转: 点标签本体跳到子页面 /tags/xxx 且光箱自动关闭',
-      tagJump.closed === true && tagJump.isSub === true && /#\/tags\/.+/.test(tagJump.hash || ''),
-      `${tagJump.hash} · 光箱关闭=${tagJump.closed} · 子页面=${tagJump.isSub}`)
-    check('标签跳转: 子页面面包屑是「全部标签 > 该标签」',
-      tagJump.parent === '全部标签' && tagJump.crumb === tagJump.tag,
-      `${tagJump.parent} > ${tagJump.crumb} · 期望 ${tagJump.tag}`)
-    check('标签跳转: 子页面确实查出了图(不是空列表)',
+    check('标签跳转: 看板里点标签就地翻开(不换路由, 光箱自动关闭)',
+      tagJump.closed === true && tagJump.inSource === true && tagJump.hash === '#/',
+      `${tagJump.hash} · 光箱关闭=${tagJump.closed} · 就地页=${tagJump.inSource}`)
+    check('标签跳转: 路径栏读作「看板 > 该标签」, 返回箭头在路径最左',
+      JSON.stringify(tagJump.crumbs) === JSON.stringify(['看板', tagJump.tag]) && tagJump.back === true,
+      `${(tagJump.crumbs || []).join(' > ')} · 箭头=${tagJump.back}`)
+    check('标签跳转: 就地标签页里顶栏不再出第二个返回箭头',
+      tagJump.hdrBack === false, `顶栏返回=${tagJump.hdrBack}`)
+    check('标签跳转: 标签页确实查出了图(不是空列表)',
       Number(String(tagJump.total).replace(/[^0-9]/g, '') || 0) > 0, `${tagJump.total} 条`)
 
-    /* 浮动返回 = 回来源页 + **把光箱恢复出来**(2026-09-20 用户需求):
-     * 这一段就是从首页光箱点标签跳过来的, 所以按浮动导航的「←」应该回到首页,
-     * 且光箱重新打开、停在当时那张图上。 */
+    /* 路径箭头 = 关掉这一层, 回到光箱那一页(2026-10-23 用户纠正):
+       点标签只是往下翻一层, 返回应在同一张图上重新打开光箱, 翻页列表也还在。 */
     const lbRestore = await cdp.eval(`
-      /* 2026-10-23: 返回键从右下角浮动键搬到顶栏左上角 */
-      const fbtn = document.querySelector('.hdr .back-btn')
-      if (!fbtn || fbtn.disabled) return { err: '左上角返回键没渲染/不可用' }
+      const fbtn = document.querySelector('[data-test="path-back"]')
+      if (!fbtn) return { err: '路径栏返回箭头没渲染' }
       fbtn.click()
       await new Promise(r => setTimeout(r, 1400))
-      return {
+      const crumbs = [...document.querySelectorAll('[data-test="pathbar"] .crumb')]
+        .map((e) => e.textContent.trim())
+      const out = {
         err: '',
         hash: location.hash,
+        tagPage: !!document.querySelector('.home .tag-panel'),
         lbOpen: !!document.querySelector('.lightbox'),
-        lbPath: __t.text('.lightbox .lb-path'),
+        imgPath: __t.text('.lightbox .lb-path'),
+        pos: __t.text('.lightbox .lb-pos'),
+        crumbs,
       }
+      // 取证后关掉, 别让恢复出来的光箱盖住后面用例
+      document.querySelector('.lightbox .lb-close')?.click()
+      await new Promise(r => setTimeout(r, 500))
+      return out
     `)
-    check('标签跳转: 浮动返回回到来源页', !lbRestore.err && lbRestore.hash === '#/',
-      lbRestore.err || lbRestore.hash)
-    check('标签跳转: 返回后光箱恢复且停在当时那张图',
-      lbRestore.lbOpen === true && lbRestore.lbPath === tagJump.path,
-      `光箱=${lbRestore.lbOpen} · ${lbRestore.lbPath}`)
-    // 光箱还开着 —— 关掉再继续后面的深链测试
-    await cdp.eval(`document.querySelector('.lightbox .lb-close')?.click(); return true`)
-    await new Promise(r => setTimeout(r, 700))
+    check('标签跳转: 路径返回回到看板(标签页收起)',
+      !lbRestore.err && lbRestore.hash === '#/' && lbRestore.tagPage === false,
+      lbRestore.err || `${lbRestore.hash} · 标签页=${lbRestore.tagPage}`)
+    check('标签跳转: 返回回到光箱那一页(同一张图重新打开, 翻页位置不变)',
+      lbRestore.lbOpen === true && lbRestore.imgPath === tagJump.path && lbRestore.pos === tagJump.pos,
+      `光箱=${lbRestore.lbOpen} · ${lbRestore.imgPath} · ${lbRestore.pos} (原 ${tagJump.path} · ${tagJump.pos})`)
+    check('标签跳转: 回到根页后路径栏只剩「看板」(根页没有返回箭头)',
+      JSON.stringify(lbRestore.crumbs) === JSON.stringify(['看板']),
+      (lbRestore.crumbs || []).join(' > '))
 
     // 深链: 直接进子页面地址, 也要停在同一标签上(路由参数是唯一真源)
     const deep = await cdp.eval(`
@@ -3672,7 +3714,7 @@ async function main() {
       location.hash = '#/tags/' + encodeURIComponent(${JSON.stringify(tagJump.tag || '')})
       await new Promise(r => setTimeout(r, 2000))
       return {
-        crumb: __t.text('.tag-images-view .crumb .now'),
+        crumb: __t.text('[data-test="path-current"]'),
         cards: __t.count('.tag-images-view .grid .card'),
       }
     `)
@@ -3686,7 +3728,7 @@ async function main() {
     const slash = await cdp.eval(`
       location.hash = '#/tags/' + encodeURIComponent('foo/bar_(baz)')
       await new Promise(r => setTimeout(r, 1500))
-      return { crumb: __t.text('.tag-images-view .crumb .now'), hash: decodeURIComponent(location.hash) }
+      return { crumb: __t.text('[data-test="path-current"]'), hash: decodeURIComponent(location.hash) }
     `)
     check('标签子页面: 标签名里的 / 原样还原(不会被拆成两段路径)',
       slash.crumb === 'foo/bar_(baz)', `${slash.crumb} · ${slash.hash}`)
@@ -3698,7 +3740,7 @@ async function main() {
       await new Promise(r => setTimeout(r, 2000))
       return {
         hash: decodeURIComponent(location.hash),
-        crumb: __t.text('.tag-images-view .crumb .now'),
+        crumb: __t.text('[data-test="path-current"]'),
         cards: __t.count('.tag-images-view .grid .card'),
       }
     `)
@@ -3727,7 +3769,7 @@ async function main() {
       const tag = (pill.getAttribute('title') || '').split(': ').pop()
       pill.click()
       await new Promise(r => setTimeout(r, 2000))
-      return { err: '', tag, hash: decodeURIComponent(location.hash), crumb: __t.text('.tag-images-view .crumb .now') }
+      return { err: '', tag, hash: decodeURIComponent(location.hash), crumb: __t.text('[data-test="path-current"]') }
     `)
     check('标签跳转: 详情页点标签也是同一个入口',
       detJump.err === '' && detJump.crumb === detJump.tag && /#\/tags\/.+/.test(detJump.hash || ''),
@@ -3736,13 +3778,346 @@ async function main() {
     /* 详情页跳过来的返回: 回详情页, 且**不会**错误地拉起光箱
      * (详情页不是光箱入口, 没有 jump 记忆可消费)。 */
     const detBack = await cdp.eval(`
-      document.querySelector('.hdr .back-btn')?.click()
+      document.querySelector('[data-test="path-back"]')?.click()
       await new Promise(r => setTimeout(r, 1400))
       return { hash: decodeURIComponent(location.hash), onDetail: !!document.querySelector('.detail'), lbOpen: !!document.querySelector('.lightbox') }
     `)
     check('标签跳转: 详情页跳来的子页面按返回回到详情页(不拉起光箱)',
       detBack.onDetail === true && detBack.lbOpen === false && detBack.hash.includes('/detail'),
       `${detBack.hash} · 详情页=${detBack.onDetail} · 光箱=${detBack.lbOpen}`)
+
+    /* 看板里的就地标签页(2026-10-23): 与系列/扫描同一套机制, 只是看板没有中间层,
+     * 路径就是「看板 > 标签」。 */
+    const homeJump = await cdp.eval(`
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      const waitFor = async (fn, ms = 10000) => {
+        const t0 = Date.now()
+        while (Date.now() - t0 < ms) { const v = fn(); if (v) return v; await sleep(150) }
+        return null
+      }
+      location.hash = '#/'
+      if (!await waitFor(() => document.querySelector('.home .grid .card'), 15000))
+        return { err: '看板没有卡片' }
+      const cards = [...document.querySelectorAll('.home .grid .card')]
+      const before = [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim())
+      let pill = null
+      for (const card of cards.slice(0, 10)) {
+        card.click()
+        await sleep(300)
+        pill = await waitFor(() => {
+          const lb = document.querySelector('.lightbox')
+          if (!lb) return null
+          return [...lb.querySelectorAll('.lb-tags .pill')]
+            .find(p => (p.getAttribute('title') || '').startsWith('点击查看该标签的图片')) || null
+        }, 6000)
+        if (pill) break
+        document.querySelector('.lightbox .lb-close')?.click()
+        await sleep(500)
+      }
+      if (!pill) return { err: '光箱里没有可用的标签 pill', before }
+      const tag = (pill.getAttribute('title') || '').split(': ').pop()
+      const imgPath = __t.text('.lightbox .lb-path')
+      const pos = __t.text('.lightbox .lb-pos')
+      pill.click()
+      if (!await waitFor(() => document.querySelector('.home .tag-panel'), 12000))
+        return { err: '标签页没打开', before, tag }
+      await sleep(500)
+      const out = {
+        err: '', before, tag, imgPath, pos,
+        crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
+        hash: decodeURIComponent(location.hash),
+        inSource: !!document.querySelector('.home .tag-panel'),
+        listGone: !document.querySelector('.home aside.left'),
+        lbClosed: !document.querySelector('.lightbox'),
+        // ② 来源/扫描夹档位栏必须出现在就地标签页里(与独立标签页同一套)
+        ssBar: !!document.querySelector('.home .tag-panel .ss-bar'),
+        // ③ 卡片生成器徽章: 模板不再吞掉 .src(有元数据来源的图才显示)
+        tagSrc: __t.count('.home .tag-panel .grid .card .src'),
+        apiHasSrc: false,
+      }
+      try {
+        const r = await window.tv.invoke('search:do', {
+          q: tag, match: 'contains', sort: 'path', offset: 0, limit: 60,
+        })
+        out.apiHasSrc = (r?.results || []).some((x) => x.imgSrc)
+      } catch { /* 老主进程没这条通道就不判徽章 */ }
+
+      // ① 继续往下叠一层: 标签页里打开一张图, 光箱里再点另一个标签
+      out.nestedErr = ''
+      out.nested = null
+      const tagCard = document.querySelector('.home .tag-panel .grid .card')
+      if (!tagCard) {
+        out.nestedErr = '标签页里没有图, 无法测嵌套'
+      } else {
+        tagCard.click()
+        if (!await waitFor(() => document.querySelector('.lightbox'), 12000)) {
+          out.nestedErr = '标签页里打不开光箱'
+        } else {
+          await sleep(900)
+          const pills = [...document.querySelectorAll('.lightbox .lb-tags .pill')]
+            .filter(p => (p.getAttribute('title') || '').startsWith('点击查看该标签的图片'))
+          const p2 = pills.find(p => (p.getAttribute('title') || '').split(': ').pop() !== tag) || pills[0]
+          if (!p2) {
+            out.nestedErr = '标签页光箱里没有可跳的标签 pill'
+            document.querySelector('.lightbox .lb-close')?.click()
+            await sleep(400)
+          } else {
+            const tag2 = (p2.getAttribute('title') || '').split(': ').pop()
+            const nestedImg = __t.text('.lightbox .lb-path')
+            const nestedPos = __t.text('.lightbox .lb-pos')
+            p2.click()
+            await sleep(2400)
+            const nested = {
+              tag2, nestedImg, nestedPos,
+              crumbs2: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
+              lbClosed2: !document.querySelector('.lightbox'),
+            }
+            document.querySelector('[data-test="path-back"]').click()
+            await sleep(1800)
+            nested.crumbsBack = [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim())
+            nested.tagPanel = !!document.querySelector('.home .tag-panel')
+            nested.currentTag = (__t.text('.home .tag-panel .tag-name') || '').replace(/^#/, '').trim()
+            nested.lbOpen = !!document.querySelector('.lightbox')
+            nested.imgPath = __t.text('.lightbox .lb-path')
+            nested.pos = __t.text('.lightbox .lb-pos')
+            out.nested = nested
+            document.querySelector('.lightbox .lb-close')?.click()
+            await sleep(500)
+          }
+        }
+      }
+
+      document.querySelector('[data-test="path-back"]').click()
+      await sleep(1500)
+      out.back = {
+        tagPage: !!document.querySelector('.home .tag-panel'),
+        grid: __t.count('.home .grid .card'),
+        lbOpen: !!document.querySelector('.lightbox'),
+        imgPath: __t.text('.lightbox .lb-path'),
+        pos: __t.text('.lightbox .lb-pos'),
+        hash: decodeURIComponent(location.hash),
+      }
+      // 取证后关掉, 别让恢复出来的光箱盖住后面的系列/扫描用例
+      document.querySelector('.lightbox .lb-close')?.click()
+      await sleep(500)
+      return out
+    `)
+    check('看板里点标签: 就地翻开(仍停在看板, 光箱自动关闭)',
+      !homeJump.err && homeJump.inSource === true && homeJump.listGone === true
+        && homeJump.hash === '#/' && homeJump.lbClosed === true,
+      homeJump.err || `${homeJump.hash} · 标签页=${homeJump.inSource} · 原看板收起=${homeJump.listGone} · 光箱关闭=${homeJump.lbClosed}`)
+    check('看板里点标签: 路径读作「看板 > 标签」',
+      !homeJump.err && (homeJump.before || []).join('|') === '看板'
+        && (homeJump.crumbs || []).length === 2 && homeJump.crumbs[1] === homeJump.tag,
+      homeJump.err || `${(homeJump.crumbs || []).join(' > ')}`)
+    check('看板里点标签: 路径返回回到光箱那一页(同一张图 + 同一翻页位置)',
+      !homeJump.err && homeJump.back.tagPage === false && homeJump.back.grid > 0
+        && homeJump.back.lbOpen === true && homeJump.back.imgPath === homeJump.imgPath
+        && homeJump.back.pos === homeJump.pos && homeJump.back.hash === '#/',
+      homeJump.err || `图 ${homeJump.back?.grid} 张 · 光箱=${homeJump.back?.lbOpen} · ${homeJump.back?.imgPath} · ${homeJump.back?.pos} (原 ${homeJump.imgPath} · ${homeJump.pos})`)
+
+    check('看板里点标签: 标签页里有「来源 | 扫描夹」档位栏',
+      !homeJump.err && homeJump.ssBar === true, homeJump.err || `档位栏=${homeJump.ssBar}`)
+    check('看板里点标签: 卡片显示图内元数据来源徽章(show-source 已接上)',
+      !homeJump.err && (homeJump.apiHasSrc !== true || homeJump.tagSrc > 0),
+      homeJump.err || (homeJump.apiHasSrc
+        ? `首屏有带元数据来源的图 · 徽章 ${homeJump.tagSrc} 个`
+        : '夹具首屏没有元数据来源, 本条跳过'))
+    check('看板里继续往下叠: 路径变成「看板 > 标签A > 标签B」, 光箱自动关闭',
+      !homeJump.nestedErr && homeJump.nested
+        && homeJump.nested.crumbs2.length === 3
+        && homeJump.nested.crumbs2[0] === '看板'
+        && homeJump.nested.crumbs2[1] === homeJump.tag
+        && homeJump.nested.crumbs2[2] === homeJump.nested.tag2
+        && homeJump.nested.lbClosed2 === true,
+      homeJump.nestedErr || `${(homeJump.nested?.crumbs2 || []).join(' > ')} · 光箱关闭=${homeJump.nested?.lbClosed2}`)
+    check('看板里继续往下叠: 返回只退一层(回到标签A, 光箱同一张图 + 同一翻页位置)',
+      !homeJump.nestedErr && homeJump.nested
+        && homeJump.nested.crumbsBack.length === 2
+        && homeJump.nested.crumbsBack[1] === homeJump.tag
+        && homeJump.nested.tagPanel === true
+        && homeJump.nested.currentTag === homeJump.tag
+        && homeJump.nested.lbOpen === true
+        && homeJump.nested.imgPath === homeJump.nested.nestedImg
+        && homeJump.nested.pos === homeJump.nested.nestedPos,
+      homeJump.nestedErr || `路径=${(homeJump.nested?.crumbsBack || []).join(' > ')} · 当前层=${homeJump.nested?.currentTag} · 光箱=${homeJump.nested?.lbOpen} · ${homeJump.nested?.imgPath} ${homeJump.nested?.pos} (原 ${homeJump.nested?.nestedImg} ${homeJump.nested?.nestedPos})`)
+
+    /* 系列 / 扫描里的就地标签页(2026-10-23): 层级必须**接着**当前上下文,
+     * 而不是像独立标签页那样从「全部标签」重开一层 —— 用户拍板的路径形态是
+     * 「全部系列 > 蔚蓝档案 blue_archive > airi_(band) > breasts」。
+     * 返回只退一层(tag -> 原图片列表, 光箱重新打开在同一张图)。 */
+    const seriesJump = await cdp.eval(`
+      location.hash = '#/series'
+      await new Promise(r => setTimeout(r, 1200))
+      const sc = [...document.querySelectorAll('.ecard')].find(e => e.textContent.includes('蔚蓝档案'))
+        || document.querySelector('.ecard')
+      if (!sc) return { err: '系列列表为空' }
+      sc.click()
+      await new Promise(r => setTimeout(r, 1800))
+      const ch = document.querySelector('.ecard')
+      if (!ch) return { err: '角色列表为空' }
+      ch.click()
+      await new Promise(r => setTimeout(r, 2400))
+      const card = document.querySelector('.series-view .grid .card')
+      if (!card) return { err: '角色图片没出来' }
+      const before = [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim())
+      card.click()
+      await new Promise(r => setTimeout(r, 2200))
+      const pill = [...document.querySelectorAll('.lightbox .lb-tags .pill')]
+        .find(p => (p.getAttribute('title') || '').startsWith('点击查看该标签的图片'))
+      if (!pill) return { err: '光箱里没有可用的标签 pill', before }
+      const tag = (pill.getAttribute('title') || '').split(': ').pop()
+      const imgPath = __t.text('.lightbox .lb-path')
+      const pos = __t.text('.lightbox .lb-pos')
+      pill.click()
+      await new Promise(r => setTimeout(r, 2200))
+      return {
+        err: '', before, tag, imgPath, pos,
+        crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
+        hash: decodeURIComponent(location.hash),
+        inSource: !!document.querySelector('.series-view .tag-panel'),
+        listGone: !document.querySelector('.series-view .cat-bar'),
+        lbClosed: !document.querySelector('.lightbox'),
+        ssBar: !!document.querySelector('.series-view .tag-panel .ss-bar'),
+      }
+    `)
+    check('系列里点标签: 就地翻开(仍停在系列页, 光箱自动关闭)',
+      !seriesJump.err && seriesJump.inSource === true && seriesJump.listGone === true
+        && seriesJump.hash === '#/series' && seriesJump.lbClosed === true,
+      seriesJump.err || `${seriesJump.hash} · 标签页=${seriesJump.inSource} · 原列表收起=${seriesJump.listGone} · 光箱关闭=${seriesJump.lbClosed}`)
+    check('系列里点标签: 路径接着「全部系列 > 系列 > 角色 > 标签」',
+      !seriesJump.err && (seriesJump.before || []).length === 3 && seriesJump.before[0] === '全部系列'
+        && seriesJump.crumbs.length === 4 && seriesJump.crumbs[3] === seriesJump.tag
+        && seriesJump.crumbs.slice(0, 3).join('|') === (seriesJump.before || []).join('|'),
+      seriesJump.err || `${(seriesJump.crumbs || []).join(' > ')}`)
+    check('系列里点标签: 标签页里有「来源 | 扫描夹」档位栏',
+      !seriesJump.err && seriesJump.ssBar === true, seriesJump.err || `档位栏=${seriesJump.ssBar}`)
+
+    const seriesBack = await cdp.eval(`
+      const b = document.querySelector('[data-test="path-back"]')
+      if (!b) return { err: '路径栏返回箭头没渲染' }
+      b.click()
+      await new Promise(r => setTimeout(r, 1600))
+      const out = {
+        err: '',
+        crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
+        tagPage: !!document.querySelector('.series-view .tag-panel'),
+        grid: __t.count('.series-view .grid .card'),
+        lbOpen: !!document.querySelector('.lightbox'),
+        imgPath: __t.text('.lightbox .lb-path'),
+        pos: __t.text('.lightbox .lb-pos'),
+        hash: decodeURIComponent(location.hash),
+      }
+      document.querySelector('.lightbox .lb-close')?.click()
+      await new Promise(r => setTimeout(r, 500))
+      return out
+    `)
+    check('系列里点标签: 路径返回只退一层(回到角色图片, 仍停在系列页)',
+      !seriesBack.err && seriesBack.tagPage === false && seriesBack.grid > 0 && seriesBack.hash === '#/series',
+      seriesBack.err || `${seriesBack.hash} · 标签页=${seriesBack.tagPage} · 图 ${seriesBack.grid} 张`)
+    check('系列里点标签: 返回回到光箱那一页(同一张图 + 同一翻页位置)',
+      seriesBack.lbOpen === true && seriesBack.imgPath === seriesJump.imgPath && seriesBack.pos === seriesJump.pos,
+      `光箱=${seriesBack.lbOpen} · ${seriesBack.imgPath} · ${seriesBack.pos} (原 ${seriesJump.imgPath} · ${seriesJump.pos})`)
+
+    /* 扫描夹里的图是库外图片, 有没有标签取决于 PNG 元数据 —— 不能赌"第一张就有"。
+       这里逐个点开卡片, 哪张能出可跳转的 pill 就用哪张(点完先等光箱与标签真正渲染,
+       失败就关掉再试下一张, 别把光箱留在屏幕上拖垮后面三条断言)。 */
+    const scanJump = await cdp.eval(`
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      const waitFor = async (fn, ms = 8000) => {
+        const t0 = Date.now()
+        while (Date.now() - t0 < ms) {
+          const v = fn()
+          if (v) return v
+          await sleep(150)
+        }
+        return null
+      }
+      location.hash = '#/scan'
+      await sleep(1200)
+      // 退回文件夹列表: 不依赖上一段把扫描页留在哪一层
+      for (let i = 0; i < 2 && !document.querySelector('.scan-view .grid.folders .ecard'); i++) {
+        const b = document.querySelector('[data-test="path-back"]')
+        if (!b) break
+        b.click()
+        await sleep(1200)
+      }
+      const folders = [...document.querySelectorAll('.scan-view .grid.folders .ecard')]
+      const folder = folders.find(f => (f.querySelector('.name')?.textContent || '').trim() === 'scan') || folders[0]
+      if (!folder) return { err: '扫描夹列表为空' }
+      folder.click()
+      if (!await waitFor(() => document.querySelector('.scan-view .grid.imgs .card'), 12000))
+        return { err: '扫描夹里没有图片' }
+      const cards = [...document.querySelectorAll('.scan-view .grid.imgs .card')]
+      const before = [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim())
+      let pill = null
+      for (const card of cards) {
+        card.click()
+        await sleep(300)
+        pill = await waitFor(() => {
+          const lb = document.querySelector('.lightbox')
+          if (!lb) return null
+          return [...lb.querySelectorAll('.lb-tags .pill')]
+            .find(p => (p.getAttribute('title') || '').startsWith('点击查看该标签的图片')) || null
+        }, 6000)
+        if (pill) break
+        document.querySelector('.lightbox .lb-close')?.click()
+        await sleep(500)
+      }
+      if (!pill) return { err: '光箱里没有可用的标签 pill', before, cards: cards.length }
+      const tag = (pill.getAttribute('title') || '').split(': ').pop()
+      const imgPath = __t.text('.lightbox .lb-path')
+      const pos = __t.text('.lightbox .lb-pos')
+      pill.click()
+      if (!await waitFor(() => document.querySelector('.scan-view .tag-panel'), 12000))
+        return { err: '点了 pill 但标签页没打开', before, tag }
+      return {
+        err: '', before, tag, imgPath, pos,
+        crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
+        hash: decodeURIComponent(location.hash),
+        inSource: !!document.querySelector('.scan-view .tag-panel'),
+        listGone: !document.querySelector('.scan-view .grid.imgs'),
+        lbClosed: !document.querySelector('.lightbox'),
+        ssBar: !!document.querySelector('.scan-view .tag-panel .ss-bar'),
+      }
+    `)
+    check('扫描里点标签: 就地翻开(仍停在扫描页, 光箱自动关闭)',
+      !scanJump.err && scanJump.inSource === true && scanJump.listGone === true
+        && scanJump.hash === '#/scan' && scanJump.lbClosed === true,
+      scanJump.err || `${scanJump.hash} · 标签页=${scanJump.inSource} · 原列表收起=${scanJump.listGone} · 光箱关闭=${scanJump.lbClosed}`)
+    check('扫描里点标签: 路径接着「扫描 > 文件夹 > 标签」',
+      !scanJump.err && (scanJump.before || []).length === 2 && scanJump.before[0] === '扫描'
+        && scanJump.crumbs.length === 3 && scanJump.crumbs[2] === scanJump.tag
+        && scanJump.crumbs.slice(0, 2).join('|') === (scanJump.before || []).join('|'),
+      scanJump.err || `${(scanJump.crumbs || []).join(' > ')}`)
+    check('扫描里点标签: 标签页里有「来源 | 扫描夹」档位栏',
+      !scanJump.err && scanJump.ssBar === true, scanJump.err || `档位栏=${scanJump.ssBar}`)
+
+    const scanBack = await cdp.eval(`
+      const b = document.querySelector('[data-test="path-back"]')
+      if (!b) return { err: '路径栏返回箭头没渲染' }
+      b.click()
+      await new Promise(r => setTimeout(r, 1800))
+      const out = {
+        err: '',
+        crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
+        tagPage: !!document.querySelector('.scan-view .tag-panel'),
+        grid: __t.count('.scan-view .grid.imgs .card'),
+        lbOpen: !!document.querySelector('.lightbox'),
+        imgPath: __t.text('.lightbox .lb-path'),
+        pos: __t.text('.lightbox .lb-pos'),
+        hash: decodeURIComponent(location.hash),
+      }
+      document.querySelector('.lightbox .lb-close')?.click()
+      await new Promise(r => setTimeout(r, 500))
+      return out
+    `)
+    check('扫描里点标签: 路径返回只退一层(回到扫描夹图片)',
+      !scanBack.err && scanBack.tagPage === false && scanBack.grid > 0 && scanBack.hash === '#/scan',
+      scanBack.err || `${scanBack.hash} · 标签页=${scanBack.tagPage} · 图 ${scanBack.grid} 张`)
+    check('扫描里点标签: 返回回到光箱那一页(同一张图)',
+      scanBack.lbOpen === true && scanBack.imgPath === scanJump.imgPath && scanBack.pos === scanJump.pos,
+      `光箱=${scanBack.lbOpen} · ${scanBack.imgPath} · ${scanBack.pos} (原 ${scanJump.imgPath} · ${scanJump.pos})`)
 
     await cdp.eval(`location.hash = '#/'; await new Promise(r=>setTimeout(r,900)); return true`)
 
@@ -4176,7 +4551,7 @@ async function main() {
          上一段(9e)是停在"文件夹里"那一层的, 那一层**没有**添加框, 也没有文件夹卡,
          所以先退回列表层, 否则下面两处 waitFor 会一直等到超时。 */
       await cdp.eval(`
-        const back = document.querySelector('.scan-view .crumb .link')
+        const back = document.querySelector('[data-test="path-back"]')
         if (back) { back.click(); await new Promise((r) => setTimeout(r, 700)) }
         return true
       `)
@@ -4346,7 +4721,7 @@ async function main() {
       /* ScanView 在 KeepAlive 白名单里, 切回来会停在**离开时的层级** —— 先退回列表层,
          否则连"添加框"都找不到(这一步 11e 那段也踩过)。 */
       await cdp.eval(`
-        const back = document.querySelector('.scan-view .crumb .link')
+        const back = document.querySelector('[data-test="path-back"]')
         if (back) { back.click(); await new Promise((r) => setTimeout(r, 800)) }
         return true
       `)
@@ -4395,7 +4770,7 @@ async function main() {
 
     /* 换到一个**干净**的文件夹: 数字应整个消失 —— 这条才是"跟着来源变"的直接证据 */
     await cdp.eval(`
-      const back = document.querySelector('.scan-view .crumb .link')
+      const back = document.querySelector('[data-test="path-back"]')
       if (back) { back.click(); await new Promise((r) => setTimeout(r, 900)) }
       return true
     `)
@@ -4583,7 +4958,7 @@ async function main() {
       // ScanView 在 KeepAlive 白名单里: 切回来会停在离开时那一层。上一段(11f)停在
       // "文件夹里", 那一层没有添加框也没有文件夹卡 —— 先退回列表层。
       await cdp.eval(`
-        const back = document.querySelector('.scan-view .crumb .link')
+        const back = document.querySelector('[data-test="path-back"]')
         if (back) { back.click(); await new Promise((r) => setTimeout(r, 700)) }
         return true
       `)
