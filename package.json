@@ -1,7 +1,7 @@
 {
   "name": "tag-viewer-electron",
   "productName": "TagViewer",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "private": true,
   "description": "WD14 标签可视化看板 —— Electron + Vue 3 重构版",
   "type": "module",
