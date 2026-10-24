@@ -285,7 +285,7 @@ async function fetchOneFor(t) {
     })
     if (dl.error) continue
     const set = setCover({ kind: t.kind, key: t.key, path: dl.path })
-    if (set.error || set.ok === false) return { ok: false, error: set.error || '封面没写进 user_meta.json' }
+    if (set.error || set.ok === false) return { ok: false, error: set.error || '封面没写进 user_covers.json' }
     return { ok: true, path: dl.path, post_id: p.id }
   }
   return { ok: false, error: '前几张都没下载成功' }

@@ -172,6 +172,7 @@ export const USER_FILES = [
   'export_replace.txt',     // 替换规则
   'export_bg.txt',          // 背景补全规则
   'user_meta.json',         // 用户元数据(收藏/备注)
+  'user_covers.json',       // 自定义封面(值是本机图片绝对路径)
   'cart_history.json',      // 购物车结算历史
   'export_presets.json',    // 导出预设(自动导出用)
   'scan_folders.json',      // 扫描文件夹收藏夹(含本机路径)
@@ -242,6 +243,8 @@ export const DATA_ROUTE = Object.freeze({
   'character_library.json': { kind: 'knowledge' },
   // U 用户数据: 用户自己的积累, 绝不出机器
   'user_meta.json': { kind: 'user' },
+  // 自定义封面: 值是本机绝对路径, 必须留在本机(2026-10-24 从 user_meta.json 拆出)
+  'user_covers.json': { kind: 'user' },
   'cart_history.json': { kind: 'user' },
   // 导出预设(含目标目录这类本机路径) -> user/export_presets.json
   'export_presets.json': { kind: 'user' },

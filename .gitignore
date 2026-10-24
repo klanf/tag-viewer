@@ -18,8 +18,19 @@ logs/
 # 模板见 local.config.example.json
 local.config.json
 
+# 运行时用户目录（旧的 user/ + 数据目录路由后的 user/）：里面全是本机路径
+user/
+
+# 在线封面下载器的凭据（booru_auth.exe / booru_auth.json）—— 绝不入库
+booru_auth*
+
+# 引导安装器的构建产物（build-bootstrap.cjs 每次重新渲染；日志含本机绝对路径）
+tools/bootstrap-installer/build/
+
 # 绿色分发包产物（scripts/pack-green.mjs 的输出）
 release/
+# 打包时的临时输出目录（electron-builder -c.directories.output=releaseXXX）
+/release*/
 
 # 使用教程视频工程（Remotion）
 .video-tools/

@@ -845,7 +845,7 @@ export function setCover(raw = {}) {
   const r = patchUserMeta({ custom_covers: { [kind]: { [key]: pth } } })
   // 写盘失败必须原样带出去(2026-10-22): 原先只回 ok:false、没有 error 字段,
   // 而 IPC 的 safe() 只把 {error} 变成 reject —— 于是"封面没存上"在界面上是静默的。
-  if (r.ok === false) return { error: r.error || '写入 user_meta.json 失败' }
+  if (r.ok === false) return { error: r.error || '写入封面表失败' }
   // 带上 kind/key: 调用方(ipc.js)据此广播 cover:changed, 让各窗口刷新对的那一层
   return { ok: true, kind, key, path: pth, covers: r.meta?.custom_covers }
 }

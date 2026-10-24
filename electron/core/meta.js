@@ -9,6 +9,11 @@ import { dataFile } from './workspace.js'
 import { DEFAULT_CATEGORIES } from './dataset.js'
 
 const NAME = 'user_meta.json'
+/* 自定义封面单独一份(2026-10-24): 值是**本机图片的绝对路径**, 属于用户数据,
+ * 不能跟着 user_meta.json 一起随仓库分发 —— 之前混在里面, 开源时把 644 条
+ * 本机路径(含私有目录名)带进了 git 历史。现在走 DATA_ROUTE 落到 user/ 下,
+ * 不进仓库; 老文件里的 custom_covers 在首次加载时自动搬过来并从原文件删掉。 */
+const COVERS_NAME = 'user_covers.json'
 
 function defaults() {
   return {
@@ -18,6 +23,7 @@ function defaults() {
     custom_chars: {},
     // 自定义封面(2026-10-06): series[系列名] / chars[角色tag] -> 图片绝对路径。
     // 用户在系列页点卡片的 ⚙️ 从该系列/角色的图里挑的; 空段不占事。
+    // 运行时由 user_covers.json 合并进来(见 loadUserMeta), 不落 user_meta.json。
     custom_covers: { series: {}, chars: {} },
     /* 角色纠正层(2026-10-21) —— 用户的判断压过自动来源(括号自述 / 角色库推导):
      *   char_series: { [tag]: 系列 }   把角色挪到指定系列(空值 = 恢复自动)
@@ -64,37 +70,98 @@ function normCovers(raw) {
   return d
 }
 
+function buildMeta(raw, d) {
+  return {
+    categories: raw.categories && typeof raw.categories === 'object'
+      ? { ...d.categories, ...raw.categories } : d.categories,
+    custom_categories: Array.isArray(raw.custom_categories) ? raw.custom_categories : [],
+    hidden_categories: Array.isArray(raw.hidden_categories) ? raw.hidden_categories : [],
+    custom_chars: raw.custom_chars && typeof raw.custom_chars === 'object' ? raw.custom_chars : {},
+    custom_covers: d.custom_covers,
+    char_series: normTagMap(raw.char_series, { lowerValue: true }),
+    char_names: normTagMap(raw.char_names),
+    hidden_chars: normTagList(raw.hidden_chars),
+  }
+}
+
+/** 封面表: 没有文件返回 null(区别于"文件在但内容为空") */
+function loadCovers() {
+  try {
+    const p = dataFile(COVERS_NAME)
+    if (!fs.existsSync(p)) return null
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8'))
+    return normCovers(raw)
+  } catch {
+    return null
+  }
+}
+
+function saveCovers(covers) {
+  try {
+    const p = dataFile(COVERS_NAME)
+    fs.mkdirSync(path.dirname(p), { recursive: true })
+    fs.writeFileSync(p, JSON.stringify(normCovers(covers), null, 2), 'utf8')
+    return true
+  } catch (e) {
+    saveCovers.lastError = e?.message || String(e)
+    return false
+  }
+}
+saveCovers.lastError = ''
+
+function coversEmpty(c) {
+  return !Object.keys(c.series || {}).length && !Object.keys(c.chars || {}).length
+}
+
+/** 老 user_meta.json 里的 custom_covers 搬走 + 从原文件删掉(只删这一个键) */
+function migrateLegacyCovers(p, raw, covers) {
+  if (!coversEmpty(covers)) saveCovers(covers)
+  delete raw.custom_covers
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true })
+    fs.writeFileSync(p, JSON.stringify(raw, null, 2), 'utf8')
+  } catch {
+    // 删不掉就下次再试; 无论如何不再把这份路径写回 user_meta.json
+  }
+}
+
 export function loadUserMeta() {
   const p = dataFile(NAME)
   const d = defaults()
-  if (!fs.existsSync(p)) return d
-  try {
-    const raw = JSON.parse(fs.readFileSync(p, 'utf8'))
-    if (!raw || typeof raw !== 'object') return d
-    return {
-      categories: raw.categories && typeof raw.categories === 'object'
-        ? { ...d.categories, ...raw.categories } : d.categories,
-      custom_categories: Array.isArray(raw.custom_categories) ? raw.custom_categories : [],
-      hidden_categories: Array.isArray(raw.hidden_categories) ? raw.hidden_categories : [],
-      custom_chars: raw.custom_chars && typeof raw.custom_chars === 'object' ? raw.custom_chars : {},
-      custom_covers: normCovers(raw.custom_covers),
-      char_series: normTagMap(raw.char_series, { lowerValue: true }),
-      char_names: normTagMap(raw.char_names),
-      hidden_chars: normTagList(raw.hidden_chars),
+  let raw = null
+  if (fs.existsSync(p)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf8'))
+      if (parsed && typeof parsed === 'object') raw = parsed
+    } catch {
+      raw = null
     }
-  } catch {
-    return d
   }
+  if (!raw) return d
+
+  const covers = loadCovers()
+  if (covers) {
+    d.custom_covers = covers
+    if (Object.prototype.hasOwnProperty.call(raw, 'custom_covers')) migrateLegacyCovers(p, raw, covers)
+    return buildMeta(raw, d)
+  }
+  const legacy = normCovers(raw.custom_covers)
+  d.custom_covers = legacy
+  if (Object.prototype.hasOwnProperty.call(raw, 'custom_covers')) migrateLegacyCovers(p, raw, legacy)
+  return buildMeta(raw, d)
 }
 
 export function saveUserMeta(meta) {
   try {
     const p = dataFile(NAME)
+    // custom_covers 归 user_covers.json, 这里无论如何都不写回(否则本机路径又进 git)
+    const body = { ...meta }
+    delete body.custom_covers
     // 数据目录可能还没建(首次启动/换过 dataDir/沙箱测试): 直接 writeFile 是 ENOENT,
     // 而原来这里 catch 掉只 return false, 上层又把它当"存好了", 用户看到的就是
     // "点了没反应、也没报错"。先补目录、再把原因带出去。
     fs.mkdirSync(path.dirname(p), { recursive: true })
-    fs.writeFileSync(p, JSON.stringify(meta, null, 2), 'utf8')
+    fs.writeFileSync(p, JSON.stringify(body, null, 2), 'utf8')
     return true
   } catch (e) {
     saveUserMeta.lastError = e?.message || String(e)
@@ -138,7 +205,8 @@ export function patchUserMeta(body) {
     }
   }
   if (Array.isArray(body.hidden_chars)) meta.hidden_chars = normTagList(body.hidden_chars)
-  // 自定义封面: path 为空串 = 清除该条(恢复自动挑选)
+  // 自定义封面: path 为空串 = 清除该条(恢复自动挑选)。单独存 user_covers.json。
+  let coversError = ''
   if (body.custom_covers && typeof body.custom_covers === 'object') {
     for (const kind of ['series', 'chars']) {
       const sec = body.custom_covers[kind]
@@ -149,7 +217,8 @@ export function patchUserMeta(body) {
         else meta.custom_covers[kind][k] = clean
       }
     }
+    if (!saveCovers(meta.custom_covers)) coversError = `写入 user_covers.json 失败: ${saveCovers.lastError}`
   }
   const ok = saveUserMeta(meta)
-  return { meta, ok, error: ok ? '' : `写入 user_meta.json 失败: ${saveUserMeta.lastError}` }
+  return { meta, ok: ok && !coversError, error: coversError || (ok ? '' : `写入 user_meta.json 失败: ${saveUserMeta.lastError}`) }
 }
