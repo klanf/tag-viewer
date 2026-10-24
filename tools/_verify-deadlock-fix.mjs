@@ -1,10 +1,11 @@
 // 复现「另一台机器」死锁场景(修复后): folders=1 + tag_queue pending>0 + images=0
 // 期望: bootstrap 返回 phase='error' 且错误文案是新的「打标队列等待反推」版
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
-const DATA = '<local-path>'
-const IMGS = '<local-path>'
+const DATA = path.join(os.tmpdir(), 'tv-deadlock-fix')
+const IMGS = path.join(os.tmpdir(), 'tv-deadlock-fix-imgs')
 fs.rmSync(DATA, { recursive: true, force: true })
 fs.rmSync(IMGS, { recursive: true, force: true })
 fs.mkdirSync(DATA, { recursive: true })

@@ -30,8 +30,9 @@ from PIL import Image
 
 import tagger_serve as ts
 
-MODEL = r'<local-path>'
-CSV = r'<local-path>'
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL = os.path.join(ROOT, 'data', 'models', 'wd-pixai-tagger-v0.9.onnx')
+CSV = os.path.join(ROOT, 'data', 'models', 'wd-pixai-tagger-v0.9.csv')
 
 
 def make_images(n, w, h, d):

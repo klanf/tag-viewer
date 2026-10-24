@@ -1,10 +1,12 @@
 // 复现「绿色包新机首扫 0 入库」：全新数据目录 + 裸图 + 反推环境不可用
 // 运行: node --experimental-sqlite tools/_repro-fresh.mjs
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
-const DATA = '<local-path>'
-const IMGS = '<local-path>'
+const ROOT = path.resolve(import.meta.dirname, '..')
+const DATA = path.join(os.tmpdir(), 'tv-repro-data')
+const IMGS = path.join(os.tmpdir(), 'tv-repro-imgs')
 fs.rmSync(DATA, { recursive: true, force: true })
 fs.rmSync(IMGS, { recursive: true, force: true })
 fs.mkdirSync(DATA, { recursive: true })
@@ -12,7 +14,7 @@ fs.mkdirSync(IMGS, { recursive: true })
 process.env.TV_DATA_DIR = DATA
 if (process.argv.includes('--with-py')) {
   // 场景 B: 绿色包 v2.1.0 —— 包内自带 python + 模型, 反推应该真跑通
-  const PKG = '<local-path>'
+  const PKG = path.join(ROOT, 'release', 'TagViewer-绿色包-v2.1.0')
   process.env.TV_PYTHON = PKG + '/python/python.exe'
   process.env.TV_WD14_MODEL = PKG + '/models/wd-pixai-tagger-v0.9.onnx'
   process.env.TV_WD14_CSV = PKG + '/models/wd-pixai-tagger-v0.9.csv'
