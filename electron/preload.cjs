@@ -17,6 +17,7 @@ const CHANNELS = new Set([
   // 应用 / 数据集
   'app:status', 'app:reload', 'app:config', 'app:pickDataDir', 'app:openPath', 'app:revealPath',
   'app:ctxMenu', 'app:quickFolders', 'app:quickFolders:add', 'app:quickFolders:set',
+  'app:openWithApps', 'app:openWithApps:set', 'app:openWithApps:add',
   // 统计 / 搜索
   'stats:get', 'search:do',
   // 系列 / 角色

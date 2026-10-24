@@ -169,6 +169,8 @@ export const shell = {
 export class BrowserWindow {
   constructor(opts = {}) {
     this.opts = opts
+    /** 内容区尺寸(DIP)。右键菜单的落点要用它算, 见 ipc.js 的 clampMenuPos */
+    this.contentSize = opts.__contentSize || [1560, 980]
     this.webContents = {
       on() {}, once() {}, openDevTools() {},
       // 主进程 → 渲染层的推送在这里留痕, 测试才能断言"提示真的发出去了"
@@ -180,6 +182,7 @@ export class BrowserWindow {
   }
   static fromWebContents(wc) { return wc?.__win || null }
   static getAllWindows() { return ctl.windows }
+  getContentSize() { return this.contentSize }
   show() {} hide() {} focus() {} restore() {} close() {} destroy() {}
   isMinimized() { return false }
   isVisible() { return true }
@@ -193,13 +196,15 @@ export const Menu = {
   buildFromTemplate(template) {
     return {
       template,
-      popup({ callback } = {}) {
+      popup(opts = {}) {
+        // 落点要留痕: 「二级菜单飞到点不到的地方」那类问题只能靠断言 x/y 兜住
+        ctl.calls.push(['menu.popup', { x: opts.x, y: opts.y, hasWindow: !!opts.window }])
         try {
           if (typeof ctl.pick === 'function') ctl.pick(template)
         } finally {
           // 真实 Electron 里 callback 在菜单关闭时触发; 这里同步触发,
           // 让 handler 里 `await new Promise(resolve => popup({callback: resolve}))` 立即返回
-          if (typeof callback === 'function') callback()
+          if (typeof opts.callback === 'function') opts.callback()
         }
       },
       closePopup() {},

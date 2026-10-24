@@ -39,7 +39,8 @@ import { useTagFavStore } from '@/stores/useTagFavStore.js'
 import { useImageCtxMenu } from '@/composables/useImageCtxMenu.js'
 import { useTrash } from '@/composables/useTrash.js'
 import { useCharCart } from '@/composables/useCharCart.js'
-import { openTagInHost } from '@/composables/useTagHost.js'
+import { openTagInHost, openMetaInHost } from '@/composables/useTagHost.js'
+import { openSeriesInHost } from '@/composables/useSeriesHost.js'
 import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 import TvCopySplit from '../tag/TvCopySplit.vue'
 import TvQuickMoveBar from './TvQuickMoveBar.vue'
@@ -114,15 +115,28 @@ function metaJump(tag) {
   ui.copy(tag).then(() => ui.ok('📋 已复制 · 库内没有这个标签', 'info', 1600))
 }
 
-/** 「库内命中 n/m」徽章点击(2026-10-21 三版定稿): 跳命中图片页 /meta-hits。
+/** 「库内命中」徽章点击(2026-10-21 三版定稿, 2026-10-24 改就地叠层):
  *  v1 跳看板塞词条被否(任一命中=全库, 等于没筛); v2 用户澄清要**直接看
- *  命中的图片** —— 落 MetaHitsView, 按「与源图重合词条数」降序, 第一屏
- *  就是库里和这张最像的图。src 传当前图路径(query 传, 免 Windows 路径转义)。 */
+ *  命中的图片**; v3 按用户要求改成查重形式 —— 剔角色/机位 + 加权 Jaccard 打分。
+ *
+ *  落点与「点标签」同一套(2026-10-24 用户报「从扫描的叠层里点库内命中, 返回
+ *  直接回文件夹、路径全丢」): 看板/系列/扫描/独立标签页就地叠一层, 路径接在
+ *  当前层级后面(扫描 > 某个扫描夹 > breasts > 库内命中相似图), 返回只退一层并
+ *  把光箱恢复回这张图。收藏/详情/购物车没有叠层宿主, 才走 /meta-hits 路由
+ *  并写 rememberJump(回来时由独立页 takeJump 恢复光箱)。
+ *
+ *  徽章上**不写数字**(2026-10-24 用户: 词条数 65/67 和图数 19 对不上, 有歧义),
+ *  具体张数进页面看 —— 要等打分完(2 秒级)才知道, 挂在这里也拿不到。 */
 function jumpMetaHits() {
   const p = lb.path          // 先取路径: close() 会把 path 清空, 先关后读 src 永远是 ''(2026-10-21 踩)
   if (!metaHitCount.value || !p) return
+  const hostPage = ['home', 'series', 'scan', 'tag-images'].includes(route.name)
+  /* 就地叠层要在 close() 之前调: 宿主此刻同步快照光箱现场(与点标签同款) */
+  const inPlace = hostPage && openMetaInHost(route.name, p)
+  if (!inPlace) lb.rememberJump(`meta:${p}`)
   lb.close()
-  router.push({ name: 'meta-hits', query: { src: p } })
+  if (inPlace) return
+  router.push({ name: 'meta-hits', query: { src: p, from: route.name || '' } })
 }
 async function copyMetaPrompt() { await ui.copy(metaPrompt.value); ui.ok('✅ 已复制图内原始提示词') }
 async function copyMetaTags() {
@@ -188,6 +202,8 @@ watch(() => lb.visible, async (v) => {
 
 /**
  * 点标签 = 去该标签的图片**次级页**。
+ * (📂 系列药丸不走这里, 走下面的 gotoSeries —— 用户 2026-10-24 明确要的是"系列这边的页面":
+ *  点 blue_archive 看见的是这个系列的**角色列表**, 不是它的所有图。)
  *
  * 两种落点(2026-10-23):
  *   · 看板 / 系列 / 扫描 —— **就地翻开**, 不换路由、顶部 tab 不动, 层级接着当前上下文
@@ -207,7 +223,10 @@ watch(() => lb.visible, async (v) => {
 function gotoTag(tag, hit = false) {
   if (!tag) return
   const external = !!lb.data?.external
-  const hostPage = route.name === 'home' || route.name === 'series' || route.name === 'scan'
+  /* 这四处都登记了「就地叠层」宿主(useTagHost/useSeriesHost)。独立标签页 /tags/:tag
+     以前不在里面 —— 在它里面点系列药丸会被 router.push 换成系列 tab(2026-10-24 用户报
+     「点 tag 进图片、开光箱、选系列，还是会跳到系列的 tab」)，现在它也自己叠。 */
+  const hostPage = ['home', 'series', 'scan', 'tag-images'].includes(route.name)
   /* 就地开页要在 close() 之前调: 宿主此刻同步快照光箱现场(逐层各存一份)。
      没接住才记全局的跳转记忆 —— 同一份别被就地开页写成过期数据, 之后误拉起光箱。 */
   const openedInPlace = hostPage && openTagInHost(route.name, tag)
@@ -219,6 +238,27 @@ function gotoTag(tag, hit = false) {
   } else if (tagSet.value === 'meta' && !hit) {
     // meta 模式的标签来自作者原文, 未必是库里的规范化 tag —— 跳过去可能空列表
     ui.toast(`「${tag}」来自图内元数据 · 库里没有该标签时列表会是空的`, 'info', 2800)
+  }
+}
+
+/**
+ * 点📂系列药丸 = **就地叠一层该系列的角色列表**(2026-10-24 用户拍板):
+ * 「我要的就是系列这边的页面, 点击光箱的 blue_archive, 跳转的就是 blue_archive
+ *  的所有角色页面」—— 形态与 tag 页那套完全一样: 顶部 tab 不动、路径栏接一层、
+ * 左上角返回只退一层并回到刚才那张图。角色列表里点角色 = 再接一层该角色的图。
+ *
+ * 落点与 gotoTag 同理: 看板/系列/扫描/独立标签页有宿主 = 就地叠; 其它页(详情/收藏)
+ * 没人接 = 走 /series?series=xxx 直达。先让宿主快照光箱现场, 再 close。
+ */
+function gotoSeries(series) {
+  if (!series) return
+  const hostPage = ['home', 'series', 'scan', 'tag-images'].includes(route.name)
+  const openedInPlace = hostPage && openSeriesInHost(route.name, series)
+  lb.close()
+  if (openedInPlace) return
+  router.push({ name: 'series', query: { series: String(series) } })
+  if (lb.data?.external) {
+    ui.toast(`「${series}」· 这张图不在标签库中, 下面是库里这个系列的角色`, 'info', 2800)
   }
 }
 
@@ -491,14 +531,16 @@ function preheat() {
           <!-- 图内元数据模式 -->
           <template v-else-if="tagSet === 'meta'">
             <!-- 库内命中独立一行(2026-10-21 用户反馈: 挤在工具行里看不清):
-                 点徽章 = 打开命中图片页(按重合词条数排序) -->
+                 点徽章 = 就地叠一层相似图页(按相似度降序)。
+                 2026-10-24 用户: 词条数(65/67)和页面上的图片张数对不上、有歧义,
+                 所以徽章上不再写数字, 只写去向。 -->
             <div v-if="metaMode === 'cats' && metaHitCount" class="meta-hit-row">
               <button
                 class="meta-hit"
                 type="button"
-                :title="`剔掉角色/机位词后, 库内全含这些词条的图; 全命中没有时给重合最接近的`"
+                title="剔掉角色/机位词后, 按与这张图的相似度排序的库内图片"
                 @click="jumpMetaHits"
-              >库内命中 {{ metaHitCount }}/{{ metaTags.length }} →</button>
+              >库内命中相似图 →</button>
             </div>
             <TvTagList
               v-if="metaMode === 'cats' && metaTags.length"
@@ -564,9 +606,9 @@ function preheat() {
                   :zh="s.zh"
                   variant="series"
                   size="sm"
-                  action="filter"
+                  action="series"
                   copyable
-                  @click="gotoTag(s.tag)"
+                  @click="gotoSeries(s.tag)"
                   @copy="copyTag"
                   @mouseenter="ui.showTip(s.zh, $event)"
                   @mousemove="ui.moveTip($event)"

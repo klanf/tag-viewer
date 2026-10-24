@@ -25,6 +25,8 @@ const props = defineProps({
   favorited: { type: Boolean, default: false },
   /** 显示右下角来源角标(扫描页用) */
   showSource: { type: Boolean, default: false },
+  /** 相似度角标(0~1, 0 = 不渲染) —— 库内命中页用, 其他网格不传即无变化 */
+  sim: { type: Number, default: 0 },
   /** 标签展示方式: head=前 N 个 / keys=角色标签高亮 + 独有标签(扫描页) */
   tagMode: { type: String, default: 'head' },
   /** 标签中文映射(可选): keys 模式下有就显示中文, 没有回退英文原文 */
@@ -278,6 +280,11 @@ onBeforeUnmount(lpRelease)
     <span v-else class="tv-img gone-ph" :style="{ aspectRatio: fill ? 'auto' : ratio }" />
 
     <span v-if="showSource && srcBadge" class="src" :title="`图内元数据来源: ${srcBadge}`">{{ srcBadge }}</span>
+    <span
+      v-if="sim > 0"
+      class="sim"
+      :title="`与源图相似度 ${(sim * 100).toFixed(1)}%${item.simShared ? ` · 共享 ${item.simShared} 个词条` : ''}`"
+    >{{ (sim * 100).toFixed(1) }}%</span>
 
     <!-- 标签区 -->
     <div v-if="tagMode === 'keys'" class="tags keys">
@@ -412,6 +419,15 @@ onBeforeUnmount(lpRelease)
   white-space: nowrap; text-overflow: ellipsis;
 }
 .card.has-sel .src, .card.pickable .src { left: 36px; }
+
+/* 相似度角标(库内命中页): 与来源角标同位置, 但那一页不传 showSource, 不会撞 */
+.sim {
+  position: absolute; top: 6px; left: 6px; z-index: 4;
+  background: rgba(10, 13, 18, .82); color: var(--ok, #58c46a);
+  font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid rgba(88, 196, 106, .35);
+}
+.card.has-sel .sim, .card.pickable .sim { left: 36px; }
 
 .tags {
   font-size: 10px; color: var(--muted);

@@ -41,6 +41,42 @@ function isDir(p) {
   try { return fs.statSync(p).isDirectory() } catch { return false }
 }
 
+function isFile(p) {
+  try { return fs.statSync(p).isFile() } catch { return false }
+}
+
+/** 落库的封面还指着磁盘上真实存在的文件吗 */
+function coverAlive(p) {
+  return !!p && isFile(p)
+}
+
+/** 清掉某个夹的封面(只动登记表, 不碰磁盘) —— upsertFolder 刻意不写空值, 所以单独一条 */
+function clearFolderCover(db, id) {
+  db.prepare("UPDATE folders SET cover = '', cover_tags = '' WHERE id = ?").run(Number(id))
+}
+
+/**
+ * 移动 / 删除图片之后调用: 被搬走或删掉的正好是某个夹的封面时, 立刻把封面清掉,
+ * 卡片先显示默认占位, 不要等下一次列表刷新还去请求那张已经不存在的图。
+ *
+ * **不在这里重挑** —— 挑封面要用最新文件清单(scanFolder), 这里拿不到;
+ * 下一次进列表页的增量对账会重挑一张真实存在的(见 refreshScanStats)。
+ */
+export function clearCoversForPaths(paths = []) {
+  const set = new Set((paths || []).filter(Boolean)
+    .map((p) => normalizeImagePath(p).toLowerCase()))
+  if (!set.size) return 0
+  const db = openDb()
+  let n = 0
+  for (const r of db.prepare("SELECT id, cover FROM folders WHERE cover <> ''").all()) {
+    if (set.has(normalizeImagePath(r.cover).toLowerCase())) {
+      clearFolderCover(db, r.id)
+      n++
+    }
+  }
+  return n
+}
+
 /**
  * 规范化目录路径: 去首尾引号/空白, 转绝对路径, 统一分隔符, 去掉末尾斜杠。
  *
@@ -75,34 +111,51 @@ function statsOf(r) {
 }
 
 /**
+ * 封面候选排序: 有提示词的优先, 其中再挑最接近 3:4 的(卡片容器是 3/4,
+ * 横图会被 object-fit: cover 裁掉大半), 同分/无尺寸信息的保持枚举顺序。
+ */
+function coverCandidates(r, dims) {
+  const items = r.items || []
+  const withTags = items.filter((it) => it.tags && it.tags.length)
+  const pool = withTags.length ? withTags : items
+  if (!pool.length) return []
+  const out = []
+  if (dims && dims.size) {
+    const scored = []
+    pool.forEach((it, i) => {
+      const d = dims.get(normalizeImagePath(it.path))
+      if (!d || !(d.w > 0) || !(d.h > 0)) return
+      scored.push({ it, i, score: Math.abs(d.w / d.h - 0.75) })
+    })
+    scored.sort((a, b) => (a.score - b.score) || (a.i - b.i))
+    for (const s of scored) out.push(s.it)
+  }
+  if (!out.length) return pool.slice()
+  const seen = new Set(out)
+  for (const it of pool) if (!seen.has(it)) out.push(it)
+  return out
+}
+
+/**
  * 封面: 优先"有提示词的图里最接近 3:4 的那张"(竖图偏好, 2026-10-06), 没有尺寸
  * 信息时回落"有提示词的第一张", 否则第一张。返回整个 item —— 调用方要把
  * path 和它的标签快照(cover_tags)一起落库: 列表时用**当前**安全规则现算这张
  * 封面会不会被藏(只存算好的档位会在规则改动后失真)。
  *
- * 尺寸哪来: 扫描结果(scan.js 的 items)不带像素尺寸, 但扫描夹里已入库的图在
- * images 表有 px_w/px_h —— 调用方把 dimsMapFor(db, folderId) 的结果传进来,
- * 按**规范路径**对上。没入库/老库没尺寸列的条目不参与竞争, 行为与从前一致。
- * 判据与 query.js 的 coverIdx 同源(|w/h - 0.75| 最小, 同分取最早的), 卡片容器
- * 是 3/4, 横图封面会被 object-fit: cover 裁掉大半。
+ * aliveOnly(2026-10-24): 用户一直在删图/移图, 扫描缓存里的 items 可能还留着
+ * 已经不存在的文件 —— 逐个查磁盘, 挑第一张**真实存在**的。正常情况一次 stat;
+ * 病态情况(整夹被搬空)最多查 300 张就放弃, 返回 null 让调用方清空封面,
+ * 不能为了挑一张图在列表/对账里同步 stat 几千次。
  */
-function pickCover(r, dims) {
-  const items = r.items || []
-  const withTags = items.filter((it) => it.tags && it.tags.length)
-  const pool = withTags.length ? withTags : items
-  if (!pool.length) return null
-  if (dims && dims.size) {
-    let best = null
-    let bestScore = Infinity
-    for (const it of pool) {
-      const d = dims.get(normalizeImagePath(it.path))
-      if (!d || !(d.w > 0) || !(d.h > 0)) continue
-      const score = Math.abs(d.w / d.h - 0.75)
-      if (score < bestScore) { bestScore = score; best = it }
-    }
-    if (best) return best
+function pickCover(r, dims, { aliveOnly = false } = {}) {
+  const list = coverCandidates(r, dims)
+  if (!aliveOnly) return list[0] || null
+  let checked = 0
+  for (const it of list) {
+    if (isFile(it.path)) return it
+    if (++checked >= 300) break
   }
-  return pool[0]
+  return null
 }
 
 /** 某登记夹已入库图片的真实尺寸(规范路径 -> {w,h}), 供 pickCover 挑竖图用 */
@@ -124,11 +177,16 @@ const coverTagsJson = (cov) => JSON.stringify(cov?.tags || [])
  * 因为扫描页的模板与断言都在按这些名字取; 新字段(用途开关 / 入库图数)往后加。
  */
 function decorate(row, coverTagsOverride = null) {
+  // 封面是**扫描时写下的绝对路径** —— 用户一直在删图/移图, 它随时可能指向不存在的文件。
+  // 先在这里校验一次(一个夹一次 stat, 代价可忽略): 悬空就置空, 卡片显示默认占位,
+  // 而不是让 <img> 去请求一个 404、最后画成 ⚠。真正补一张新封面在后台增量对账里做
+  // (见 refreshScanStats), 那边才有最新文件清单。
+  let cover = row.cover || ''
+  if (cover && !coverAlive(cover)) cover = ''
   // 安全模式: 封面图若按**当前**档位会被藏, 就不给图(前端显示默认占位封面)。
   // 判定用落库时的标签快照现算 —— 规则/档位改了都跟得上。快照缺失的老记录
   // 用 coverTagsBackfill 现查的 images.tags 兜底(见下), 两头都没有(纯扫描夹,
   // 图没入库)才放行 —— 等重扫时 pickCover 会把快照落上。
-  let cover = row.cover || ''
   try {
     let tags = null
     if (cover && row.cover_tags) {
@@ -284,7 +342,7 @@ export async function addFolder(raw = {}, onProgress = null) {
 
   const r = await scanFolder({ path: p, recursive, force: true }, onProgress)
   if (r?.error) return { error: r.error }
-  const cov = pickCover(r, dimsMapFor(db, before?.id))
+  const cov = pickCover(r, dimsMapFor(db, before?.id), { aliveOnly: true })
 
   upsertFolder(db, {
     path: p,
@@ -300,6 +358,8 @@ export async function addFolder(raw = {}, onProgress = null) {
     cover: cov?.path || '',
     cover_tags: coverTagsJson(cov),
   })
+  // 重扫把夹扫空了 / 没有一张还能读 -> 旧封面(upsert 不写空值)要显式清掉
+  if (!cov && before?.id) clearFolderCover(db, before.id)
   const row = rowByPath(db, p)
   return { ok: true, added: !before, folder: decorate({ ...row, images: imagesOf(db, row.id) }), result: r }
 }
@@ -395,12 +455,13 @@ export async function rescanFolder(raw = {}, onProgress = null) {
     : !!rec.recursive
   const r = await scanFolder({ path: p, recursive, force: true }, onProgress)
   if (r?.error) return { error: r.error }
-  const cov = pickCover(r, dimsMapFor(db, rec.id))
+  const cov = pickCover(r, dimsMapFor(db, rec.id), { aliveOnly: true })
 
   upsertFolder(db, {
     path: p, recursive, last_scan_ms: Date.now(), stats: statsOf(r),
     cover: cov?.path || '', cover_tags: coverTagsJson(cov),
   })
+  if (!cov) clearFolderCover(db, rec.id)
   return { ok: true, folder: decorate({ ...rowByPath(db, p), images: imagesOf(db, rec.id) }), result: r }
 }
 
@@ -412,8 +473,12 @@ export async function rescanFolder(raw = {}, onProgress = null) {
  * 缓存条目是对的, 但**快照没人重写**, 卡片就一直停在旧数字, 必须手点重扫。
  *
  * 做法: 逐个扫描夹跑一遍**增量** scanFolder(枚举+stat 对账, 只解析新增/变动的文件,
- * 没变化的夹在 5 分钟 TTL 内直接秒回), 把最新统计写回 stats_json。不动封面 ——
- * 封面挑选用时且已有快照, 没必要每次都换。
+ * 没变化的夹在 5 分钟 TTL 内直接秒回), 把最新统计写回 stats_json。
+ *
+ * 封面(2026-10-24): 顺手检查落库的 cover 还指着不存在的文件(用户一直在删图/移图),
+ * 悬空就**从这次扫描的清单里重挑一张真实存在的**(竖图优先), 一张都没有就清空。
+ * 这是用户报"封面加载不出来"的补丁 —— 预览卡片再也不会挂着 404 的旧路径。
+ * 封面本来有效时不换, 避免每次对账都换一张脸。
  *
  * 也不写 last_scan_ms(2026-10-20): 列表按「最近扫的在前」排序, last_scan 是
  * **用户动作**(打开/重扫/添加)的时间语义 —— 后台对账如果碰它, 每夹对账完
@@ -430,19 +495,23 @@ export async function refreshScanStats(onProgress = null, opts = {}) {
   try {
     const db = openDb()
     const only = Array.isArray(opts.only) && opts.only.length ? opts.only : null
-    const rows = db.prepare('SELECT path, recursive FROM folders WHERE as_scan = 1 ORDER BY id').all()
+    const rows = db.prepare('SELECT id, path, recursive, cover FROM folders WHERE as_scan = 1 ORDER BY id').all()
       .filter((rec) => !only || only.some((p) => normalizeImagePath(p) === rec.path))
     let done = 0
     for (const rec of rows) {
       try {
         const r = await scanFolder({ path: rec.path, recursive: !!rec.recursive }, null)
         if (!r?.error) {
+          const needCover = !coverAlive(rec.cover)
+          const cov = needCover ? pickCover(r, dimsMapFor(db, rec.id), { aliveOnly: true }) : null
           upsertFolder(db, {
             path: rec.path,
             recursive: !!rec.recursive,
             // 不带 last_scan_ms —— 见函数注释, 对账不参与排序语义
             stats: statsOf(r),
+            ...(cov ? { cover: cov.path, cover_tags: coverTagsJson(cov) } : {}),
           })
+          if (needCover && !cov) clearFolderCover(db, rec.id)
         }
       } catch { /* 单个夹失败不影响其余 */ }
       done++
@@ -475,13 +544,17 @@ export async function openFolder(raw = {}, onProgress = null, opts = {}) {
 
   const writeStats = (result) => {
     if (!rec) return
-    const cov = rec.cover ? null : pickCover(result, dimsMapFor(db, rec.id))
+    /* 封面只在"还没有/已经悬空"时补一张 —— 用户删移过图后旧路径会指向不存在的文件,
+       这时候要重新挑(且只挑磁盘上真实存在的), 不能因为 rec.cover 非空就一直留着坏图。 */
+    const needCover = !coverAlive(rec.cover)
+    const cov = needCover ? pickCover(result, dimsMapFor(db, rec.id), { aliveOnly: true }) : null
     upsertFolder(db, {
       path: p,
       last_scan_ms: Date.now(),
       stats: statsOf(result),
       ...(cov ? { cover: cov.path || '', cover_tags: coverTagsJson(cov) } : {}),
     })
+    if (needCover && !cov) clearFolderCover(db, rec.id)
   }
   const onFinal = opts.onFinal
     ? (out) => { try { writeStats(out) } catch { /* 统计写库失败不影响前端 */ } opts.onFinal(out) }

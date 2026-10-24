@@ -36,11 +36,16 @@ export function useImageCtxMenu() {
         tags: Array.isArray(ctx.tags) && ctx.tags.length ? ctx.tags.join(', ') : '',
         favable: !!ctx.favable,
         favorited: !!ctx.favorited,
+        // 鼠标在页面里的坐标(DIP)。主进程拿它算菜单落点: 二级菜单是往右飞的,
+        // 只按系统默认的"弹在鼠标上"来放, 靠屏幕右边右键时二级菜单会飞到点不到
+        // 的区域(2026-10-23 用户反馈「移动到/复制到 点了没反应、选不中」)。
+        x: e.clientX,
+        y: e.clientY,
       })
       const action = r?.action
       if (action === 'toggle-fav') {
         const added = fav.toggle(ctx.path, Array.isArray(ctx.tags) ? ctx.tags : [], ctx)
-        ui.ok(added ? '★ 已收藏' : '已取消收藏', 'ok', 1200)
+        ui.ok(added ? '★ 已收藏' : '已取消收藏', 1200)
       } else if (action === 'trash') {
         // 删除到回收站: 确认弹窗(useTrash)负责, 删完 'tv:trashed' 事件通知各视图
         await trash.request([ctx.path])
@@ -49,7 +54,7 @@ export function useImageCtxMenu() {
         // 收藏**改写**到新位置(原来这里是把记录摘掉 —— 用户每次移动都丢收藏, 2026-09-19 修);
         // 广播 'tv:moved' 让各视图把图从列表里剔除
         const dest = r.result?.name || ''
-        ui.ok(`📤 已移动到 ${dest}`, 'ok', 2400)
+        ui.ok(`📤 已移动到 ${dest}`, 2400)
         fav.onMoved(ctx.path, r.result?.dest || '')
         window.dispatchEvent(new CustomEvent('tv:moved', {
           detail: { paths: [ctx.path], dest: r.result?.dest || '' },
@@ -57,7 +62,7 @@ export function useImageCtxMenu() {
       } else if (action === 'move-failed') {
         ui.err('移动失败: ' + (r.result?.error || '未知原因'), 3600)
       } else if (action === 'quick-added') {
-        ui.ok(`已保存预设文件夹: ${r.result?.name || ''}`, 'ok', 2400)
+        ui.ok(`已保存预设文件夹: ${r.result?.name || ''}`, 2400)
       } else if (action === 'quick-exists') {
         ui.err(r.result?.error || '文件夹已在预设里', 2400)
       } else if (action === 'copy-image') {
@@ -67,13 +72,13 @@ export function useImageCtxMenu() {
         const res = r.result || {}
         if (res.ok) {
           const secs = res.totalMs >= 1000 ? `（${(res.totalMs / 1000).toFixed(1)}s）` : ''
-          ui.ok(`📋 已复制图像 ${res.width}×${res.height}${secs}`, 'ok', 2400)
+          ui.ok(`📋 已复制图像 ${res.width}×${res.height}${secs}`, 2400)
         } else {
           ui.err('复制图像失败: ' + (res.error || '未知原因'), 4600)
         }
       } else if (action === 'copied') {
         // 复制到(2026-10-16 新增): 原文件不动, 副本落在新位置 —— 不剔除卡片、不广播
-        ui.ok(`📋 已复制到 ${r.result?.name || ''}`, 'ok', 2400)
+        ui.ok(`📋 已复制到 ${r.result?.name || ''}`, 2400)
       } else if (action === 'copy-failed') {
         ui.err('复制失败: ' + (r.result?.error || '未知原因'), 3600)
       } else if (action === 'open-with') {
@@ -83,7 +88,8 @@ export function useImageCtxMenu() {
         if (!r.result?.ok) {
           ui.err(r.result?.error || '调不出「打开方式」', 3600)
         } else if (r.result?.exe) {
-          ui.ok(`已用 ${r.result.exe.split(/[\\/]/).pop().replace(/\.exe$/i, '')} 打开`, 'ok', 1800)
+          const nm = r.result.exe.split(/[\\/]/).pop().replace(/\.exe$/i, '')
+          ui.ok(`已用 ${nm} 打开${r.result.added ? ` · 已加进列表(设置 > 外部程序 可删除/排序)` : ''}`, r.result.added ? 3200 : 1800)
         }
       }
     } catch (err) {

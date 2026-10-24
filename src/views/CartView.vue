@@ -3,7 +3,7 @@
  * 角色购物车(独立页) —— 原 cart.html
  * ================================
  * 数据与动作全在 useCartStore 里, 这一页只是它的一个"铺开"视图。
- * 结算弹窗 / 历史弹窗与抽屉里的是**同一个组件**, 不再有两份逻辑。
+ * 存为清单 / 我的清单弹窗与抽屉里的是**同一个组件**, 不再有两份逻辑。
  */
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
@@ -22,7 +22,6 @@ import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { api } from '@/utils/api.js'
 import { stripZhSeries } from '@/utils/format.js'
 import { useCartPresetBadge } from '@/composables/useCartPresetBadge.js'
-import TvReplaceSetPicker from '@/components/export/TvReplaceSetPicker.vue'
 
 const cart = useCartStore()
 const ui = useUiStore()
@@ -108,7 +107,7 @@ async function exportAll() {
     const r = await cart.exportFile(true)
     if (r?.canceled) { ui.toast('已取消导出', 'info'); return }
     if (r?.error) { ui.err(r.error); return }
-    ui.ok(`✅ 已导出 ${r.count} 个角色(wildcard) → ${r.path}`, 3000)
+    ui.ok(`✅ 已导出 ${r.count} 行 wildcard → ${r.path}`, 3000)
   } finally {
     busy.value = false
   }
@@ -141,17 +140,36 @@ async function reveal(it) {
 <template>
   <div class="cart-view">
     <div class="panel head">
-      <div class="ttl">
-        🛒 角色购物车
-        <span class="sub">从各系列收集的角色, 可随时删除; 导出为 wildcard 随机抽角色</span>
+      <div class="lead">
+        <div class="ttl">
+          🛒 角色购物车
+          <span class="sub">攒不同系列的角色, 可随时删除</span>
+        </div>
+        <div class="hint">
+          <b>⬇ 导出 txt</b> = 一行一个角色的 wildcard, 给 ComfyUI 抽卡;
+          <b>💾 存为清单</b> = 把当前选角存下来, 之后在「我的清单」里切回来
+        </div>
       </div>
       <span class="spacer" />
       <TvSafetyToggle />
-      <TvButton variant="secondary" @click="router.push('/series')">← 回系列浏览</TvButton>
-      <TvReplaceSetPicker v-model="cart.replaceSet" />
-      <TvButton variant="success" :loading="busy" :disabled="!cart.count" @click="exportAll">⬇ 导出全部</TvButton>
-      <TvButton variant="warn" :disabled="!cart.count" @click="showCheckout = true">💳 结算</TvButton>
-      <TvButton variant="primary" @click="showHistory = true">🕘 历史记录</TvButton>
+      <TvButton
+        variant="success"
+        :loading="busy"
+        :disabled="!cart.count"
+        title="导出成 wildcard txt: 每行一个角色, 给 ComfyUI 抽卡"
+        @click="exportAll"
+      >⬇ 导出 txt</TvButton>
+      <TvButton
+        variant="primary"
+        :disabled="!cart.count"
+        title="把当前购物车存成一份清单, 之后可载入切换; 可顺便导出一份 txt"
+        @click="showCheckout = true"
+      >💾 存为清单</TvButton>
+      <TvButton
+        variant="secondary"
+        title="载入 / 重命名 / 删除之前存的清单"
+        @click="showHistory = true"
+      >📁 我的清单</TvButton>
       <!-- 购物车这份是**独立于「导出预设」的一份预设**(只有一个, 不需要筛选快照):
            有更新就按延迟自动覆盖导一份到指定目录 —— 省掉每次「另存为」挑目录 -->
       <TvButton variant="secondary" :title="presetTitle()" @click="showPreset = true">
@@ -220,8 +238,11 @@ async function reveal(it) {
   overflow: hidden;
 }
 .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 14px; flex: 0 0 auto; }
+.lead { min-width: 0; }
 .ttl { font-size: 15px; font-weight: 600; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .sub { font-size: 11px; color: var(--muted); font-weight: 400; }
+.hint { font-size: 11px; color: var(--faint); margin-top: 3px; line-height: 1.6; }
+.hint b { color: var(--muted); font-weight: 600; }
 
 .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; }
 .count-row {

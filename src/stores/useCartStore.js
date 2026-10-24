@@ -46,28 +46,60 @@ export const useCartStore = defineStore('cart', () => {
   /** 按加入时间倒序(旧数据没有 t 字段的排最后) */
   const ordered = computed(() => [...list.value].sort((a, b) => (b.t || 0) - (a.t || 0)))
 
-  watch(items, () => {
-    writeLS(LS.cart.key, JSON.stringify(items.value))
-    /**
-     * 上报主进程 —— 「购物车有更新就自动导出一份」的预设靠这个触发。
-     * ============================================================
-     * 挂在这里(而不是各个界面上)是刻意的: 购物车有六个改动入口 —— 标签详情页的
-     * 「角色」区 pill、光箱 pill、系列页卡片/批量加入、购物车页与抽屉的删除清空、
-     * 结算后自动清空、历史载入整体替换。挂 store 一次全覆盖, 以后加新入口也不会漏。
-     *
-     * **条目整包上报**(tag + extra): 2026-10-01 起条目可以带附加标签,
-     * 附加变了导出的行文本就变了, 指纹和自动导出都必须跟着走 —— 只报 tag 会漏。
-     *
-     * 顺序 = list 的顺序(Object.values 的插入序), 与「导出全部」写文件时一字不差 ——
-     * 主进程拿这个顺序算指纹, 所以"移出再放回来"也算内容变了(文件行序真的变了)。
-     *
-     * 上报是**附带动作**: 失败(比如正在退出、浏览器降级)只吞掉, 绝不影响购物车本身。
-     */
+  /** 内容指纹(角色 + 附加标签, 顺序敏感) —— 只用来判断"当前购物车还是不是那份清单" */
+  function contentFp(obj = items.value) {
+    return Object.values(obj || {}).map((c) => (
+      `${String(c.tag)}\u001f${(Array.isArray(c.extra) ? c.extra : []).join('\u001f')}`
+    )).join('\n')
+  }
+
+  /** 当前购物车对应哪份清单(「我的清单」里显示「当前」角标; 内容一改就取消) */
+  const activeList = ref('')
+  let activeFp = ''
+  try {
+    const o = JSON.parse(readLS(LS.cartActiveList.key) || 'null')
+    if (o?.name && o.fp && o.fp === contentFp()) { activeList.value = o.name; activeFp = o.fp }
+  } catch { /* 坏数据当没有 */ }
+  function setActiveList(name) {
+    const n = String(name || '').trim()
+    activeList.value = n
+    activeFp = n ? contentFp() : ''
+    writeLS(LS.cartActiveList.key, n ? JSON.stringify({ name: n, fp: activeFp }) : '')
+  }
+
+  /**
+   * 上报主进程 —— 「购物车有更新就自动导出一份」的预设靠这个触发。
+   * ============================================================
+   * 挂在这里(而不是各个界面上)是刻意的: 购物车有六个改动入口 —— 标签详情页的
+   * 「角色」区 pill、光箱 pill、系列页卡片/批量加入、购物车页与抽屉的删除清空、
+   * 存为清单后自动清空、清单载入整体替换。挂 store 一次全覆盖, 以后加新入口也不会漏。
+   *
+   * **条目整包上报**(tag + extra): 2026-10-01 起条目可以带附加标签,
+   * 附加变了导出的行文本就变了, 指纹和自动导出都必须跟着走 —— 只报 tag 会漏。
+   *
+   * 顺序 = list 的顺序(Object.values 的插入序), 与「导出 txt」写文件时一字不差 ——
+   * 主进程拿这个顺序算指纹, 所以"移出再放回来"也算内容变了(文件行序真的变了)。
+   *
+   * 上报是**附带动作**: 失败(比如正在退出、浏览器降级)只吞掉, 绝不影响购物车本身。
+   */
+  function reportCart() {
     api.cartChanged(Object.values(items.value).map((c) => ({
       tag: c.tag,
       extra: Array.isArray(c.extra) ? c.extra : [],
     }))).catch(() => {})
+  }
+
+  watch(items, () => {
+    writeLS(LS.cart.key, JSON.stringify(items.value))
+    // 内容一变就和清单对不上了 —— 「当前」角标不能继续挂着
+    if (activeList.value && contentFp() !== activeFp) setActiveList('')
+    reportCart()
   }, { deep: true })
+
+  /* 开窗先报一次(2026-10-24): 主进程的 lastTags 只在"改过购物车"之后才填 ——
+     不报的话自动导出面板会把一车角色显示成「购物车是空的」, 打开开关也不会
+     立刻导一份(saveCartPreset 只在 lastTags 非空时导)。 */
+  reportCart()
 
   function has(tag) { return !!items.value[tag] }
   function add(c, series) {
@@ -131,35 +163,40 @@ export const useCartStore = defineStore('cart', () => {
   }
 
   /** 导出 wildcard; save=true 时走原生「另存为」。条目整包传(tag+extra), 附加标签跟行走 */
-  /* 角色表用哪套替换规则(2026-10-04 规则组)。localStorage 记忆, 跟看板/预设
-     各选各的 —— 三处是三个独立场景, 用同一套反而不一定对。 */
-  const replaceSet = ref(readLS(LS.cartReplaceSet.key, ''))
-  watch(replaceSet, (v) => writeLS(LS.cartReplaceSet.key, String(v || '')))
-
   async function exportFile(save = true) {
     const entries = list.value.map((c) => ({ tag: c.tag, extra: Array.isArray(c.extra) ? c.extra : [] }))
     if (!entries.length) return { error: '购物车是空的' }
-    return api.exportCart(entries, { save, replace_set: replaceSet.value })
+    return api.exportCart(entries, { save })
   }
 
-  /** 结算: 导出 -> 存历史 -> 清空 */
-  async function checkout(name) {
+  /**
+   * 存为清单(2026-10-24, 原「结算」): [可选导出 wildcard] -> 存清单 -> [可选清空购物车]。
+   * 三件事都能单独关 —— 用户可能只想存下来换着用, 也可能只想导文件不动清单。
+   * 存清单本身不碰文件, 所以「导出」取消时**整件事中止**(清单也不存): 用户刚点了取消,
+   * 不该在背后留下一份"他以为没存"的清单。
+   */
+  async function saveList(name, { exportFile: doExport = true, clear: doClear = true } = {}) {
     const n = String(name || '').trim()
-    if (!n) return { error: '请填写历史记录名称' }
+    if (!n) return { error: '请填写清单名称' }
     if (!list.value.length) return { error: '购物车是空的' }
 
-    const ex = await api.exportCart(
-      list.value.map((c) => ({ tag: c.tag, extra: Array.isArray(c.extra) ? c.extra : [] })),
-      { save: true, replace_set: replaceSet.value })
-    if (ex?.canceled) return { canceled: true }
-    if (ex?.error) return { error: ex.error }
+    let exported = ''
+    if (doExport) {
+      const ex = await api.exportCart(
+        list.value.map((c) => ({ tag: c.tag, extra: Array.isArray(c.extra) ? c.extra : [] })),
+        { save: true })
+      if (ex?.canceled) return { canceled: true }
+      if (ex?.error) return { error: ex.error }
+      exported = ex?.path || ''
+    }
 
+    const cnt = list.value.length
     const r = await api.cartSave(n, JSON.parse(JSON.stringify(items.value)))
     if (r?.error) return { error: r.error }
 
-    const cnt = list.value.length
-    clear()
-    return { ok: true, count: cnt, exported: ex?.path || '' }
+    setActiveList(n)
+    if (doClear) clear()
+    return { ok: true, count: cnt, exported, cleared: doClear }
   }
 
   /**
@@ -182,6 +219,6 @@ export const useCartStore = defineStore('cart', () => {
   return {
     items, list, ordered, count, keys, drawerOpen,
     has, add, remove, setExtra, setThumb, clearThumb, wildcardLine, toggle, replaceAll, clear, addMany,
-    exportFile, checkout, replaceSet,
+    exportFile, saveList, activeList, setActiveList,
   }
 })

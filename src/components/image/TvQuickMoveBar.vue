@@ -193,7 +193,7 @@ async function moveTo(f) {
     const r = await api.moveImages([from], f.path)
     if (r?.ok) {
       const m = r.moved?.[0]
-      ui.ok(`📤 已移动到 ${m?.name || f.name}`, 'ok', 1800)
+      ui.ok(`📤 已移动到 ${m?.name || f.name}`, 1800)
       // 收藏跟着挪到新位置(同右键移动的口径); 广播让各视图剔除 + 光箱前进
       fav.onMoved(from, m?.to || '')
       window.dispatchEvent(new CustomEvent('tv:moved', {
@@ -264,7 +264,7 @@ async function saveMgr() {
     if (r?.ok) {
       folders.value = r.quickFolders || []
       showMgr.value = false
-      ui.ok('已保存快速移动路径', 'ok', 1600)
+      ui.ok('已保存快速移动路径', 1600)
     } else {
       ui.err('保存失败: ' + (r?.error || '未知原因'), 3200)
     }

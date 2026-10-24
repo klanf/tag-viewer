@@ -53,8 +53,8 @@ export const LS = Object.freeze({
    * 在首页搜过的词会跑到扫描页的下拉里, 而在扫描页筛过的标签名又会污染首页历史。
    */
   searchHistoryScan: { key: 'tv_search_hist_scan' },
-  /** 购物车/角色表导出用哪套替换规则(2026-10-04 规则组); 空 = 默认组 */
-  cartReplaceSet: { key: 'tv_cart_replace_set' },
+  /** 当前购物车对应哪份清单(2026-10-24) —— JSON {name, fp}, 内容一变就不算"当前" */
+  cartActiveList: { key: 'tv_cart_active_list' },
   /** 标签页「隐藏已ban」开关(2026-10-06) —— 默认开('1'), 读到 '0' 才显示已 ban 词条 */
   tagsHideBanned: { key: 'tv_tags_hide_banned' },
   /** 系列页「显示无本地图的角色」开关(2026-10-06) —— 默认隐藏('0'), 开('1')才显示 0 图角色 */

@@ -258,6 +258,11 @@ export const api = {
   addQuickFolder: (path) => call('app:quickFolders:add', { path }),
   saveQuickFolders: (folders) => call('app:quickFolders:set', { folders }),
 
+  // 外部程序清单(右键「用其他程序打开」): 同一份 settings.json, 设置页里删除/排序
+  openWithApps: () => call('app:openWithApps'),
+  saveOpenWithApps: (apps) => call('app:openWithApps:set', { apps }),
+  addOpenWithApp: () => call('app:openWithApps:add'),
+
   // 文件夹登记表 —— 扫描夹与看板来源**共用一份**(真源是 tags.db 的 folders 表)。
   // folders(opts) 的 usage: 'scan'(默认, 扫描页) / 'source'(看板来源) / 'all'(全部登记过的)
   folders: (opts) => call('folders:list', opts),

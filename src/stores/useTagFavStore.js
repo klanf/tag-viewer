@@ -48,7 +48,7 @@ export const useTagFavStore = defineStore('tagFav', () => {
     }
     favs.value = new Set(favs.value)
     save()
-    ui.ok(added ? `★ 已收藏标签: ${tag}` : `已取消收藏标签: ${tag}`, 'ok', 1400)
+    ui.ok(added ? `★ 已收藏标签: ${tag}` : `已取消收藏标签: ${tag}`, 1400)
     return added
   }
 

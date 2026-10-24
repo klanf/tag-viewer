@@ -60,6 +60,6 @@ if (entries.length) {
 
 console.log('\n== 站点 4: getMetaSimilar 整链 ==')
 const t0 = Date.now()
-const r = getMetaSimilar({ path: srcPath, offset: 0, limit: 10 })
-console.log(`${Date.now() - t0}ms | total=${r.total} | hitTags=${r.hitTags?.length} | metaCount=${r.metaCount} | maxHits=${r.maxHits}`)
+const r = getMetaSimilar({ path: srcPath, offset: 0, limit: 10, threshold: 0 })
+console.log(`${Date.now() - t0}ms | total=${r.total} | candTotal=${r.candTotal} | hitTags=${r.hitTags?.length} | metaCount=${r.metaCount} | maxScore=${r.maxScore}`)
 if (r.error) console.log('error:', r.error)

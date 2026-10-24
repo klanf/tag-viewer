@@ -61,7 +61,7 @@ import {
 import { orphanStats, requeueOrphans } from './core/orphans.js'
 import {
   listFolders, addFolder, removeFolder, updateFolder, rescanFolder, openFolder, pruneMissing,
-  purgeFolder, exportFoldersJson, refreshScanStats,
+  purgeFolder, exportFoldersJson, refreshScanStats, clearCoversForPaths,
 } from './core/folders.js'
 import { thumbStats, clearThumbs, thumbCacheSize } from './core/thumbs.js'
 import {
@@ -184,27 +184,57 @@ function pushOpenWithFail(r) {
   mainWindow()?.webContents.send('app:toast', { text, tone: 'err', dur: 5000 })
 }
 
-/** 「用其他程序打开」的预置 + 最近使用合并清单(供二级菜单渲染) */
-function openWithPresets() {
+/**
+ * 「用其他程序打开」的清单(2026-10-24 改成**用户自己管的一份持久列表**)。
+ *
+ * 以前是「预置(PS 自动探测 / Inpaint 固定路径) + 最近使用(MRU)」每次现拼, 结果是
+ * 用户既删不掉探测不到的 Photoshop 占位项、也没法把常用的第三个程序固定下来。
+ * 现在: 列表存在 settings.openWithApps, 右键菜单只渲染它, 设置页里增删排序。
+ *
+ * 首次读取时把老配置(探测到的 PS + Inpaint + recentOpenWith)一次性迁成列表落盘,
+ * 之后不再自动探测 —— 想要 PS 就在设置里加。
+ */
+function cleanOpenWithApps(list) {
+  const seen = new Set()
   const out = []
-  const ps = detectPhotoshop()
-  if (ps) out.push({ name: 'Photoshop', path: ps })
-  if (fs.existsSync(INPAINT_EXE)) out.push({ name: 'Inpaint', path: INPAINT_EXE })
-  // PS 没探测到时给一句说明(不然用户会以为"菜单漏了这一项")
-  if (!ps) out.push({ name: 'Photoshop', path: '', missing: '未找到 Photoshop' })
-  const recents = Array.isArray(getSettings().recentOpenWith) ? getSettings().recentOpenWith : []
-  for (const r of recents) {
-    if (!out.some((x) => x.path.toLowerCase() === r.path.toLowerCase())) out.push({ name: r.name, path: r.path })
+  for (const a of (Array.isArray(list) ? list : [])) {
+    if (!a || typeof a.path !== 'string' || !a.path) continue
+    let clean
+    try { clean = path.resolve(a.path) } catch { continue }
+    const key = clean.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ name: String(a.name || '').trim() || path.basename(clean, '.exe') || clean, path: clean })
+    if (out.length >= 20) break
   }
   return out
 }
 
-/** 用过的外部程序记进 MRU(去重、置顶、留 6 个), 下次二级菜单排前面 */
-function recordRecentOpenWith(exe) {
-  const clean = path.resolve(exe)
-  const cur = Array.isArray(getSettings().recentOpenWith) ? getSettings().recentOpenWith : []
-  const rest = cur.filter((a) => a.path.toLowerCase() !== clean.toLowerCase())
-  saveSettings({ recentOpenWith: [{ name: path.basename(clean, '.exe'), path: clean }, ...rest] })
+function openWithList() {
+  const cur = getSettings().openWithApps
+  if (Array.isArray(cur)) return cur
+  const seed = []
+  const ps = detectPhotoshop()
+  if (ps) seed.push({ name: 'Photoshop', path: ps })
+  if (fs.existsSync(INPAINT_EXE)) seed.push({ name: 'Inpaint', path: INPAINT_EXE })
+  for (const r of (Array.isArray(getSettings().recentOpenWith) ? getSettings().recentOpenWith : [])) {
+    seed.push({ name: r?.name, path: r?.path })
+  }
+  const list = cleanOpenWithApps(seed)
+  saveSettings({ openWithApps: list })
+  return list
+}
+
+/** 加进列表(按路径去重、追加在末尾、上限 20); 返回清洗后的整表 */
+function addOpenWithApp(exe) {
+  const list = cleanOpenWithApps([...openWithList(), { name: path.basename(String(exe), '.exe'), path: exe }])
+  saveSettings({ openWithApps: list })
+  return list
+}
+
+/** 带"文件还在不在"的清单(设置页要标出来, 右键菜单只渲染存在的) */
+function openWithListWithState() {
+  return openWithList().map((a) => ({ ...a, exists: fs.existsSync(a.path) }))
 }
 
 
@@ -300,6 +330,60 @@ function kickAutoSync(folder, onIngestDone) {
   return { wanted: true, started: true, reason: '' }
 }
 
+/**
+ * 菜单宽度只能按字符数估 —— Electron 不提供量取接口。
+ * ====================================================
+ * 标定来自本机实测(2026-10-23): 同一套模板弹出来后
+ *   · 一级菜单(最长标签「🖼️ 复制图片到剪贴板」)= 237 DIP 宽
+ *   · 二级菜单(最长标签是「Photoshop + 完整安装路径」那种 80 字符长串)= 585 DIP 宽
+ * 按「半角 9 / 全角 16 + 45 内边距」估出来是 555, 与实测差 5% —— 所以再乘 1.1 留余量。
+ * 估不准不要紧: 这个宽度只用来决定"整张菜单往左挪多少", 多让几个像素不影响可用性。
+ */
+const CHAR_HALF = 9
+const CHAR_FULL = 16
+const MENU_PAD = 45
+function estMenuWidthPx(labels) {
+  let max = 0
+  for (const l of labels) {
+    let w = MENU_PAD
+    for (const ch of String(l || '')) w += ch.codePointAt(0) > 0x2e7f ? CHAR_FULL : CHAR_HALF
+    if (w > max) max = w
+  }
+  return Math.ceil(max * 1.1)
+}
+
+/**
+ * 原生菜单的落点要自己算, 不能全交给系统。
+ * ==========================================
+ * popup 不带坐标 = 弹在当前鼠标点上, 而**二级菜单是往右飞的**: 标签里塞了完整路径之后,
+ * 一级 + 二级加起来要 800 多 DIP 才放得下。副屏只有 1067 DIP 宽, 窗口靠右一点、
+ * 在网格最右侧右键一张图, 二级菜单就飞到点不到的地方了 —— 观感正是 2026-10-23 反馈的
+ * 「移动到 / 复制到 / 用其他程序打开 点了没反应、选不中」(顶层项照样能点,
+ * 因为一级菜单本身还在屏幕里)。
+ *
+ * 所以这里把落点往左收: 保证「一级宽度 + 最宽的那个二级宽度」整块落在窗口内。
+ * x/y 的坐标原点与渲染层的 clientX/clientY 是同一套(窗口内容区, DIP), 直接拿来用;
+ * 没带坐标的调用方保持原样(不设 x/y, 让系统按鼠标位置弹)。
+ */
+function clampMenuPos(win, template, point) {
+  const x = Number(point?.x)
+  const y = Number(point?.y)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return {}
+  const [cw, ch] = win.getContentSize()
+  const top = template.filter((t) => !Array.isArray(t.submenu) && t.type !== 'separator')
+  const subs = template.filter((t) => Array.isArray(t.submenu))
+  const seps = template.filter((t) => t.type === 'separator').length
+  const parentW = estMenuWidthPx(top.map((t) => t.label))
+  const flyW = subs.length
+    ? Math.max(...subs.map((t) => estMenuWidthPx(t.submenu.map((s) => s.label))))
+    : 0
+  const estH = (top.length + subs.length) * 28 + seps * 12 + 24
+  return {
+    x: Math.max(0, Math.min(x, cw - (parentW + flyW + 12))),
+    y: Math.max(0, Math.min(y, ch - estH)),
+  }
+}
+
 export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdate, onSetupDownload } = {}) {
   // tagger:accel 的会话级缓存(见 handler 注释)
   let accelCache = null
@@ -350,7 +434,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     // 主进程能自己干的(复制图片/文本、系统查看器、资源管理器)当场干完;
     // 需要渲染层接手的(打开详情页/切换收藏)把 action 原样返回, 由调用方处理。
     'app:ctxMenu': safe(async (payload, event) => {
-      const { path: rawPath, name, tags, favable, favorited } = payload || {}
+      const { path: rawPath, name, tags, favable, favorited, x: pointX, y: pointY } = payload || {}
       if (!rawPath || typeof rawPath !== 'string') return { action: null }
       // openPath / showItemInFolder 同 trashItem 一样是 shell API —— 只认反斜杠
       // (库内正斜杠路径上「打开」「在资源管理器中显示」会静默失败); fs 类调用顺带受益。
@@ -379,58 +463,62 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
 
       // 「移动到」子菜单: 预设文件夹(settings.json quickFolders) + 选其他文件夹 + 存预设。
       // 搬移/选目录都在菜单关闭后由本 handler 收尾, 结果随 invoke 返回给渲染层弹 toast。
+      //
+      // 标签里**只放名字**, 完整路径挪到 toolTip(悬停两秒能看到): 把路径写进标签会让
+      // 二级菜单宽到 585px(实测), 在窄屏/靠右右键时整块飞出点不到的区域(2026-10-23 反馈)。
       const quickFolders = Array.isArray(getSettings().quickFolders) ? getSettings().quickFolders : []
-      const moveSub = quickFolders.map((f) => ({
-        label: `${f.name}     ${f.path}`.slice(0, 96),
-        click: () => { chosen = { action: 'move', target: f.path } },
-      }))
+      const folderItem = (f, action) => ({
+        label: `📁 ${f.name}`.slice(0, 40),
+        toolTip: f.path,
+        click: () => { chosen = { action, target: f.path } },
+      })
+      const moveSub = quickFolders.map((f) => folderItem(f, 'move'))
       if (!moveSub.length) moveSub.push({ label: '(还没有预设文件夹)', enabled: false })
       else moveSub.push({ type: 'separator' })
       moveSub.push({
-        label: '选择其他文件夹…',
+        label: '📂 选择其他文件夹…',
         click: () => { chosen = { action: 'move-pick' } },
       })
       moveSub.push({ type: 'separator' })
       moveSub.push({
-        label: '把当前文件夹存为预设',
+        label: '⭐ 把当前文件夹存为预设',
         click: () => { chosen = { action: 'add-quick', target: path.dirname(imgPath) } },
       })
       moveSub.push({
-        label: '添加预设文件夹…',
+        label: '➕ 添加预设文件夹…',
         click: () => { chosen = { action: 'add-quick-pick' } },
       })
 
-      // 「用其他程序打开」二级菜单(2026-10-16): 预置(PS 自动探测 / Inpaint 固定路径)
-      // + 最近使用(settings.recentOpenWith, MRU) + 底部「浏览…」兜底(原来的系统对话框)。
-      const openWithSub = openWithPresets().map((a) => a.missing
-        ? { label: `${a.name} —— ${a.missing}`, enabled: false }
-        : {
-          label: `${a.name}     ${a.path}`.slice(0, 96),
-          click: () => { chosen = { action: 'openwith-exe', target: a.path } },
-        })
-      if (!openWithSub.length) openWithSub.push({ label: '(没有可用程序)', enabled: false })
-      else openWithSub.push({ type: 'separator' })
-      // 两根兜底: 自己挑 exe(拿得到路径 -> 能进 MRU, 下次排前面) 与系统原生对话框。
+      // 「用其他程序打开」二级菜单(2026-10-24): 只渲染用户在设置页里管的那份列表,
+      // 路径当前不存在的直接不出现(以前会挂一条「⚠️ 未找到 Photoshop」的灰项, 用户明确要删)。
+      const openWithApps = openWithListWithState()
+      const openWithSub = openWithApps.filter((a) => a.exists).map((a) => ({
+        label: `▶️ ${a.name}`.slice(0, 40),
+        toolTip: a.path,
+        click: () => { chosen = { action: 'openwith-exe', target: a.path } },
+      }))
+      if (!openWithSub.length) {
+        openWithSub.push({ label: '(列表为空 · 用下面的「添加程序」)', enabled: false })
+      } else openWithSub.push({ type: 'separator' })
+      // 两根兜底: 自己挑 exe(选完**永久加进列表**, 之后在设置页里删/排序) 与系统原生对话框。
       // 分开是因为原生那个「选择应用」对话框**不告诉调用方用户选了谁**, 没法记;
       // 但它能列出 UWP/商店应用, 所以不能只留自己挑的那条。
       openWithSub.push({
-        label: '选择其他程序…(会记住)',
+        label: '➕ 选择程序加进列表…',
+        toolTip: '挑一个 .exe, 以后每次都在这个子菜单里出现(设置页可删除/排序)',
         click: () => { chosen = { action: 'openwith-pick' } },
       })
       openWithSub.push({
-        label: 'Windows 打开方式…',
+        label: '🪟 Windows 打开方式…',
         click: () => { chosen = { action: 'open-with' } },
       })
 
       // 「复制到」子菜单: 复用「移动到」同一份预设(quickFolders), 只复制不搬移。
-      const copySub = quickFolders.map((f) => ({
-        label: `${f.name}     ${f.path}`.slice(0, 96),
-        click: () => { chosen = { action: 'copy', target: f.path } },
-      }))
+      const copySub = quickFolders.map((f) => folderItem(f, 'copy'))
       if (!copySub.length) copySub.push({ label: '(还没有预设文件夹)', enabled: false })
       else copySub.push({ type: 'separator' })
       copySub.push({
-        label: '选择其他文件夹…',
+        label: '📂 选择其他文件夹…',
         click: () => { chosen = { action: 'copy-pick' } },
       })
 
@@ -467,8 +555,15 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
         chosen = { action: 'move', target: autoMove }
       } else {
         // popup 的 callback 在菜单关闭时触发 —— invoke 会等到用户点完/关掉才 resolve
-        await new Promise((resolve) => Menu.buildFromTemplate(template).popup({ window: win, callback: resolve }))
+        // 落点自己算(见 clampMenuPos): 二级菜单往右飞, 光靠系统按鼠标位置弹会飞到点不到的地方。
+        await new Promise((resolve) => Menu.buildFromTemplate(template)
+          .popup({ window: win, ...clampMenuPos(win, template, { x: pointX, y: pointY }), callback: resolve }))
       }
+      /* 「点了没反应」必须有证据可查(2026-10-23 用户反馈三个二级菜单选不中):
+       * 原生菜单不是 DOM, CDP 驱动不到, 出问题时界面上一句话都看不到。这一行落盘后,
+       * chosen=null 就是"根本没选中任何一项"(菜单被关掉/点不到), chosen=xxx 则是
+       * 选中了、问题在后面的动作里 —— 两类原因从这一行就能分开。 */
+      flog('ctx-menu', `chosen=${chosen ? JSON.stringify(chosen) : 'null(没选中任何一项 —— 菜单被关掉或点到别处)'} file=${imgPath}`)
 
       // ---- 菜单关闭后的收尾动作(搬移/弹目录选择框/复制图像), 结果返回给渲染层弹提示 ----
       const act = chosen?.action
@@ -489,7 +584,6 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
         // 有没有秒退, 界面上一概看不出。每次都落一行日志(launch.log 的 open-with
         // 通道); "秒退"没有 invoke 回执可带, 只能从主进程直接推 toast。
         const r = await spawnOpenWith(chosen.target, imgPath, { notify: pushOpenWithFail })
-        if (r.ok) recordRecentOpenWith(chosen.target)
         flog('open-with', `${r.ok ? 'ok' : 'FAIL'} exe=${chosen.target} file=${imgPath} pid=${r.pid || '-'}${r.ok ? '' : ` err=${r.error}`}`)
         return { action: 'open-with', result: { ...r, exe: chosen.target }, from: imgPath }
       }
@@ -506,10 +600,17 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
         if (!/\.exe$/i.test(exe)) {
           return { action: 'open-with', result: { ok: false, error: '只能选 .exe 程序' }, from: imgPath }
         }
-        const r = await spawnOpenWith(exe, imgPath)
-        if (r.ok) recordRecentOpenWith(exe)
-        flog('open-with', `${r.ok ? 'ok' : 'FAIL'} exe=${exe} file=${imgPath}${r.ok ? '' : ` err=${r.error}`}`)
-        return { action: 'open-with', result: { ...r, exe }, from: imgPath }
+        // 选完**永久加进列表**(不是"最近使用"): 之后由用户在设置页里删/排序。
+        // 先记列表再启动 —— 启动失败也不该让用户挑的程序凭空消失。
+        const before = openWithList().length
+        const apps = addOpenWithApp(exe)
+        const r = await spawnOpenWith(exe, imgPath, { notify: pushOpenWithFail })
+        flog('open-with', `${r.ok ? 'ok' : 'FAIL'} exe=${exe} file=${imgPath}${r.ok ? '' : ` err=${r.error}`} list=${before}->${apps.length}`)
+        return {
+          action: 'open-with',
+          result: { ...r, exe, added: apps.length > before, appName: apps[apps.length - 1]?.name },
+          from: imgPath,
+        }
       }
       if (act === 'copy' && chosen.target) {
         const r = await copyFile(imgPath, chosen.target)
@@ -527,7 +628,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       }
       if (act === 'move' && chosen.target) {
         const r = await moveFile(imgPath, chosen.target)
-        if (r.ok) purgeScanCachePaths([imgPath])
+        if (r.ok) { purgeScanCachePaths([imgPath]); clearCoversForPaths([imgPath]) }
         return { action: r.ok ? 'moved' : 'move-failed', result: r, from: imgPath }
       }
       if (act === 'move-pick') {
@@ -538,7 +639,7 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
         })
         if (pick.canceled || !pick.filePaths.length) return { action: null }
         const r = await moveFile(imgPath, pick.filePaths[0])
-        if (r.ok) purgeScanCachePaths([imgPath])
+        if (r.ok) { purgeScanCachePaths([imgPath]); clearCoversForPaths([imgPath]) }
         return { action: r.ok ? 'moved' : 'move-failed', result: r, from: imgPath }
       }
       if (act === 'add-quick' && chosen.target) {
@@ -1063,6 +1164,8 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       }
       if (trashed.length) {
         purgeScanCachePaths(trashed)
+        /* 删掉的正好是某个夹的封面 -> 立刻清掉, 别让一级卡片继续请求那张图(2026-10-24) */
+        clearCoversForPaths(trashed)
         // 库记录同步标 gone=1(2026-10-17): 以前只删文件+作废扫描缓存, tags.db 里的行
         // 还停在 gone=0 —— 直接读库的功能(查重/统计)会把已删的图"复活"(重扫又冒出来)。
         // ingest 规则 6 是「库有 gone=1 + 磁盘又出现 → 清 gone」, 所以这里标了也不影响还原。
@@ -1103,7 +1206,10 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
         if (r.ok) moved.push({ from: raw, to: r.dest, name: r.name })
         else failed.push({ path: raw, error: r.error })
       }
-      if (moved.length) purgeScanCachePaths(moved.map((m) => m.from))
+      if (moved.length) {
+        purgeScanCachePaths(moved.map((m) => m.from))
+        clearCoversForPaths(moved.map((m) => m.from))
+      }
       let sync = null
       if (moved.length) {
         const folder = findFolderByDir(target)
@@ -1188,6 +1294,31 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       }
       saveSettings({ quickFolders: out })
       return { ok: true, quickFolders: out }
+    }),
+
+    // ---------------- 外部程序清单(右键「用其他程序打开」) ----------------
+    /* 2026-10-24 用户要求: 这份列表要能自己管(删除 + 排序), 且不要再挂「未找到 Photoshop」
+       那种占位灰项。清单存在 settings.openWithApps, 菜单只渲染它、路径不存在的不上菜单;
+       设置页通过这三条通道读写(整表保存的清洗与菜单侧共用 cleanOpenWithApps, 口径一致)。 */
+    'app:openWithApps': safe(() => ({ apps: openWithListWithState() })),
+    'app:openWithApps:set': safe(({ apps } = {}) => {
+      saveSettings({ openWithApps: cleanOpenWithApps(apps) })
+      return { ok: true, apps: openWithListWithState() }
+    }),
+    /* 设置页的「＋ 添加程序」: 弹 .exe 选择框 -> 加进列表 -> 回整表(不启动程序, 只是登记) */
+    'app:openWithApps:add': safe(async () => {
+      const pick = await dialog.showOpenDialog(mainWindow(), {
+        title: '添加用来打开图片的程序',
+        properties: ['openFile'],
+        filters: [{ name: '程序', extensions: ['exe'] }],
+        // path-check-ignore: 打开文件框的默认落点, 写在 filters 之后
+        defaultPath: 'C:\\Program Files',
+      })
+      if (pick.canceled || !pick.filePaths.length) return { canceled: true }
+      const exe = pick.filePaths[0]
+      const before = openWithList().length
+      addOpenWithApp(exe)
+      return { canceled: false, added: openWithList().length > before, apps: openWithListWithState() }
     }),
 
     // ---------------- 剪贴板 ----------------

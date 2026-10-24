@@ -148,7 +148,12 @@ class Cdp {
       const e = msg.params.entry
       // 必须带上 url: 只报一句 "404 (Not Found)" 是查不出所以然的
       // (2026-09-19 为了这个 404 反复猜了好几轮)。
-      const where = e.url ? ` @ ${String(e.url).slice(0, 180)}` : ''
+      // **这里不能截断**: 「陈旧记录」豁免要靠 url 里的 p= 参数反查数据库,
+      // 日文库名 + 编码动辄 200+ 字符, 截到 180 会把 %E4%B8%8B 切成半个字节序列 ->
+      // decodeURIComponent 抛错 -> 抠不到路径 -> 明明是该豁免的陈旧数据却报红
+      // (2026-10-23 实测同一份代码两次跑一绿一红, 差的就是这条长路径)。
+      // 显示时再截(见"运行期无 JS 异常"那条 check)。
+      const where = e.url ? ` @ ${String(e.url)}` : ''
       if (e.level === 'error') this.errors.push(`log: ${e.text}${where}`)
     }
   }
@@ -254,6 +259,12 @@ window.__t = {
     return true
   },
   count(sel) { return document.querySelectorAll(sel).length },
+  /** 这一层是不是**露在脸上**: 叠层改成「全挂载 + 只露栈顶」(v-show)以后, 光用 querySelector
+   *  判在不在会一律得到"在" —— 藏起来的那层要算不在。display:none 子树没有 client rect。 */
+  shown(sel, idx = 0) {
+    const el = document.querySelectorAll(sel)[idx]
+    return !!el && el.getClientRects().length > 0
+  },
   text(sel, idx = 0) {
     const el = document.querySelectorAll(sel)[idx]
     return el ? el.textContent.trim() : ''
@@ -684,6 +695,31 @@ async function main() {
     await cdp.eval(`__t.pressEnter('.sug input'); return true`)
     await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '清空后重新搜索', timeout: 30000 })
 
+    /* 4a. 「只看 ComfyUI 生成的图」(2026-10-24) —— 按图片内嵌元数据的来源筛。
+       沙箱这批图没读过 img_src(全空), 所以勾上必然 0 张; 空态要说明"为什么是空的",
+       并且取消勾选就能回来(它是筛选, 不是把库改掉)。真实库上的数量核对走只读探针。 */
+    const comfyUi = await cdp.eval(`
+      const cb = [...document.querySelectorAll('.checks .tv-check')].find((el) => /ComfyUI/.test(el.textContent))
+      if (!cb) return { none: true }
+      const before = __t.count('.grid .card')
+      cb.click()
+      await new Promise(r => setTimeout(r, 1800))
+      return { before, on: cb.classList.contains('on'), n: __t.count('.grid .card'), empty: __t.text('.wrap-grid') }
+    `)
+    check('首页: 有「只看 ComfyUI 生成的图」勾选项, 勾上会真的按来源筛(沙箱全空 -> 0 张)',
+      !comfyUi.none && comfyUi.on && comfyUi.n === 0 && comfyUi.before > 0,
+      JSON.stringify(comfyUi))
+    check('首页: 来源筛选的空态说清"刚入库、还没读到来源的图暂时不算", 不是笼统的搜不到',
+      /没有 ComfyUI 生成的图/.test(comfyUi.empty), comfyUi.empty)
+    await cdp.eval(`
+      const cb = [...document.querySelectorAll('.checks .tv-check')].find((el) => /ComfyUI/.test(el.textContent))
+      cb.click()
+      return true
+    `)
+    await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '取消来源筛选后回来', timeout: 15000 })
+    check('首页: 取消「只看 ComfyUI」后图片回来',
+      (await cdp.eval(`return __t.count('.grid .card')`)) > 0)
+
     /* ---------------- 4b. 搜索框胶囊化 + 多词联想 + 全选(2026-10-06) ----------------
      * multi 模式契约(只有看板搜索框开 multi; 扫描页空格 AND / 标签页单词搜索不受影响):
      *   · 敲中/英文逗号 = 当前段升级成胶囊, 输入框只留正在打的段
@@ -868,6 +904,39 @@ async function main() {
     await sleep(1200)
     const p2 = await cdp.eval(`return __t.text('.grid .card .foot')`)
     check('首页: 换一批(随机种子)生效', p1 !== p2, `${p1} -> ${p2}`)
+
+    /* 右下角是**一竖列**(2026-10-24 用户报「看板右下的随机按钮会被返回顶层覆盖」):
+       滚过 240px 让 ↑ 出现, 量两颗键的外接矩形不许相交; 有「在线封面」胶囊时它也不许压上来。 */
+    const cornerStack = await cdp.eval(`
+      const wrap = document.querySelector('.home .grid-wrap')
+      wrap.style.scrollBehavior = 'auto'
+      wrap.scrollTop = 600
+      await new Promise(r => setTimeout(r, 500))
+      const R = (e) => {
+        if (!e) return null
+        const r = e.getBoundingClientRect()
+        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+      }
+      const hit = (a, b) => !!a && !!b && a.left < b.right && b.left < a.right
+        && a.top < b.bottom && b.top < a.bottom
+      const out = {
+        sh: R(document.querySelector('.shuffle')),
+        fn: R(document.querySelector('.float-nav .fbtn')),
+        ib: R(document.querySelector('.ingest-badge')),
+      }
+      out.overlapButton = hit(out.sh, out.fn)
+      out.overlapBadge = hit(out.fn, out.ib)
+      wrap.scrollTop = 0
+      await new Promise(r => setTimeout(r, 300))
+      wrap.style.scrollBehavior = ''
+      return out
+    `)
+    check('右下角: 🎲 换一批 与 ↑ 回到顶部不重叠(一根竖列, 上面的自动让位)',
+      !!cornerStack.sh && !!cornerStack.fn && cornerStack.overlapButton === false,
+      `🎲 top=${Math.round(cornerStack.sh?.top ?? -1)} · ↑ top=${Math.round(cornerStack.fn?.top ?? -1)} · 重叠=${cornerStack.overlapButton}`)
+    check('右下角: ↑ 回到顶部 与「在线封面」胶囊不重叠',
+      cornerStack.overlapBadge === false,
+      `胶囊=${cornerStack.ib ? '在' : '没出现'} · 重叠=${cornerStack.overlapBadge}`)
 
     /* 来源筛选: 选第一个非「全部」的来源 */
     const srcFilter = await cdp.eval(`
@@ -2058,22 +2127,22 @@ async function main() {
     await cdp.shot('11b-cart-cover')
 
     const checkout = await cdp.eval(`
-      __t.clickText('.head .tv-btn', '结算')
+      __t.clickText('.head .tv-btn', '存为清单')
       await new Promise(r => setTimeout(r, 600))
       const inp = document.querySelector('.mask .tv-input')
       return { open: !!inp, name: inp ? inp.value : '', title: __t.text('.mask .head') }
     `)
-    check('购物车: 结算弹窗(带默认名)', checkout.open && /\d{4}-\d{2}-\d{2}/.test(checkout.name),
+    check('购物车: 存为清单弹窗(带默认名)', checkout.open && /\d{4}-\d{2}-\d{2}/.test(checkout.name),
       `默认名=${checkout.name}`)
     await cdp.eval(`document.querySelector('.mask .x').click(); return true`)
     await sleep(400)
 
     const hist = await cdp.eval(`
-      __t.clickText('.head .tv-btn', '历史记录')
+      __t.clickText('.head .tv-btn', '我的清单')
       await new Promise(r => setTimeout(r, 1200))
       return { items: __t.count('.hist-item'), title: __t.text('.mask .head') }
     `)
-    check('购物车: 结算历史可打开', hist.items > 0, `${hist.items} 条历史记录`)
+    check('购物车: 我的清单可打开', hist.items > 0, `${hist.items} 条清单`)
     await cdp.shot('12-history')
     await cdp.eval(`document.querySelector('.mask .x').click(); return true`)
     await sleep(400)
@@ -2139,6 +2208,7 @@ async function main() {
         dir: __t.text('.mask .path'),
         file: (document.querySelector('.mask .tv-input') || {}).value || '',
         rows: __t.count('.mask .row'),
+        st: __t.text('.mask .st'),
       }
     `)
     check('购物车预设: 购物车页有「⚙ 自动导出」并能打开配置弹窗',
@@ -2147,6 +2217,11 @@ async function main() {
     check('购物车预设: 弹窗里回显了目标目录与文件名',
       cartPresetUi.dir.includes('export-dest') && cartPresetUi.file === CART_FILE,
       `${cartPresetUi.dir} / ${cartPresetUi.file}`)
+    /* 状态条不能拿主进程的 cartCount 判空: 开窗后没有改动就不会有 cart:changed,
+       主进程一直以为购物车是 0 个 -> 明明有角色却报「购物车是空的」(2026-10-24 修)。 */
+    check('购物车预设: 购物车里有角色时状态条不报「购物车是空的」',
+      !!cartPresetUi.st && !/购物车是空的/.test(cartPresetUi.st) && /同步|更新|待导出|正在导出/.test(cartPresetUi.st),
+      cartPresetUi.st || '(空)')
     await cdp.shot('11d-cart-preset')
     await cdp.eval(`document.querySelector('.mask .x').click(); return true`)
     await sleep(400)
@@ -2407,6 +2482,113 @@ async function main() {
         scanProbe ? `带标签快照=${scanProbe.tagged} · 🛡 下有封面=${scanProbe.hidden} · 关后恢复=${scanProbe.restored}` : '无文件夹')
       // 开关还原后再让页面列表重拉一次(它 watch 的是 store, 上面绕过了渲染层)
       await sleep(600)
+    }
+
+    /* 扫描夹封面自愈(2026-10-24 用户报「一直删/移图, 扫描这里的封面加载不出来」)。
+       cover 是扫描时落库的绝对路径, 图被删/搬走后没人改它 —— 卡片一直请求那张 404 的图,
+       TvImage 重试两次后画 ⚠。三层修法各测一条:
+         ① folders:list 遇到悬空封面直接清空(卡片回默认占位图, 不再发 404 请求)
+         ② folders:refreshStats 对账时从清单里重挑一张**磁盘上真实存在**的(避开 5 分钟
+            扫描缓存里还躺着的已删文件, 这就是 pickCover 的 aliveOnly 参数)
+         ③ 应用内删/移图立刻清掉正好指着它的封面(clearCoversForPaths), 不用等对账
+       夹具自造 cover-heal 三张图, 不碰 scan 的 a1..a5(后面好几段还靠它们)。
+       测完 purge + 删目录 + 刷新列表, 回到 1 张卡片, 不影响后面按"第一张卡"点开的断言。 */
+    {
+      const HEAL_DIR = path.join(path.dirname(SCAN_DIR), 'cover-heal')
+      const healNorm = HEAL_DIR.replace(/\\/g, '/').toLowerCase()
+      fs.rmSync(HEAL_DIR, { recursive: true, force: true })
+      fs.mkdirSync(HEAL_DIR, { recursive: true })
+      for (const n of ['h1', 'h2', 'h3']) {
+        fs.writeFileSync(path.join(HEAL_DIR, `${n}.png`), makePng(300, 400, { prompt: '1girl, portrait' }))
+      }
+      const listCover = () => cdp.eval(`
+        const f = ((await window.tv.invoke('folders:list', { usage: 'scan' })).folders || [])
+          .find((x) => x.path.toLowerCase() === ${JSON.stringify(healNorm)})
+        return f ? f.cover : null
+      `)
+      const clickRefresh = () => cdp.eval(`
+        const b = [...document.querySelectorAll('.scan-view button')]
+          .find((x) => x.textContent.includes('刷新列表'))
+        if (b) b.click()
+        return !!b
+      `)
+
+      const addRes = await cdp.eval(`
+        const r = await window.tv.invoke('folders:add', { path: ${JSON.stringify(HEAL_DIR)}, as_scan: true })
+        return { ok: !!r?.ok, error: r?.error || '', cover: r?.folder?.cover || '' }
+      `)
+      const cov0 = String(addRes.cover || '')
+      check('封面自愈: 临时扫描夹落库时带封面', addRes.ok && !!cov0,
+        addRes.error || `cover=${cov0}`)
+
+      // 外部删除(模拟用户在资源管理器里删图) —— 库里那条 cover 立刻成了悬空路径
+      fs.rmSync(cov0, { force: true })
+      const stale = await listCover()
+      check('封面自愈: 封面图被外部删掉 -> 列表不再返回悬空路径',
+        stale === '', stale === null ? '临时夹不在列表' : `cover=${stale}`)
+
+      await clickRefresh()
+      await waitFor(cdp, `__t.count('.scan-view .grid.folders .ecard') === 2`,
+        { label: '临时扫描夹卡片出现', timeout: 20000 })
+      const phUi = await cdp.eval(`
+        const card = [...document.querySelectorAll('.scan-view .grid.folders .ecard')]
+          .find((c) => c.textContent.includes('cover-heal'))
+        if (!card) return null
+        return {
+          bad: card.querySelectorAll('.bad').length,
+          ph: card.querySelectorAll('.thumb-box .ph-img').length,
+        }
+      `)
+      check('封面自愈: 悬空封面的卡片显示默认占位图, 不是 ⚠',
+        !!phUi && phUi.bad === 0 && phUi.ph === 1,
+        phUi ? `⚠=${phUi.bad} · 占位=${phUi.ph}` : '没找到 cover-heal 卡片')
+
+      const repick = await cdp.eval(`
+        await window.tv.invoke('folders:refreshStats', { only: [${JSON.stringify(HEAL_DIR)}] })
+        const f = ((await window.tv.invoke('folders:list', { usage: 'scan' })).folders || [])
+          .find((x) => x.path.toLowerCase() === ${JSON.stringify(healNorm)})
+        return f ? f.cover : null
+      `)
+      check('封面自愈: 对账时重挑一张磁盘上真实存在的图',
+        !!repick && fs.existsSync(repick) && repick.toLowerCase() !== cov0.toLowerCase(),
+        repick ? `${cov0.slice(-8)} -> ${repick.slice(-8)}` : '重挑后仍为空')
+
+      const trashedCover = await cdp.eval(`
+        const r = await window.tv.invoke('image:trash', { paths: [${JSON.stringify(repick || '')}] })
+        const f = ((await window.tv.invoke('folders:list', { usage: 'scan' })).folders || [])
+          .find((x) => x.path.toLowerCase() === ${JSON.stringify(healNorm)})
+        return { trashed: (r?.trashed || []).length, cover: f ? f.cover : null }
+      `)
+      check('封面自愈: 应用内删掉封面图 -> 封面立刻清空(不用等对账)',
+        trashedCover.trashed === 1 && trashedCover.cover === '',
+        `trashed=${trashedCover.trashed} · cover=${trashedCover.cover}`)
+
+      const last = await cdp.eval(`
+        await window.tv.invoke('folders:refreshStats', { only: [${JSON.stringify(HEAL_DIR)}] })
+        const f = ((await window.tv.invoke('folders:list', { usage: 'scan' })).folders || [])
+          .find((x) => x.path.toLowerCase() === ${JSON.stringify(healNorm)})
+        return f ? f.cover : null
+      `)
+      check('封面自愈: 再对账换到最后一张仍在的图',
+        !!last && fs.existsSync(last), last || '仍为空')
+
+      /* ⚠️ waitFor 的 body 判定是 /return/ —— 表达式里带 return 会被原样执行,
+         IIFE 的返回值直接丢掉(第一版写成 IIFE, 结果恒 undefined 超时)。这里只写纯表达式。 */
+      await waitFor(cdp, `[...document.querySelectorAll('.scan-view .grid.folders .ecard')]
+        .find((x) => x.textContent.includes('cover-heal'))
+        ?.querySelector('.thumb-box .tv-img img')?.naturalWidth > 0`,
+      { label: '自愈后封面缩略图加载出来', timeout: 30000 })
+      check('封面自愈: 卡片换上新封面并真实加载出来(不再是 ⚠)', true, '缩略图 naturalWidth > 0')
+
+      // 收尾: 连登记行一起清掉(该夹没有 images 记录, purge 只删它自己), 再删夹具目录
+      await cdp.eval(`
+        await window.tv.invoke('folders:purge', { path: ${JSON.stringify(HEAL_DIR)} })
+        return true
+      `)
+      fs.rmSync(HEAL_DIR, { recursive: true, force: true })
+      await clickRefresh()
+      await waitFor(cdp, `__t.count('.scan-view .grid.folders .ecard') === 1`,
+        { label: '临时夹清掉后恢复 1 张卡片', timeout: 20000 })
     }
 
     // 点开文件夹 -> 二级页面
@@ -2845,11 +3027,10 @@ async function main() {
      * 磁盘上那张图确实没了 —— 免得用假事件测出一个"看起来是绿的"结果。
      * 夹具由 harness 每轮重新覆盖, 删掉一张不影响下一轮。
      *
-     * ⚠️ 故意删的是**第 2 张(a2)**而不是第 1 张: 文件夹封面取的是"第一张有标签的图"
-     * (folders.js pickCover), 也就是 a1。删掉 a1 会让一级卡片的封面缩略图变成 404
-     * (封面只在还没有时才补, 删除不会刷新它) —— 那是个**真实但很小**的遗留问题,
-     * 与本段要测的东西无关, 却会把「运行期无 JS 异常」这条总闸一直顶红, 反而掩盖真问题。
-     * 这里绕开它, 并在报告里单独记一笔。
+     * ⚠️ 故意删的是**第 2 张(a2)**而不是第 1 张: 封面图(a1)留着不动, 后面的
+     * 网格/光箱断言就不用再剥一层"封面换了张脸"的干扰。(2026-10-24 起封面悬空
+     * 会被自愈 —— 见上面「扫描夹封面自愈」那段 —— 所以删 a1 也不会再让一级
+     * 卡片 404; 这里保留原选择只是为了少一个变量。)
      */
     const order = await cdp.eval(
       `return [...document.querySelectorAll('.scan-view .grid.imgs .card .foot')].map(e => e.title)`,
@@ -2867,15 +3048,26 @@ async function main() {
     check('光箱: 打开的是第 2 张', lbo.open && lbo.path === order[1], path.basename(lbo.path || ''))
 
     // 收藏当前这张(a2) —— 9d 要验证「删除后收藏保留」。这里只点收藏, 删除在下面进行。
-    await cdp.eval(`
+    const favClick = await cdp.eval(`
       document.querySelector('.lb-side .tv-btn[title="收藏这张图"]').click()
-      await new Promise(r => setTimeout(r, 400))
-      return true
+      // 钉住一条 2026-10-23 修掉的坑: ui.ok(msg, dur) 的第二个参数是**时长**,
+      // 很多地方按 toast(msg, tone, dur) 的习惯传了 'ok' -> 时长变成 NaN ->
+      // 提示条刚挂上就被 setTimeout(NaN) 关掉, 用户点了收藏只看到 ★ 变了、听不到一句话。
+      // 所以这里必须真的抓到 .toast 上有字, 而不是等 400ms 空气。
+      let el = null
+      for (let i = 0; i < 40 && !el; i++) {
+        await new Promise(r => setTimeout(r, 100))
+        el = [...document.querySelectorAll('.toast')].find((t) => (t.textContent || '').includes('收藏')) || null
+      }
+      await new Promise(r => setTimeout(r, 300))
+      return { toast: el ? el.textContent.trim() : '', tone: el ? el.className : '' }
     `)
     const favA2 = await cdp.eval(
       `return !!document.querySelector('.lb-side .tv-btn[title="取消收藏"]')`,
     )
     check('光箱: 点 ☆ 收藏成功(按钮翻转为已收藏态)', favA2, '')
+    check('光箱: 收藏后提示条真的说出来且是成功色(不是秒闪)', /已收藏/.test(favClick.toast || '') && /t-ok/.test(favClick.tone || ''),
+      `toast="${favClick.toast}" · class=${favClick.tone}`)
 
     // 真删当前图: Del -> 确认弹窗(trashAsk 默认开, localStorage 每轮清空) -> 点「删除」
     const delC = await cdp.eval(`
@@ -3082,11 +3274,10 @@ async function main() {
 
     // 应用外移动 a1: 直接 rename, 不经过应用(与用户在资源管理器里挪图等价)
     //
-    // ⚠️ 移动会让**扫描页文件夹封面的缩略图**变成 404 —— 封面取的是"第一张有标签的图"
-    //    (folders.js pickCover), 正好是 a1, 而封面不会因为文件消失而刷新。这跟上面
-    //    "光箱删除故意改删第 2 张"绕开的是**同一个已知小遗留问题**, 只是这里绕不开:
-    //    收藏页要验的正是"文件被搬走后按文件名找回", 必须真搬。所以把旧路径登记下来,
-    //    交给最后那条总闸做**极窄**放行(别往这个数组里塞别的东西)。
+    // ⚠️ 这是**应用外**移动, 主进程收不到通知, 所以把旧路径登记下来交给最后那条
+    //    总闸做**极窄**放行(别往这个数组里塞别的东西) —— 例如收藏卡片还指着旧路径
+    //    的缩略图请求。2026-10-24 起扫描夹封面会在列表/对账时自愈(悬空置空 + 重挑),
+    //    不再有"封面永远 404"的老问题, 这条放行只留作兜底。
     const movedOut = path.join(DATA_DIR, 'a1.png')
     fs.renameSync(a1Rec.path, movedOut)
     outOfBandMoved.push(encodeURIComponent(a1Rec.path))
@@ -3721,6 +3912,58 @@ async function main() {
     check('标签跳转: 直接访问子页面地址(深链)也停在同一标签',
       deep.crumb === tagJump.tag && deep.cards > 0, `${deep.crumb} · ${deep.cards} 张`)
 
+    /* 独立标签页 /tags/:tag 里也要能"就地叠一层"(2026-10-24 用户报①):
+       在标签页点开光箱、点📂系列药丸, 以前会被 router.push 换成系列 tab ——
+       顶部 tab 跳走、这一页的标签现场全丢。现在它和看板/系列/扫描一样自己接宿主。 */
+    const tagHost = await cdp.eval(`
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      const wait = async (fn, ms = 12000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await sleep(200) } return false }
+      const cards = [...document.querySelectorAll('.tag-images-view .grid .card')]
+      let pill = null, path0 = '', pos0 = ''
+      for (const c of cards.slice(0, 14)) {
+        c.click()
+        if (!await wait(() => document.querySelector('.lb-side'), 5000)) { await sleep(250); continue }
+        const row = [...document.querySelectorAll('.lightbox .lb-meta-row')].find((r) => (r.textContent || '').includes('系列'))
+        pill = row ? row.querySelector('.pill') : null
+        if (pill) { path0 = __t.text('.lightbox .lb-path'); pos0 = __t.text('.lightbox .lb-pos'); break }
+        document.querySelector('.lightbox .lb-close')?.click()
+        await sleep(300)
+      }
+      if (!pill) return { err: '标签页前 14 张里找不到带系列药丸的图' }
+      const hash0 = decodeURIComponent(location.hash)
+      pill.click()
+      if (!await wait(() => __t.shown('.tag-images-view .chars-panel'), 12000)) return { err: '没就地叠出角色列表' }
+      await sleep(600)
+      const out = {
+        err: '', hash0, path0, pos0,
+        hash: decodeURIComponent(location.hash),
+        seriesTab: __t.shown('.series-view'),
+        baseHidden: !__t.shown('.tag-images-view .layer-base .tag-panel'),
+        baseCards: __t.count('.tag-images-view .layer-base .grid .card'),
+        chars: __t.count('.tag-images-view .chars-panel .ecard'),
+        crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map((e) => e.textContent.trim()),
+      }
+      document.querySelector('[data-test="path-back"]')?.click()
+      if (!await wait(() => document.querySelector('.lb-side'), 9000)) { out.backLb = false; return out }
+      await sleep(900)
+      out.backLb = true
+      out.backImg = __t.text('.lightbox .lb-path')
+      out.backPos = __t.text('.lightbox .lb-pos')
+      out.backChars = __t.shown('.tag-images-view .chars-panel')
+      out.backBaseCards = __t.count('.tag-images-view .layer-base .grid .card')
+      document.querySelector('.lightbox .lb-close')?.click()
+      await sleep(400)
+      return out
+    `)
+    check('独立标签页点系列药丸: 就地叠角色列表(不换 tab、光箱关闭、底层只是藏起来)',
+      !tagHost.err && tagHost.hash === tagHost.hash0 && tagHost.seriesTab === false
+        && tagHost.chars > 0 && tagHost.baseHidden === true && tagHost.baseCards > 0,
+      tagHost.err || `${tagHost.hash} · 角色卡=${tagHost.chars} · 底层收起=${tagHost.baseHidden}/${tagHost.baseCards} 张 · 路径=${(tagHost.crumbs || []).join(' > ')}`)
+    check('独立标签页: 退一层回到刚才那张图(同一翻页位置), 角色列表收下去',
+      tagHost.backLb === true && tagHost.backImg === tagHost.path0 && tagHost.backPos === tagHost.pos0
+        && tagHost.backChars === false && tagHost.backBaseCards > 0,
+      tagHost.err || `光箱=${tagHost.backLb} · ${tagHost.backImg} ${tagHost.backPos} (原 ${tagHost.path0} ${tagHost.pos0})`)
+
     /* 标签名进的是**路径参数**, 里面可能有 `/` —— 库里真有 `bb_(fate/extra)`、
        `k/da_(league_of_legends)` 这类标签, 编码/还原一旦不对, 它们会被拆成两段路径
        (crash 或跳错页)。这里用人造标签验证这一层本身, 不依赖库里恰好有没有这样的图:
@@ -3826,8 +4069,10 @@ async function main() {
         err: '', before, tag, imgPath, pos,
         crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
         hash: decodeURIComponent(location.hash),
-        inSource: !!document.querySelector('.home .tag-panel'),
-        listGone: !document.querySelector('.home aside.left'),
+        inSource: __t.shown('.home .tag-panel'),
+        // 叠层时看板本体是**藏起来**而不是拆掉(v-show): 看不见, 但卡片还在 DOM 里、滚动位置还在
+        listGone: !__t.shown('.home aside.left'),
+        baseCards: __t.count('.home .layer-base .grid .card'),
         lbClosed: !document.querySelector('.lightbox'),
         // ② 来源/扫描夹档位栏必须出现在就地标签页里(与独立标签页同一套)
         ssBar: !!document.querySelector('.home .tag-panel .ss-bar'),
@@ -3905,7 +4150,10 @@ async function main() {
     check('看板里点标签: 就地翻开(仍停在看板, 光箱自动关闭)',
       !homeJump.err && homeJump.inSource === true && homeJump.listGone === true
         && homeJump.hash === '#/' && homeJump.lbClosed === true,
-      homeJump.err || `${homeJump.hash} · 标签页=${homeJump.inSource} · 原看板收起=${homeJump.listGone} · 光箱关闭=${homeJump.lbClosed}`)
+      homeJump.err || `${homeJump.hash} · 标签页=${homeJump.inSource} · 原看板藏起=${homeJump.listGone} · 光箱关闭=${homeJump.lbClosed}`)
+    check('看板里点标签: 底层看板没被拆掉(卡片仍挂在 DOM 里, 退回时不重新加载、不回第一页)',
+      !homeJump.err && homeJump.baseCards > 0,
+      homeJump.err || `藏起来的看板卡片=${homeJump.baseCards}`)
     check('看板里点标签: 路径读作「看板 > 标签」',
       !homeJump.err && (homeJump.before || []).join('|') === '看板'
         && (homeJump.crumbs || []).length === 2 && homeJump.crumbs[1] === homeJump.tag,
@@ -3975,8 +4223,9 @@ async function main() {
         err: '', before, tag, imgPath, pos,
         crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
         hash: decodeURIComponent(location.hash),
-        inSource: !!document.querySelector('.series-view .tag-panel'),
-        listGone: !document.querySelector('.series-view .cat-bar'),
+        inSource: __t.shown('.series-view .tag-panel'),
+        listGone: !__t.shown('.series-view .cat-bar'),
+        baseCards: __t.count('.series-view .layer-base .grid .card'),
         lbClosed: !document.querySelector('.lightbox'),
         ssBar: !!document.querySelector('.series-view .tag-panel .ss-bar'),
       }
@@ -3984,7 +4233,10 @@ async function main() {
     check('系列里点标签: 就地翻开(仍停在系列页, 光箱自动关闭)',
       !seriesJump.err && seriesJump.inSource === true && seriesJump.listGone === true
         && seriesJump.hash === '#/series' && seriesJump.lbClosed === true,
-      seriesJump.err || `${seriesJump.hash} · 标签页=${seriesJump.inSource} · 原列表收起=${seriesJump.listGone} · 光箱关闭=${seriesJump.lbClosed}`)
+      seriesJump.err || `${seriesJump.hash} · 标签页=${seriesJump.inSource} · 原列表藏起=${seriesJump.listGone} · 光箱关闭=${seriesJump.lbClosed}`)
+    check('系列里点标签: 底层系列页没被拆掉(卡片仍挂在 DOM 里, 退回时不重新加载)',
+      !seriesJump.err && seriesJump.baseCards > 0,
+      seriesJump.err || `藏起来的系列卡片=${seriesJump.baseCards}`)
     check('系列里点标签: 路径接着「全部系列 > 系列 > 角色 > 标签」',
       !seriesJump.err && (seriesJump.before || []).length === 3 && seriesJump.before[0] === '全部系列'
         && seriesJump.crumbs.length === 4 && seriesJump.crumbs[3] === seriesJump.tag
@@ -4018,6 +4270,134 @@ async function main() {
     check('系列里点标签: 返回回到光箱那一页(同一张图 + 同一翻页位置)',
       seriesBack.lbOpen === true && seriesBack.imgPath === seriesJump.imgPath && seriesBack.pos === seriesJump.pos,
       `光箱=${seriesBack.lbOpen} · ${seriesBack.imgPath} · ${seriesBack.pos} (原 ${seriesJump.imgPath} · ${seriesJump.pos})`)
+
+    /* ── 光箱里的「📂 系列」药丸(第24轮定稿): 用户要的是**系列这边的页面** ——
+       「点击光箱的 blue_archive，跳转的就是 blue_archive 的所有角色页面」，
+       形态与点标签一样是**就地叠一层**(顶部 tab 不动、路径栏接一层、返回退回光箱那张图),
+       不是跳到 /series?series=xxx, 也不是该系列的图片流。
+       角色列表里点角色 = 再接一层该角色的图。 ── */
+    const pillSeries = await cdp.eval(`
+      location.hash = '#/series'
+      await new Promise(r => setTimeout(r, 1000))
+      // SeriesView 在 KeepAlive 里, 上面几组用例留下的"叠了几层/钻到哪个角色"会被原样保住
+      // —— 先把层级清空, 否则 .ecard 判空判的是"当前停在哪儿", 会假报"系列列表为空"。
+      for (let i = 0; i < 10; i++) {
+        const back = document.querySelector('[data-test="path-back"]')
+        if (back) { back.click(); await new Promise(r => setTimeout(r, 400)); continue }
+        const crumbs = [...document.querySelectorAll('[data-test="pathbar"] .crumb')]
+        if (crumbs.length > 1) { crumbs[0].click(); await new Promise(r => setTimeout(r, 400)); continue }
+        break
+      }
+      document.querySelector('.lightbox .lb-close')?.click()
+      await new Promise(r => setTimeout(r, 500))
+      const sc = [...document.querySelectorAll('.ecard')].find(e => e.textContent.includes('蔚蓝档案'))
+        || document.querySelector('.ecard')
+      if (!sc) return { err: '系列列表为空(清空层级后仍没有卡)' }
+      sc.click()
+      await new Promise(r => setTimeout(r, 1800))
+      if (!document.querySelector('.ecard')) return { err: '角色列表为空' }
+      document.querySelector('.ecard').click()
+      await new Promise(r => setTimeout(r, 2400))
+      const card = document.querySelector('.series-view .grid .card')
+      if (!card) return { err: '角色图片没出来' }
+      card.click()
+      await new Promise(r => setTimeout(r, 2200))
+      const row = [...document.querySelectorAll('.lightbox .lb-meta-row')].find(r => (r.textContent || '').includes('系列'))
+      const pill = row ? row.querySelector('.pill') : null
+      if (!pill) return { err: '光箱里没有系列药丸' }
+      const tag = pill.getAttribute('data-tag') || ''
+      const title = pill.getAttribute('title') || ''
+      const imgPath = __t.text('.lightbox .lb-path')
+      const pos = __t.text('.lightbox .lb-pos')
+      const deep = [...document.querySelectorAll('[data-test="pathbar"] .crumb')].length
+      pill.click()
+      await new Promise(r => setTimeout(r, 2200))
+      return {
+        err: '', tag, title, imgPath, pos, deep,
+        hash: decodeURIComponent(location.hash),
+        panel: !!document.querySelector('.series-view .chars-panel'),
+        panelName: (__t.text('.series-view .chars-panel .name') || '').trim(),
+        cards: __t.count('.series-view .chars-panel .ecard'),
+        // 这一层不该有图片网格: 面板只摆角色卡(卡上的「N 张」是数字, 不是图)
+        imgGrid: __t.count('.series-view .chars-panel .grid .card'),
+        // 叠层不该带出系列页自己的工具栏(分类 tab / 批量拉封面那套) —— 现在是藏起来不是拆掉
+        ownBar: __t.shown('.series-view .cat-bar'),
+        lbOpen: !!document.querySelector('.lightbox'),
+        crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
+        cur: (__t.text('[data-test="path-current"]') || '').trim(),
+      }
+    `)
+    check('光箱系列药丸: 就地叠一层角色列表(仍在 #/series, 光箱关闭, 系列页工具栏藏到下层)',
+      !pillSeries.err && pillSeries.hash === '#/series' && pillSeries.panel === true
+        && pillSeries.lbOpen === false && pillSeries.ownBar === false,
+      pillSeries.err || `${pillSeries.hash} · 角色面板=${pillSeries.panel} · 光箱=${pillSeries.lbOpen} · 原工具栏=${pillSeries.ownBar}`)
+    check('光箱系列药丸: 叠的就是那个系列的角色页(面板标题 + 角色卡 + 路径栏多一层)',
+      !pillSeries.err && pillSeries.cards > 0 && pillSeries.panelName.includes(pillSeries.tag)
+        && pillSeries.crumbs.length === pillSeries.deep + 1 && pillSeries.cur.includes(pillSeries.tag),
+      pillSeries.err || `标题="${pillSeries.panelName}" · ${pillSeries.cards} 个角色 · 路径="${pillSeries.crumbs.join(' > ')}" · 药丸="${pillSeries.tag}"`)
+    check('光箱系列药丸: 这一层是角色列表不是图片流(没有图片网格卡)',
+      !pillSeries.err && pillSeries.imgGrid === 0, pillSeries.err || `图片卡=${pillSeries.imgGrid}`)
+    check('光箱系列药丸: 文案说的是角色列表(不是"该标签的图片")',
+      /^点击查看该系列的角色列表/.test(pillSeries.title || ''), pillSeries.title)
+
+    /* 角色列表里点角色 = 再接一层该角色的图; 连退两级: 先回角色列表, 再回光箱那张图 */
+    const pillChain = await cdp.eval(`
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      const ec = document.querySelector('.series-view .chars-panel .ecard')
+      if (!ec) return { err: '角色列表里没有卡' }
+      const charName = (ec.getAttribute('title') || ec.textContent || '').trim()
+      ec.click()
+      await sleep(2400)
+      const step1 = {
+        tagPanel: __t.shown('.series-view .tag-panel'),
+        tag: (__t.text('.series-view .tag-panel .tag-name') || '').replace(/^#/, '').trim(),
+        cards: __t.count('.series-view .tag-panel .grid .card'),
+        // 角色列表那层此刻被压在下面: 还挂着(所以退回时不用重查), 但不露在脸上
+        chars: __t.shown('.series-view .chars-panel'),
+        charsMounted: __t.count('.series-view .chars-panel .ecard') > 0,
+        crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
+      }
+      document.querySelector('.lightbox .lb-close')?.click()
+      await sleep(400)
+      const b1 = document.querySelector('[data-test="path-back"]')
+      if (!b1) return { err: '返回箭头没渲染(角色图那一层)', step1 }
+      b1.click()
+      await sleep(1600)
+      const step2 = {
+        chars: __t.shown('.series-view .chars-panel'),
+        tagPanel: __t.shown('.series-view .tag-panel'),
+        lbOpen: !!document.querySelector('.lightbox'),
+      }
+      const b2 = document.querySelector('[data-test="path-back"]')
+      if (!b2) return { err: '返回箭头没渲染(系列那一层)', step1, step2 }
+      b2.click()
+      await sleep(1600)
+      const out = {
+        err: '', charName, step1, step2,
+        lbOpen: !!document.querySelector('.lightbox'),
+        imgPath: __t.text('.lightbox .lb-path'),
+        pos: __t.text('.lightbox .lb-pos'),
+        chars: !!document.querySelector('.series-view .chars-panel'),
+        hash: decodeURIComponent(location.hash),
+      }
+      document.querySelector('.lightbox .lb-close')?.click()
+      await sleep(400)
+      return out
+    `)
+    check('系列角色列表里点角色: 再接一层该角色的图(路径再接一格)',
+      !pillChain.err && pillChain.step1.tagPanel === true && pillChain.step1.cards > 0
+        && pillChain.step1.chars === false && pillChain.step1.charsMounted === true
+        && pillChain.step1.crumbs.length === pillSeries.crumbs.length + 1,
+      pillChain.err || JSON.stringify(pillChain.step1))
+    check('系列角色列表: 退一层回到角色列表(不是直接跳回光箱)',
+      !pillChain.err && pillChain.step2.chars === true && pillChain.step2.tagPanel === false
+        && pillChain.step2.lbOpen === false,
+      pillChain.err || JSON.stringify(pillChain.step2))
+    check('系列角色列表: 再退一层回到光箱那张图(同一个翻页位置)',
+      !pillChain.err && pillChain.lbOpen === true && pillChain.chars === false
+        && pillChain.imgPath === pillSeries.imgPath && pillChain.pos === pillSeries.pos
+        && pillChain.hash === '#/series',
+      pillChain.err || `光箱=${pillChain.lbOpen} · ${pillChain.imgPath} · ${pillChain.pos} (原 ${pillSeries.imgPath} · ${pillSeries.pos})`)
 
     /* 扫描夹里的图是库外图片, 有没有标签取决于 PNG 元数据 —— 不能赌"第一张就有"。
        这里逐个点开卡片, 哪张能出可跳转的 pill 就用哪张(点完先等光箱与标签真正渲染,
@@ -4075,8 +4455,9 @@ async function main() {
         err: '', before, tag, imgPath, pos,
         crumbs: [...document.querySelectorAll('[data-test="pathbar"] .crumb')].map(e => e.textContent.trim()),
         hash: decodeURIComponent(location.hash),
-        inSource: !!document.querySelector('.scan-view .tag-panel'),
-        listGone: !document.querySelector('.scan-view .grid.imgs'),
+        inSource: __t.shown('.scan-view .tag-panel'),
+        listGone: !__t.shown('.scan-view .grid.imgs'),
+        baseCards: __t.count('.scan-view .layer-base .grid.imgs .card'),
         lbClosed: !document.querySelector('.lightbox'),
         ssBar: !!document.querySelector('.scan-view .tag-panel .ss-bar'),
       }
@@ -4084,7 +4465,10 @@ async function main() {
     check('扫描里点标签: 就地翻开(仍停在扫描页, 光箱自动关闭)',
       !scanJump.err && scanJump.inSource === true && scanJump.listGone === true
         && scanJump.hash === '#/scan' && scanJump.lbClosed === true,
-      scanJump.err || `${scanJump.hash} · 标签页=${scanJump.inSource} · 原列表收起=${scanJump.listGone} · 光箱关闭=${scanJump.lbClosed}`)
+      scanJump.err || `${scanJump.hash} · 标签页=${scanJump.inSource} · 原列表藏起=${scanJump.listGone} · 光箱关闭=${scanJump.lbClosed}`)
+    check('扫描里点标签: 底层网格没被拆掉(卡片仍挂在 DOM 里, 退回时不重新扫描、不回第一页)',
+      !scanJump.err && scanJump.baseCards > 0,
+      scanJump.err || `藏起来的扫描卡片=${scanJump.baseCards}`)
     check('扫描里点标签: 路径接着「扫描 > 文件夹 > 标签」',
       !scanJump.err && (scanJump.before || []).length === 2 && scanJump.before[0] === '扫描'
         && scanJump.crumbs.length === 3 && scanJump.crumbs[2] === scanJump.tag
@@ -4396,6 +4780,53 @@ async function main() {
     const offCls = await cdp.eval(`return !!document.querySelector('.result-head .safe-tog.on')`)
     check('安全模式: 关掉后开关状态复位(不留残留 —— 否则后面每一轮的卡数断言都会莫名其妙少一半)',
       offCls === false)
+
+    /* ④b 整页都被藏光时还能不能往后翻(2026-10-24 用户问到的死路)。
+       speed_lines: 沙箱里 65 张, unsafe 全是 1 -> core 档下第一页 60 张整页被藏。
+       以前这种页面既没有网格、也就没有无限滚动哨兵, 用户连"下一页"都摸不到。 */
+    await cdp.eval(`
+      __t.setInput('.sug input', 'speed_lines')
+      await new Promise(r => setTimeout(r, 300))
+      __t.pressEnter('.sug input')
+      return true
+    `)
+    await waitFor(cdp, `__t.text('.result-head b') === '65'`, { label: '整敏感页搜索(65 张)', timeout: 30000 })
+    await cdp.eval(`document.querySelector('.result-head .safe-tog .st-btn').click(); return true`)
+    await waitFor(cdp, `!!document.querySelector('.all-hidden')`,
+      { label: '整页被藏空态', timeout: 15000 }).catch(() => null)
+    const allHiddenUi = await cdp.eval(`return {
+      cards: __t.count('.grid .card'),
+      txt: __t.text('.all-hidden'),
+      btn: __t.text('.all-hidden .hidden-more .tv-btn'),
+    }`)
+    check('安全模式: 整页被藏时不装死 —— 说明原因 + 给出「继续拉下一批」',
+      allHiddenUi.cards === 0 && /都被安全模式隐藏了/.test(allHiddenUi.txt) && /继续拉下一批/.test(allHiddenUi.btn),
+      `卡片 ${allHiddenUi.cards} · ${allHiddenUi.txt}`)
+    await cdp.shot('11e-safety-all-hidden')
+    await cdp.eval(`document.querySelector('.all-hidden .hidden-more .tv-btn').click(); return true`)
+    await waitFor(cdp, `/已经到底了/.test(__t.text('.all-hidden'))`,
+      { label: '手动拉到尾批', timeout: 15000 }).catch(() => null)
+    const tailUi = await cdp.eval(`return {
+      txt: __t.text('.all-hidden'),
+      btn: __t.count('.all-hidden .hidden-more .tv-btn'),
+    }`)
+    check('安全模式: 「继续拉下一批」真的拉到下一批, 到尾了改成"已经到底了"',
+      /65/.test(tailUi.txt) && /已经到底了/.test(tailUi.txt) && tailUi.btn === 0,
+      `${tailUi.txt} · 按钮 ${tailUi.btn}`)
+
+    /* 还原: 关安全模式 -> 65 张全回来; 清空搜索 -> 回到全量 */
+    await cdp.eval(`document.querySelector('.result-head .safe-tog .st-btn').click(); return true`)
+    await waitFor(cdp, `__t.count('.grid .card') === 65`,
+      { label: '关掉后整页回来', timeout: 15000 }).catch(() => null)
+    check('安全模式: 关掉后这批图全回来(65 张)',
+      (await cdp.eval(`return __t.count('.grid .card')`)) === 65)
+    await cdp.eval(`
+      __t.setInput('.sug input', '')
+      await new Promise(r => setTimeout(r, 200))
+      __t.pressEnter('.sug input')
+      return true
+    `)
+    await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '复原全量列表', timeout: 30000 })
 
 
     /* ---------------- 12. 控制台健康度 ---------------- */
@@ -5487,15 +5918,99 @@ async function main() {
       }
     }
 
+    /* ── 11k. 外部程序清单(第22轮): 右键「用其他程序打开」的子菜单改成一份用户自己管的列表。
+       原来这里塞的是"探测 Photoshop + 最近用过"自动拼出来的行, 于是出现过
+       「⚠️ Photoshop: 未找到 Photoshop」这种点了没反应的中间行。现在:
+         · 主进程只存 openWithApps(名字 + 路径), 缺文件的不进菜单, 但在设置里看得见并标「文件不存在」;
+         · 设置抽屉里 ↑ ↓ ✕ 每次点都立刻落盘并说一句人话(不给灰按钮)。 ── */
+    {
+      const SYS32 = path.join(process.env.SystemRoot || process.env.windir || '', 'System32')
+      const SEED_APPS = [
+        // 用系统里一定存在的程序当"在", 用不存在的当"缺文件" —— 只判列表行为, 不真去启动它们
+        { name: 'E2E-甲', path: path.join(SYS32, 'notepad.exe') },
+        { name: 'E2E-乙', path: path.join(SYS32, 'e2e-never-exists.exe') },
+      ]
+      const seeded = await cdp.eval(`
+        const r = await window.tv.invoke('app:openWithApps:set', { apps: ${JSON.stringify(SEED_APPS)} })
+        return { ok: r?.ok, apps: (r?.apps || []).map(a => ({ name: a.name, exists: a.exists })) }
+      `)
+      check('外部程序: 整表写入后回读带 exists 标记(在/缺各一个)',
+        seeded.ok === true && seeded.apps.length === 2 && seeded.apps[0].exists === true && seeded.apps[1].exists === false,
+        JSON.stringify(seeded))
+
+      const ow = await cdp.eval(`
+        document.querySelector('[data-test="hdr-settings"]').click()
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+        const sec = () => [...document.querySelectorAll('.settings section')]
+          .find(s => /外部程序/.test(s.querySelector('h3')?.textContent || ''))
+        let s = null
+        for (let i = 0; i < 60 && !s; i++) { await sleep(120); s = sec() }
+        if (!s) return { err: '设置抽屉里没有「外部程序」这一节' }
+        await sleep(400)
+        const rows = () => [...s.querySelectorAll('.owrow')].map(r => ({
+          name: r.querySelector('b')?.textContent?.trim() || '',
+          missing: /文件不存在/.test(r.textContent || ''),
+          down: r.querySelectorAll('.owbtn')[1],
+          del: r.querySelector('.owbtn.del'),
+        }))
+        const before = rows().map(r => ({ name: r.name, missing: r.missing }))
+        const hasAdd = /添加程序/.test(s.textContent)
+        // 提示条只活 1.6s: 先起一个"盯 .toast 直到出现新文案"的轮询, 再去点按钮。
+        // 点之前还要等上一条 toast 飞走 —— 上一组用例(快速移动)的「已保存快速移动路径」
+        // 可能还在屏幕上, 抓早了会把别人的话当成自己说的。
+        const quietToast = async () => {
+          for (let i = 0; i < 40 && document.querySelector('.toast'); i++) await sleep(100)
+        }
+        const grab = (ms, skip) => (async () => {
+          const t0 = Date.now()
+          while (Date.now() - t0 < ms) {
+            const t = [...document.querySelectorAll('.toast')].map(e => e.textContent.trim()).find(x => x && x !== skip)
+            if (t) return t
+            await sleep(60)
+          }
+          return ''
+        })()
+        await quietToast()
+        const pMoved = grab(4000, '')
+        rows()[0].down.click()
+        for (let i = 0; i < 60 && rows()[0].name !== 'E2E-乙'; i++) await sleep(100)
+        const movedToast = await pMoved
+        await quietToast()
+        const pDel = grab(4000, movedToast)
+        rows()[1].del.click()
+        for (let i = 0; i < 60 && rows().length !== 1; i++) await sleep(100)
+        const delToast = await pDel
+        const stored = await window.tv.invoke('app:openWithApps')
+        document.querySelector('.drawer .dhead .x')?.click()
+        return {
+          err: '', before, hasAdd, movedToast, delToast,
+          after: rows().map(r => ({ name: r.name, missing: r.missing })),
+          stored: stored.apps.map(a => a.name),
+        }
+      `)
+      check('外部程序: 抽屉里这一节在, 缺文件的标「文件不存在」, 有「添加程序」入口',
+        !ow.err && ow.before?.length === 2 && ow.before[0].missing === false && ow.before[1].missing === true && ow.hasAdd,
+        ow.err || JSON.stringify(ow.before))
+      check('外部程序: ↓ 下移立刻改顺序并说出动了谁(不是灰按钮没反应)',
+        !ow.err && /E2E-甲.*下移/.test(ow.movedToast || ''), ow.err || `toast="${ow.movedToast}"`)
+      check('外部程序: ✕ 删除立刻少一行并说出删了哪个',
+        !ow.err && ow.after?.length === 1 && ow.after[0].name === 'E2E-乙' && /已删除.*E2E-甲/.test(ow.delToast || ''),
+        ow.err || `剩 ${JSON.stringify(ow.after)} · toast="${ow.delToast}"`)
+      const diskOw = JSON.parse(fs.readFileSync(path.join(USER_DATA, 'settings.json'), 'utf8')).openWithApps || []
+      check('外部程序: 改动落到了 settings.json(界面与主进程与磁盘三份一致)',
+        JSON.stringify(ow.stored) === '["E2E-乙"]' && diskOw.length === 1 && diskOw[0].name === 'E2E-乙',
+        `主进程=${JSON.stringify(ow.stored)} · 磁盘=${JSON.stringify(diskOw.map(a => a.name))}`)
+      await sleep(400)
+    }
+
     const NOISE = /favicon|ERR_FILE_NOT_FOUND.*favicon|sandboxed_renderer\.bundle\.js|binding\.startupData/i
-    /* 「陈旧文件夹封面」豁免 —— 又一条证明式豁免(2026-09-30)。
-     * 背景(已知遗留, 0924 记录在案、尚未修): 文件夹封面 pickCover 取"第一张有标签的图",
-     * **不会因为那张图被删/被移而刷新**。11h 批量删除把 scan-dims/sq.png 删进了回收站,
-     * 而 11i 的 addAndOpenScanFolder 会退回文件夹列表层 —— 封面重新渲染, 404 就翻出来了
-     * (以前没人退回去看, 属于侥幸没撞上)。判据两条同时成立才放行:
+    /* 「陈旧文件夹封面」豁免 —— 证明式豁免(2026-09-30, 2026-10-24 补上自愈后留作兜底)。
+     * 背景: 文件夹封面 pickCover 取"第一张有标签的图", 那张图被删/被移之后,
+     * 老实现不会刷新封面 -> 退回列表层重新渲染时 404。现在列表会先把悬空封面置空、
+     * 后台对账再重挑一张真实存在的(见核心层与上面「扫描夹封面自愈」那段), 所以
+     * 这条豁免正常情况下永远命中不了。判据两条同时成立才放行:
      *   ① 请求的路径 == 被批量删除的那张 sq.png 的精确路径(不靠模式匹配);
-     *   ② 它在磁盘上确实已不在(真被删掉了, 若封面缓存修好/文件还在, 404 根本不会发生)。
-     * 封面缓存失效本身是待修项, 修好后这条豁免自然永远命中不了。 */
+     *   ② 它在磁盘上确实已不在(真被删掉了)。 */
     const STALE_COVER = path.join(path.dirname(SCAN_DIR), 'scan-dims', 'sq.png')
     // URL 里的盘符大小写会跟 Node 的路径写法不一致(d: vs D:), 归一化后再比
     const lower = (p) => String(p || '').toLowerCase()
@@ -5513,7 +6028,8 @@ async function main() {
     }
     check('运行期无 JS 异常 / Vue 警告', errs.length === 0,
       errs.length
-        ? `${errs.length} 条: ${errs.slice(0, 4).join(' | ')}`
+        // 判定用全文, 报给人看时再截断(否则一条 300 字的日文路径能把整行刷屏)
+        ? `${errs.length} 条: ${errs.slice(0, 4).map((x) => x.slice(0, 200)).join(' | ')}`
         : `0 条(已滤掉 favicon/沙箱引导 ${cdp.errors.length - errs.length - selfMovedN - staleN - coverN} 条` +
           (selfMovedN ? ` + 本测试外移的那张图 ${selfMovedN} 条` : '') +
           (staleN ? ` + 陈旧记录(库里 gone=0 但文件已不在) ${staleN} 条` : '') +

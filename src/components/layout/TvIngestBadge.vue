@@ -25,6 +25,7 @@ import { useAppStore } from '@/stores/useAppStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { nfmt } from '@/utils/format.js'
 import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
+import { floatLift } from '@/composables/useFloatCorner.js'
 
 const app = useAppStore()
 const router = useRouter()
@@ -208,7 +209,7 @@ onBeforeUnmount(clearTimer)
 
 <template>
   <Teleport to="body">
-    <div v-if="show" class="ingest-badge" :class="{ err: failed }">
+    <div v-if="show" class="ingest-badge" :class="{ err: failed }" :style="{ bottom: `${96 + floatLift}px` }">
       <!-- 进行中: 标题 + 进度条 + 当前对象 -->
       <template v-if="!linger">
         <div class="row">

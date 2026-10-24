@@ -20,7 +20,6 @@ import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { api } from '@/utils/api.js'
 import { useRouter } from 'vue-router'
 import { useCartPresetBadge } from '@/composables/useCartPresetBadge.js'
-import TvReplaceSetPicker from '@/components/export/TvReplaceSetPicker.vue'
 
 const cart = useCartStore()
 const ui = useUiStore()
@@ -71,7 +70,7 @@ async function exportAll() {
     const r = await cart.exportFile(true)
     if (r?.canceled) { ui.toast('已取消导出', 'info'); return }
     if (r?.error) { ui.err(r.error); return }
-    ui.ok(`✅ 已导出 ${r.count} 个角色(wildcard)`, 2400)
+    ui.ok(`✅ 已导出 ${r.count} 行 wildcard`, 2400)
   } finally {
     busy.value = false
   }
@@ -121,10 +120,26 @@ async function revealItem(it) {
           </div>
 
           <div class="acts">
-            <TvReplaceSetPicker v-model="cart.replaceSet" />
-            <TvButton size="sm" variant="success" :loading="busy" @click="exportAll">⬇ 导出全部</TvButton>
-            <TvButton size="sm" variant="warn" :disabled="!cart.count" @click="showCheckout = true">💳 结算</TvButton>
-            <TvButton size="sm" variant="secondary" @click="showHistory = true">🕘 历史</TvButton>
+            <TvButton
+              size="sm"
+              variant="success"
+              :loading="busy"
+              title="导出成 wildcard txt: 每行一个角色, 给 ComfyUI 抽卡"
+              @click="exportAll"
+            >⬇ 导出 txt</TvButton>
+            <TvButton
+              size="sm"
+              variant="primary"
+              :disabled="!cart.count"
+              title="把当前购物车存成一份清单, 之后可载入切换; 可顺便导出一份 txt"
+              @click="showCheckout = true"
+            >💾 存为清单</TvButton>
+            <TvButton
+              size="sm"
+              variant="secondary"
+              title="载入 / 重命名 / 删除之前存的清单"
+              @click="showHistory = true"
+            >📁 我的清单</TvButton>
             <TvButton size="sm" variant="primary" :disabled="!cart.count" @click="openCartFile">📋 复制</TvButton>
             <TvButton
               size="sm"

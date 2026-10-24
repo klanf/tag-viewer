@@ -2,10 +2,11 @@
 /**
  * 「设置」抽屉(2026-10-15, 2026-10-23 改抽屉式)
  * ==============================================
- * 三块:
+ * 四块:
  *   1. 反推环境: 实际后端 / onnxruntime 探测 / 模型 / 阈值 / Python
  *   2. 在线封面(Danbooru 凭据)
- *   3. 通用: 标签分组 / 版本与更新
+ *   3. 外部程序(右键「用其他程序打开」那份清单的增删排序, 改动即时落盘)
+ *   4. 通用: 标签分组 / 版本与更新
  *
  * 2026-10-23 用户反馈"显示有点混乱" —— 改成右侧抽屉, 说明性长文字统一收进
  * 标签旁的 ⓘ 气泡(悬停看、点一下钉住), 每一行只留"当前值 + 控件"。
@@ -205,6 +206,7 @@ async function loadAll() {
       // 首启下载完环境的机器会一直显示"未配置"(2026-10-15 用户截图实测)
       app.taggerRefresh().catch(() => null),
       loadAuth(),
+      loadOpenWith(),
     ])
     if (v) { version.value = v.version; packed.value = v.packaged }
     accel.value = a
@@ -243,16 +245,79 @@ async function save() {
     await app.taggerRefresh().catch(() => null)
     if (credsPending) {
       const ok = await saveAuth()
-      if (ok) ui.ok('已保存（含 Danbooru 凭据）', 'info', 2600)
+      if (ok) ui.ok('已保存（含 Danbooru 凭据）', 2600)
       else ui.err('设置已保存，但凭据没存上：' + authMsg.value)
     } else {
-      ui.ok('已保存，下一次反推生效', 'info', 2200)
+      ui.ok('已保存，下一次反推生效', 2200)
     }
   } catch (e) {
     ui.err(e.message || String(e))
   } finally {
     saving.value = false
   }
+}
+
+/* ---------------- 外部程序(右键「用其他程序打开」的清单, 2026-10-24 用户要求可管理) ----------------
+ * 每一项改动**立即落盘**: 这份列表不在底部「保存设置」的字段里 —— 混进去的话用户
+ * 挪完顺序还得猜该点哪个保存。删除不需要确认(重新「＋ 添加程序」就回来了), 但会给一句
+ * 带上路径的话, 免得想撤销时找不到那个 exe 在哪。 */
+const owApps = ref([])
+const owBusy = ref(false)
+
+async function loadOpenWith() {
+  try {
+    const d = await api.openWithApps()
+    owApps.value = Array.isArray(d?.apps) ? d.apps : []
+  } catch (e) {
+    owApps.value = []
+    ui.err('外部程序清单读不出来: ' + (e?.message || e), 3200)
+  }
+}
+
+const owPlain = () => owApps.value.map((a) => ({ name: a.name, path: a.path }))
+
+async function saveOpenWith(list, say) {
+  owBusy.value = true
+  try {
+    const r = await api.saveOpenWithApps(list)
+    owApps.value = Array.isArray(r?.apps) ? r.apps : list.map((a) => ({ ...a, exists: false }))
+    if (say) ui.ok(say, 1600)
+  } catch (e) {
+    ui.err('没保存上: ' + (e?.message || e), 3200)
+    await loadOpenWith()
+  } finally { owBusy.value = false }
+}
+
+/** 到头/到底不给灰按钮(点了没反应最容易被当成卡住), 而是说一句"已经在第一位了" */
+function owMove(i, step) {
+  const list = owPlain()
+  const j = i + step
+  if (!list[i]) return
+  if (j < 0) { ui.toast(`「${list[i].name}」已经在第一位了`, 'info', 1600); return }
+  if (j >= list.length) { ui.toast(`「${list[i].name}」已经在最后一位了`, 'info', 1600); return }
+  ;[list[i], list[j]] = [list[j], list[i]]
+  void saveOpenWith(list, `「${list[j].name}」${step < 0 ? '上移' : '下移'}了一位`)
+}
+
+function owDelete(i) {
+  const list = owPlain()
+  const [gone] = list.splice(i, 1)
+  if (!gone) return
+  void saveOpenWith(list, `已删除「${gone.name}」· ${gone.path}`)
+}
+
+async function owAdd() {
+  owBusy.value = true
+  try {
+    const r = await api.addOpenWithApp()
+    if (r?.canceled) return           // 用户按了取消 —— 不打扰
+    if (Array.isArray(r?.apps)) owApps.value = r.apps
+    if (r?.error) ui.err(r.error, 3200)
+    else if (r?.added) ui.ok('已加进列表, 现在右键「用其他程序打开」就能看到它', 2200)
+    else ui.toast('这个程序本来就在列表里了, 顺序没动', 'info', 2200)
+  } catch (e) {
+    ui.err('添加失败: ' + (e?.message || e), 3200)
+  } finally { owBusy.value = false }
 }
 
 async function checkUpdate() {
@@ -264,7 +329,7 @@ async function checkUpdate() {
 async function copyCudaCmd() {
   try {
     await navigator.clipboard.writeText('pip install onnxruntime-gpu')
-    ui.ok('命令已复制', 'info', 1600)
+    ui.ok('命令已复制', 1600)
   } catch { ui.err('复制失败，请手动输入') }
 }
 
@@ -481,6 +546,50 @@ const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider'
         </div>
       </section>
 
+      <!-- ── 外部程序(右键「用其他程序打开」的那份子菜单) ── -->
+      <section>
+        <h3>
+          外部程序（右键「用其他程序打开」）
+          <TvInfoTip :width="360">
+            这里就是那个子菜单的全部内容：从上到下一行一个程序，点一下就用它打开当前这张图。<br>
+            <b>排序</b>用 ↑ ↓，<b>删除</b>点 ✕，<b>加新的</b>点下面的「＋ 添加程序」——
+            在右键菜单里选「➕ 选择程序加进列表…」挑的程序也会自动加到这里。<br>
+            标了 <b>文件不存在</b> 的行：那个 exe 被移走或卸载了，菜单里已经不再显示它；
+            程序装回原路径会自己恢复，路径变了就删掉这条再重新添加。<br>
+            改动<b>当场保存、立即生效</b>，不用点底部的「保存设置」。
+          </TvInfoTip>
+        </h3>
+
+        <div v-if="!owApps.length" class="row">
+          <span class="k">&nbsp;</span>
+          <span class="v"><span class="dim">列表是空的 —— 右键那个子菜单里只剩「选择程序加进列表…」和「Windows 打开方式…」两条。</span></span>
+        </div>
+
+        <div v-for="(a, i) in owApps" :key="a.path" class="row owrow">
+          <span class="k">&nbsp;</span>
+          <span class="v grow owname">
+            <b>{{ a.name }}</b>
+            <span class="mono ospath" :title="a.path">{{ a.path }}</span>
+            <span v-if="!a.exists" class="chip err">文件不存在</span>
+          </span>
+          <span class="owacts">
+            <button class="owbtn" type="button" :disabled="owBusy" title="往上挪一位" @click="owMove(i, -1)">↑</button>
+            <button class="owbtn" type="button" :disabled="owBusy" title="往下挪一位" @click="owMove(i, 1)">↓</button>
+            <button class="owbtn del" type="button" :disabled="owBusy" :title="`从列表里删除「${a.name}」`" @click="owDelete(i)">✕</button>
+          </span>
+        </div>
+
+        <div class="row">
+          <span class="k">&nbsp;</span>
+          <span class="v inline">
+            <TvButton size="sm" variant="secondary" :disabled="owBusy" :title="owBusy ? '正在写入清单' : '挑一个 .exe 加进上面这份列表'" @click="owAdd">
+              ＋ 添加程序
+            </TvButton>
+            <span class="dim">只记录路径，不会现在启动它</span>
+          </span>
+        </div>
+      </section>
+
       <!-- ── 通用 ── -->
       <section>
         <h3>通用</h3>
@@ -582,6 +691,21 @@ h3 {
 .chk { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
 .chk input { accent-color: var(--accent); }
 .foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+/* 外部程序清单的一行: 名字 + 省略号路径 + 右边三个小方块按钮 */
+.owrow { align-items: center; margin-bottom: 6px; }
+.owname { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.owname b { flex: 0 0 auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ospath { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owacts { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.owbtn {
+  width: 24px; height: 24px; padding: 0; cursor: pointer;
+  font-size: 12px; line-height: 1;
+  background: var(--panel3); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-sm, 6px);
+}
+.owbtn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.owbtn.del:hover:not(:disabled) { background: var(--warn-soft, rgba(192, 57, 43, .16)); color: var(--danger, #c0392b); }
+.owbtn:disabled { opacity: .45; cursor: default; }
 .warn { color: var(--danger, #c0392b); font-size: 11px; }
 .oktxt { color: var(--accent); font-size: 11px; }
 </style>

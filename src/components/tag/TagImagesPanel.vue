@@ -86,7 +86,16 @@ watch(imgSort, (v) => { prefs.sortTagImgs = v })
  * 不然会给别的页面的标签偷偷发查询 */
 watch(() => [f.mode.value, f.srcSel.value.slice(), f.scanSel.value.slice()], () => {
   if (props.useSourceScan && props.active) load()
+  else if (props.useSourceScan) stale = true
 })
+
+/**
+ * "藏着的时候口径变了"才需要在露脸时补查(2026-10-24):
+ * 叠层改成藏起来(v-show)而不是拆掉之后, 退一层时 active 会由 false 变 true。
+ * 那时候若无条件 load(), 用户刚退回的那一层会**重新查询并跳回第一页**
+ * —— 这正是他要修的毛病。所以只在"藏着的期间 tag 或筛选真的变过"时补查。
+ */
+let stale = false
 
 async function load() {
   if (!props.tag) return
@@ -98,15 +107,18 @@ async function load() {
 watch(() => props.tag, (t) => {
   if (!t) return
   if (props.active) load()
+  else stale = true
 }, { immediate: true })
 
-/* 从休眠/别的页面切回来时补一次 —— 面板可能是在 active=false 时被换过 tag */
-watch(() => props.active, (v) => { if (v && props.tag) load() })
+/* 从休眠/别的页面切回来时补一次 —— 只补"藏着的时候真的变过"的, 见上面 stale 的注释 */
+watch(() => props.active, (v) => {
+  if (v && stale) { stale = false; if (props.tag) load() }
+})
 
 function toggleFav(item) {
   /* 第三个参数是整条 item —— 让收藏记录带上像素尺寸(收藏页网格按真实比例排版) */
   const added = fav.toggle(item?.path || item, item?.tags, item)
-  ui.ok(added ? '★ 已收藏' : '已取消收藏', 'info', 1200)
+  ui.ok(added ? '★ 已收藏' : '已取消收藏', 1200)
 }
 
 /* ---------------- 批量选择: 勾选 -> 批量移动/复制/删除 ---------------- */

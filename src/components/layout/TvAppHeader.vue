@@ -83,7 +83,7 @@ function toggleFavFilter() {
   fav.onlyFav = !fav.onlyFav
   ui.ok(fav.onlyFav
     ? '📌 已开启「只看收藏」, 首页结果只显示收藏的图片'
-    : '已关闭「只看收藏」', 'info', 1800)
+    : '已关闭「只看收藏」', 1800)
   // 首页在监听 onlyFav 变化, 会自己重搜; 其他视图只影响首页, 这里顺手带回去
   if (route.path !== '/') router.push('/')
 }

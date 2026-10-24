@@ -1,242 +1,64 @@
 <script setup>
 /**
- * 库内命中相似图 —— /meta-hits?src=<图片路径>
- * ==============================================
- * 光箱 meta 模式「库内命中 n/m」徽章的落点(2026-10-21 用户二次澄清):
- * 点击徽章 = **直接看命中的库内图片**, 按「与源图的重合词条数」降序 ——
- * 第一屏就是库里与这张最像的图。不是把 n 个词条塞进看板筛选框
- * (上一版的做法, n 个热词任一命中等于没筛, 用户当场否掉)。
+ * 库内命中相似图 · 独立页 /meta-hits?src=<图片路径>
+ * ==================================================
+ * 只作为**路由兜底**存在: 看板/系列/扫描/独立标签页里点光箱的「库内命中」徽章,
+ * 走的是宿主就地叠一层(MetaHitsPanel), 不换路由、不丢层级栈(2026-10-24 用户报
+ * 「从扫描的 breasts > open_mouth 里跳过去, 返回只剩 某个扫描夹」)。
  *
- * 复用现状: 图片网格/光箱/收藏/安全开关/批量选择全套现成组件, 数据走
- * 专用通道 tags:metaSimilar(匹配与排序见 core/metasim.js)。
- * 用 query 传 src 而不是 path 段 —— Windows 路径里 \ 和 : 塞 path 段要
- * 反复转义, 与 /detail 同一个理由。
+ * 收藏/购物车/详情这些没有叠层宿主的页面仍跳这里; 正文全部在 MetaHitsPanel。
+ * 用 query 传 src 而不是 path 段 —— Windows 路径里 \ 和 : 塞 path 段要反复转义。
  */
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import TvImageGrid from '@/components/image/TvImageGrid.vue'
-import TvBatchBar from '@/components/image/TvBatchBar.vue'
-import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
-import TvButton from '@/components/base/TvButton.vue'
-import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
-import { useImageFeed } from '@/composables/useImageFeed.js'
-import { useBatchOps } from '@/composables/useBatchOps.js'
-import { useFloatBack } from '@/composables/useFloatBack.js'
+import MetaHitsPanel from '@/components/tag/MetaHitsPanel.vue'
+import { usePagePath } from '@/composables/usePagePath.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
-import { useFavStore } from '@/stores/useFavStore.js'
-import { useUiStore } from '@/stores/useUiStore.js'
-import { useSafetyStore } from '@/stores/useSafetyStore.js'
-import { api } from '@/utils/api.js'
-import { nfmt } from '@/utils/format.js'
 
 const route = useRoute()
 const router = useRouter()
 const lb = useLightboxStore()
-const fav = useFavStore()
-const ui = useUiStore()
-const safety = useSafetyStore()
 
-const srcPath = ref('')
-/** 后端随页带回来的匹配概况: fallback=false 是全命中(剔角色/机位后 usedCount
- * 词全含); fallback=true 是全命中 0 张的降级态 —— 按重合度排最接近的 + 档位。 */
-const info = ref({
-  hitTags: [], metaCount: 0, maxHits: 0, over: [], grand: 0,
-  usedCount: 0, stripChar: 0, stripView: 0, allTotal: 0, fallback: false,
-})
-/** 重合档位: 降级态下只看重合 >= minHits 词的图(0=全部)。 */
-const minHits = ref(0)
+const srcPath = computed(() => (route.query.src ? String(route.query.src) : ''))
 
-const feed = useImageFeed({
-  infinite: true,
-  pageSize: 60,
-  fetcher: async (p) => {
-    const d = await api.metaSimilar({ ...p, path: srcPath.value })
-    if (d?.error) throw new Error(d.error)   // 后端异常别静默成 0 张(2026-10-21)
-    info.value = {
-      hitTags: d.hitTags || [], metaCount: d.metaCount || 0, maxHits: d.maxHits || 0,
-      over: d.over || [], grand: d.grand || 0, usedCount: d.usedCount || 0,
-      stripChar: d.stripChar || 0, stripView: d.stripView || 0,
-      allTotal: d.allTotal || 0, fallback: !!d.fallback,
-    }
-    return d
-  },
-})
+/** 父级 crumb 文案: 来源页名(光箱跳转时写在 query.from), 深链进来就写「上一页」 */
+const FROM_LABELS = {
+  home: '看板', 'tag-images': '标签图片', tags: '标签', series: '系列',
+  scan: '扫描', favs: '收藏', cart: '购物车', detail: '详情', sources: '来源管理',
+}
+const fromLabel = computed(() => FROM_LABELS[String(route.query.from || '')] || '上一页')
 
-/** 档位 chips(降级态): 从降序分布里挑 ~4 档(最高 / 3/4 / 1/2 / 1/4), 去重后展示 */
-const levels = computed(() => {
-  const over = info.value.over || []
-  if (!over.length) return []
-  const top = over[0].min
-  const pick = []
-  for (const f of [1, 0.75, 0.5, 0.25]) {
-    const t = Math.max(2, Math.round(top * f))
-    const e = over.find((o) => o.min <= t)
-    if (e && !pick.some((p) => p.min === e.min)) pick.push(e)
-  }
-  return pick
-})
-
-/** 当前图片流顺序 —— 传给大图预览做「上一张 / 下一张」 */
-const shownResults = computed(() => safety.filterItems(feed.results.value))
-const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boolean))
-watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
-
-/* src 是本页唯一参数: 光箱跳转/深链都走这里。本组件不在 KeepAlive 白名单,
- * 每次进入都重新挂载, immediate 兜住首屏。 */
-watch(() => route.query.src, (v) => {
-  if (route.name !== 'meta-hits') return
-  srcPath.value = v ? String(v) : ''
-  if (srcPath.value) feed.search({ min: minHits.value })
-  else feed.reset()
-}, { immediate: true })
-
-/* 切档位: 带着当前 min 重搜(后端过滤后分页, 排序不变) */
-watch(minHits, () => {
-  if (route.name === 'meta-hits' && srcPath.value) feed.search({ min: minHits.value })
-})
-
-/** 返回: 有上一页就 back(通常是光箱所在页), 深链直进则回看板 */
+/** 返回: 原路回来源页。从光箱跳来的回来时把光箱重新拉起来
+ *  —— 与标签页的 smartBack 同一套机制, 不然回到列表页顶部看起来像"跳去了新页面"。 */
 function back() {
-  if (window.history.state?.back != null) router.back()
-  else router.replace('/')
-}
-useFloatBack(() => {
-  if (route.name !== 'meta-hits') return false
-  back()
-  return true
-})
-
-function toggleFav(item) {
-  /* 第三个参数是整条 item —— 让收藏记录带上像素尺寸(收藏页网格按真实比例排版) */
-  const added = fav.toggle(item?.path || item, item?.tags, item)
-  ui.ok(added ? '★ 已收藏' : '已取消收藏', 'info', 1200)
+  const j = lb.takeJump(`meta:${srcPath.value}`)
+  if (window.history.state?.back != null) {
+    router.back()
+    // 等来源页渲染回来再拉起光箱 —— 立即开会被路由切换的渲染覆盖
+    if (j) setTimeout(() => { lb.open(j.imgPath, { list: j.list || [j.imgPath] }) }, 180)
+  } else {
+    router.replace('/')
+  }
 }
 
-/* 批量选择: 与看板/标签图片页同款(useBatchOps), 浏览态 Ctrl+点=勾选 */
-const {
-  selectMode, selected, moving, copying, moveOpen, copyOpen, folders: moveFolders,
-  toggleSelectMode, toggleSelect, selectAll, invertSel, clearSel,
-  onCardClick, batchDelete, openMove, openCopy, doMove, doCopy, onKey: batchKey,
-} = useBatchOps({
-  items: () => feed.results.value,
-  openImage: (it) => lb.open(it.path, { list: imgPaths.value }),
-})
-function onKey(e) { if (route.name !== 'meta-hits') return; batchKey(e) }
-onMounted(() => window.addEventListener('keydown', onKey))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+usePagePath('meta-hits', computed(() => (
+  srcPath.value
+    ? [{ label: fromLabel.value, onClick: back, back }, { label: '库内命中相似图' }]
+    : []
+)))
 </script>
 
 <template>
   <div class="meta-hits-view">
-    <div class="head">
-      <div class="crumb">
-        <span class="link" @click="back">返回</span>
-        <span class="sep">&gt;</span>
-        <span class="now">库内命中相似图</span>
-      </div>
-      <span class="spacer" />
-    </div>
-
-    <div class="panel body">
-      <div class="bar">
-        <b class="cnt">{{ nfmt(feed.total.value) }}</b>
-        <template v-if="!info.fallback">
-          <span class="hint">张全命中 · 剔角色 {{ info.stripChar }} / 机位 {{ info.stripView }} 后 {{ info.usedCount }} 词全含</span>
-        </template>
-        <template v-else>
-          <span class="hint warn">全命中 0 张 · 以下是重合最接近的(最高 {{ info.maxHits }}/{{ info.usedCount }} 词)</span>
-          <span v-if="levels.length" class="lvs">
-            <button
-              v-for="lv in levels"
-              :key="lv.min"
-              :class="['lv', { on: minHits === lv.min }]"
-              :title="`只看重合 ≥ ${lv.min} 个词条的图`"
-              @click="minHits = lv.min"
-            >≥{{ lv.min }} 词 · {{ nfmt(lv.count) }}</button>
-            <button :class="['lv', { on: !minHits }]" title="不过滤: 任一共同词条都算" @click="minHits = 0">全部 · {{ nfmt(info.grand) }}</button>
-          </span>
-        </template>
-        <span v-if="info.metaCount" class="hint faint">图内 {{ info.metaCount }} · 参与匹配 {{ info.usedCount }} · 命中库内 {{ info.hitTags.length }}</span>
-        <span class="spacer" />
-        <TvSafetyToggle :counts="feed.unsafe.value" />
-        <TvButton
-          size="sm"
-          variant="ghost"
-          title="批量选择: 勾选后批量移动/复制/删除(浏览状态下 Ctrl+点击也可直接勾)"
-          @click="toggleSelectMode"
-        >☑ 选择</TvButton>
-        <TvButton size="sm" variant="secondary" @click="back">← 返回</TvButton>
-      </div>
-
-      <TvBatchBar
-        v-if="selectMode"
-        :count="selected.size"
-        :moving="moving"
-        :copying="copying"
-        @sel-all="selectAll"
-        @sel-invert="invertSel"
-        @sel-clear="clearSel"
-        @exit="toggleSelectMode"
-        @move="openMove"
-        @copy="openCopy"
-        @del="batchDelete"
-      />
-
-      <div class="scroll">
-        <TvImageGrid
-          :results="feed.results.value"
-          :loading="feed.loading.value"
-          :error="feed.error.value"
-          :loaded-once="feed.loadedOnce.value"
-          :infinite="true"
-          :has-more="feed.hasMore.value"
-          favable
-          :is-fav="fav.isFav"
-          :selectable="selectMode"
-          :selected-tags="selected"
-          @open="onCardClick"
-          @toggle-select="toggleSelect"
-          @toggle-fav="toggleFav"
-          @load-more="feed.loadMore"
-          @hover="({ text, event }) => ui.showTip(text, event)"
-          @move="ui.moveTip"
-          @leave="ui.hideTip"
-        />
-      </div>
-    </div>
-
-    <MoveTargetModal v-model="moveOpen" :count="selected.size" :folders="moveFolders" :busy="moving" @pick="doMove" />
-    <MoveTargetModal v-model="copyOpen" mode="copy" :count="selected.size" :folders="moveFolders" :busy="copying" @pick="doCopy" />
+    <MetaHitsPanel :src="srcPath" :active="route.name === 'meta-hits'" />
   </div>
 </template>
 
 <style scoped>
 .meta-hits-view {
   flex: 1; min-height: 0;
-  display: flex; flex-direction: column; gap: 10px;
+  display: flex; flex-direction: column;
   padding: 12px;
   overflow: hidden;
 }
-.head { display: flex; align-items: center; flex: 0 0 auto; }
-.crumb { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
-.crumb .link { color: var(--accent); cursor: pointer; }
-.crumb .link:hover { text-decoration: underline; }
-.crumb .now { color: var(--text); }
-.crumb .sep { color: var(--faint); }
-
-.body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px; }
-.bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; flex: 0 0 auto; }
-.hint { color: var(--muted); font-size: 12px; }
-.warn { color: var(--warning, #b8860b); }
-.cnt { color: var(--accent); font-size: 16px; }
-.faint { color: var(--faint); }
-.lvs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.lv {
-  border: 1px solid var(--border); background: transparent; color: var(--muted);
-  border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer;
-  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
-}
-.lv:hover { border-color: var(--accent); color: var(--text); }
-.lv.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-.scroll { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 4px; }
 </style>

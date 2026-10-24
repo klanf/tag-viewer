@@ -32,11 +32,17 @@ import TvRulesEditorModal from '@/components/rules/TvRulesEditorModal.vue'
 import TvExportPresetsModal from '@/components/export/TvExportPresetsModal.vue'
 import TvDupPanel from '@/components/dup/TvDupPanel.vue'
 import TagImagesPanel from '@/components/tag/TagImagesPanel.vue'
+import TvSeriesCharsPanel from '@/components/series/TvSeriesCharsPanel.vue'
+import MetaHitsPanel from '@/components/tag/MetaHitsPanel.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
 import { useSearchHistory } from '@/composables/useSearchHistory.js'
 import { useBatchOps } from '@/composables/useBatchOps.js'
 import { usePagePath } from '@/composables/usePagePath.js'
-import { useTagHost } from '@/composables/useTagHost.js'
+import { useTagHost, useMetaHost } from '@/composables/useTagHost.js'
+import { useSeriesHost } from '@/composables/useSeriesHost.js'
+import { useLevelStack } from '@/composables/useLevelStack.js'
+import { useScrollKeep } from '@/composables/useScrollKeep.js'
+import { setFloatBaseTaken } from '@/composables/useFloatCorner.js'
 import { LS } from '@/utils/lskey.js'
 import { useAppStore } from '@/stores/useAppStore.js'
 import { useSourceStore } from '@/stores/useSourceStore.js'
@@ -61,9 +67,11 @@ const ui = useUiStore()
 const safety = useSafetyStore()
 const hist = useSearchHistory()
 
-/* ---------------- 来源内 tag 页(2026-10-23) ----------------
+/* ---------------- 来源内叠层(2026-10-23, 2026-10-24 补系列层) ----------------
  * 在看板光箱里点标签 = 就地翻开一页「看板 > 该标签」, 不换路由、顶部 tab 不动。
- * 在 tag 页的光箱里再点标签 = **继续往下叠一层**(看板 > A > B), 每一层一路 crumb。
+ * 在叠层的光箱里再点标签 = **继续往下叠一层**(看板 > A > B), 每一层一路 crumb。
+ * 点**系列药丸**叠的是另一种面板: 该系列的角色列表(看板 > blue_archive),
+ * 在角色列表里点角色 = 再接一层该角色的图(看板 > blue_archive > rio_(blue_archive))。
  *
  * 每层记下 from(开这一层时正开着的光箱 + 翻页列表): 返回箭头退一层, 把那一层的
  * 光箱原样拉回来 —— 点标签是往下翻一层, 不是把光箱关掉。点祖先 crumb / 回根页
@@ -71,59 +79,27 @@ const hist = useSearchHistory()
  *
  * 模板只渲染栈顶那一层; 退回上一层会重新取数(列表从头开始), 换来的是每层
  * 独立的筛选/选择状态, 不会把上一层的批量勾选带进来。 */
-let tagSeq = 0
-const tagLevels = ref([])          // [{ id, tag, from: { imgPath, list } | null }]
-const curTag = computed(() => tagLevels.value[tagLevels.value.length - 1]?.tag || '')
-const topLevel = computed(() => tagLevels.value[tagLevels.value.length - 1] || null)
-
-function openTagPage(tag) {
-  if (!tag) return
-  tagLevels.value.push({
-    id: ++tagSeq,
-    tag: String(tag),
-    /* 光箱此刻还开着(gotoTag 先调宿主再 close): 记下这一层返回时要恢复的图和翻页列表 */
-    from: lb.path ? { imgPath: lb.path, list: lb.list.length > 1 ? [...lb.list] : null } : null,
-  })
-}
-function restoreFrom(lv) {
-  const f = lv?.from
-  if (!f?.imgPath) return
-  /* 等 tag 页收起、来源网格渲染回来再开, 不然光箱会被同一帧的渲染盖住 */
-  nextTick(() => lb.open(f.imgPath, { list: f.list || [f.imgPath] }))
-}
-/** 返回箭头: 退一层并恢复开那一层时的光箱 */
-function backFromTagPage() {
-  restoreFrom(tagLevels.value.pop())
-}
-/** 点祖先 tag crumb: 直接回到那一层, 不恢复光箱 */
-function goTagLevel(i) {
-  if (i < 0 || i >= tagLevels.value.length - 1) return
-  tagLevels.value.splice(i + 1)
-}
-/** 回看板根页: 整栈清空, 不恢复光箱 */
-function clearTagPages() {
-  tagLevels.value = []
-}
+/* 层级栈本体搬进 useLevelStack(看板/系列/扫描三页共用): 这里只留别名与两个宿主登记。 */
+const {
+  levels: tagLevels,
+  openTagPage, openSeriesPage, openMetaPage,
+  backOneLevel: backFromTagPage, clearLevels: clearTagPages,
+  popLevel: onTagDeletedInPage, renameTopLevel: onTagRenamedInPage, levelCrumbs,
+} = useLevelStack()
 useTagHost('home', openTagPage)
+useMetaHost('home', openMetaPage)
+useSeriesHost('home', openSeriesPage)
 
 usePagePath('home', computed(() => {
   const stack = tagLevels.value
   if (!stack.length) return [{ label: '看板' }]
-  return [
-    { label: '看板', onClick: clearTagPages, back: backFromTagPage },
-    ...stack.map((lv, i) => (i === stack.length - 1
-      ? { label: lv.tag, copy: lv.tag, copyLabel: '标签名' }
-      : { label: lv.tag, onClick: () => goTagLevel(i), back: backFromTagPage })),
-  ]
+  return [{ label: '看板', onClick: clearTagPages, back: backFromTagPage }, ...levelCrumbs(stack)]
 }))
 
-function onTagRenamedInPage(t) {
-  if (topLevel.value) topLevel.value.tag = String(t)
-}
-/** 当前层被删: 只收起这一层, 不恢复光箱(退到上一层 tag 页或看板) */
-function onTagDeletedInPage() {
-  tagLevels.value.pop()
-}
+/* 切走再切回看板: 网格滚到「上次看到这张」, 这一页没有那张就回到离开时的位置。
+   看板以前完全没存过滚动位置, 切个 tab 回来就从头顶重看(2026-10-24 用户报)。 */
+useScrollKeep('.home .grid-wrap')
+
 
 /* ---------------- 筛选表单 ---------------- */
 const q = ref('')
@@ -131,6 +107,8 @@ const mode = ref('all')
 const match = ref('contains')
 const nameFilter = ref('')   // 文件名子串过滤(如 "Anima-" 找 ComfyUI 生成的图)
 const excludeChar = ref(true)
+/** 只看 ComfyUI 生成的图(2026-10-24) —— 按图内元数据来源筛, 比文件名靠谱 */
+const onlyComfy = ref(false)
 /* 排序从 prefs 读、改完写回 —— 用户明确要求"记住排序", 每次进来不用重点一遍 */
 const sort = ref(prefs.sortHome)
 const pageSize = ref(60)
@@ -179,6 +157,7 @@ const presetSnapshot = computed(() => ({
   match: match.value,
   exclude: '',
   exclude_char: excludeChar.value,
+  img_src: onlyComfy.value ? 'comfyui' : '',
   spaces: true,
   blacklist: true,
   replace: replaceExport.value,
@@ -241,7 +220,9 @@ const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boo
 const homeActive = ref(true)
 onActivated(() => { homeActive.value = true })
 onDeactivated(() => { homeActive.value = false })
-watch(imgPaths, (arr) => { if (homeActive.value && lb.visible) lb.setList(arr) })
+/* 叠层压上来时看板只是藏起来: 底下这份列表变了不能再往光箱里塞, 否则会把
+   「标签层那份翻页序列」换成看板的(2026-10-24 v-show 改造后必须补这一道)。 */
+watch(imgPaths, (arr) => { if (homeActive.value && !tagLevels.value.length && lb.visible) lb.setList(arr) })
 
 /* ---------------- 批量选择(2026-10-21): 勾选 -> 批量移动/复制/删除 ----------------
  * 用户场景: 按来源筛出一批图, 勾掉不要的直接搬走/删掉。逻辑在 useBatchOps
@@ -257,7 +238,9 @@ const {
 })
 
 function onHomeKey(e) {
-  if (!homeActive.value) return
+  /* 叠层压上来时看板只是**藏起来**(不再拆掉), 这个 window 监听还在 —— 不判这一句,
+     在标签层里按 Ctrl+A / Delete 会作用到藏在底下的看板网格上(不可逆动作, 必须挡掉)。 */
+  if (!homeActive.value || tagLevels.value.length) return
   batchKey(e)
 }
 onMounted(() => window.addEventListener('keydown', onHomeKey))
@@ -276,6 +259,7 @@ function buildQuery(offset = 0) {
     source: src.param,
   }
   if (nameFilter.value.trim()) o.name = nameFilter.value.trim()
+  if (onlyComfy.value) o.img_src = 'comfyui'
   if (sort.value === 'random') o.seed = rndSeed.value
   return o
 }
@@ -309,11 +293,23 @@ watch(nameFilter, () => {
   nameTimer = setTimeout(applyNameFilter, 400)
 })
 
+/** 「只看 ComfyUI」是后端过滤, 勾上立刻重搜 */
+watch(onlyComfy, () => { feed.search(buildQuery(0)) })
+
 /** 换一批: 只换随机种子 */
 async function shuffle() {
   rndSeed.value = Date.now()
   await feed.setQuery({ seed: rndSeed.value })
 }
+
+/* 右下角竖列: 🎲 在的时候占最下面一格, 让 ↑ 回到顶部 / 在线封面胶囊往上让一格。
+   不声明就会两颗 42px 圆键完全重叠(2026-10-24 用户报「随机按钮被返回顶层覆盖」)。 */
+watch(
+  () => route.name === 'home' && sort.value === 'random' && !tagLevels.value.length,
+  (on) => setFloatBaseTaken(on),
+  { immediate: true },
+)
+onBeforeUnmount(() => setFloatBaseTaken(false))
 
 /* ---------------- 统计 ---------------- */
 async function loadStats() {
@@ -427,7 +423,7 @@ function pickExport(withPath) {
    2026-10-01: 「只看收藏」模式已整个移除, 这里只剩 ★ 收藏本身。 */
 function toggleFav(item) {
   const added = fav.toggle(item?.path || item, item?.tags, item)
-  ui.ok(added ? '★ 已收藏' : '已取消收藏', 'info', 1200)
+  ui.ok(added ? '★ 已收藏' : '已取消收藏', 1200)
 }
 
 /* ---------------- 生命周期 ---------------- */
@@ -476,8 +472,10 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 
 <template>
   <div class="home" :class="{ 'tag-mode': tagLevels.length }">
-    <!-- 看板本体: 打开标签页时整块收起(状态都还在, 关掉即可原样回来) -->
-    <template v-if="!tagLevels.length">
+    <!-- 看板本体: 打开标签页时**藏起来**(v-show), 不是拆掉。
+         拆掉会把已加载的网格连同滚动位置一起扔掉, 退回时重新查询 = 跳回第一页 + 图重加载
+         (2026-10-24 用户报的毛病)。display:contents 让这层包装不改变原来的 flex 排布。 -->
+    <div v-show="!tagLevels.length" class="layer-base">
     <!-- ---------------- 左栏 ---------------- -->
     <aside class="left">
       <TvSourceChips
@@ -532,6 +530,11 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 
         <div class="checks">
           <TvCheckbox v-model="excludeChar" label="过滤角色标签(含括号的 xxx_(系列))" />
+          <TvCheckbox
+            v-model="onlyComfy"
+            label="只看 ComfyUI 生成的图"
+            title="按图片内嵌元数据的来源筛, 只留 ComfyUI 出的图(比按文件名猜靠谱); 刚入库、还没读过来源的图暂时不计入, 会在后台补读"
+          />
         </div>
 
         <div class="row">
@@ -751,6 +754,9 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
           @toggle-select="toggleSelect"
           @toggle-fav="toggleFav"
           @load-more="feed.loadMore"
+          :empty-text="onlyComfy
+            ? '没有 ComfyUI 生成的图(刚入库、来源还没读到的图暂时不算在内)'
+            : '没有匹配的图片'"
           @hover="({ text, event }) => ui.showTip(text, event)"
           @move="ui.moveTip"
           @leave="ui.hideTip"
@@ -765,19 +771,36 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
       title="换一批(随机重排, 参数不变)"
       @click="shuffle"
     >🎲</button>
-    </template>
+    </div>
 
-    <!-- 标签次级页(2026-10-23): 光箱点标签 = 就地翻开, 顶部 tab 仍是看板、光箱不叠层。
-         只渲染栈顶; key 用层 id —— 换一层就是新面板, 不把上一层的批量勾选带过来。 -->
-    <TagImagesPanel
-      v-else-if="topLevel"
-      :key="topLevel.id"
-      :tag="curTag"
-      use-source-scan
-      :active="route.name === 'home'"
-      @renamed="onTagRenamedInPage"
-      @deleted="onTagDeletedInPage"
-    />
+    <!-- 就地叠的次级页(2026-10-23): 光箱点标签 = 该标签的图片, 点系列药丸 = 该系列的角色列表。
+         顶部 tab 仍是看板、光箱不叠层。**每一层都挂着、只露栈顶**(2026-10-24):
+         退一层时那一层的分页/滚动/已加载的缩略图原样还在, 不用重新查询;
+         key 用层 id —— 换一层就是新面板, 不把上一层的批量勾选带过来。 -->
+    <template v-for="(lv, i) in tagLevels" :key="lv.id">
+      <TagImagesPanel
+        v-if="lv.kind === 'tag'"
+        v-show="i === tagLevels.length - 1"
+        :tag="lv.tag"
+        use-source-scan
+        :active="route.name === 'home' && i === tagLevels.length - 1"
+        @renamed="onTagRenamedInPage"
+        @deleted="onTagDeletedInPage"
+      />
+      <TvSeriesCharsPanel
+        v-else-if="lv.kind === 'series'"
+        v-show="i === tagLevels.length - 1"
+        :series="lv.series"
+        :active="route.name === 'home' && i === tagLevels.length - 1"
+        @open-char="(c) => openTagPage(c.tag)"
+      />
+      <MetaHitsPanel
+        v-else
+        v-show="i === tagLevels.length - 1"
+        :src="lv.meta"
+        :active="route.name === 'home' && i === tagLevels.length - 1"
+      />
+    </template>
 
     <TvRulesEditorModal v-model="showBlacklist" kind="blacklist" @saved="doSearch" />
     <TvRulesEditorModal v-model="showReplace" kind="replace" @saved="doSearch" />
@@ -803,6 +826,8 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 }
 /* 标签次级页自带内边距; 外层留 12px 会变成双层白边 */
 .home.tag-mode { padding: 0; gap: 0; }
+/* 看板本体那层的包装: 不参与排布(孩子仍按 .home 的 flex 摆), 只用来整块 v-show */
+.layer-base { display: contents; }
 
 .left {
   flex: 0 0 372px; width: 372px;

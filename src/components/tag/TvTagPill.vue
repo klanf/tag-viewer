@@ -40,7 +40,7 @@ const props = defineProps({
   showZh: { type: Boolean, default: true },
   /** 视觉变体: auto 会根据标签自动判定角色/系列 */
   variant: { type: String, default: 'auto' },   // auto | char | series | plain
-  /** 点击动作, 只影响 title 文案: copy | filter | none */
+  /** 点击动作, 只影响 title 文案: copy | filter | series | none */
   action: { type: String, default: 'copy' },
   /**
    * 显示一个悬停才显形的 📋 复制按钮。
@@ -117,6 +117,8 @@ const pillTitle = computed(() => {
     return '已 ban(导出时剔除)' + (wild.value ? ` · 由通配规则 ${props.banRule} 命中` : '')
   }
   if (props.action === 'filter') return `点击查看该标签的图片: ${props.tag}`
+  /* 系列药丸走的是角色列表(不是该系列的图): title 要说准点下去看见什么 */
+  if (props.action === 'series') return `点击查看该系列的角色列表: ${props.tag}`
   if (props.action === 'copy') return `点击复制: ${props.tag}`
   return props.tag
 })

@@ -47,11 +47,18 @@ function exportCore(raw = {}) {
   const appendTags = appendRaw.split(',').map((t) => t.trim()).filter(Boolean)
 
   const records = scopeRecords(p.srcSet, p.favs)
-  const results = searchCached(
+  let results = searchCached(
     records, p.searchTags, p.mode, p.match,
     p.excludeTags, p.excludeMatch, p.excludeChar,
     frozenKey(p.srcSet), p.favs.length ? p.favs.slice().sort().join('|') : '',
   )
+  /* 文件名 / 图内元数据来源过滤(2026-10-24): 列表页筛出来的张数与导出必须同口径 ——
+     筛出 100 张却导出 300 行是最糟的一种"看起来成功"。同 doSearch, 两者都只能在
+     缓存结果上过滤(searchCached 的 key 不含它们)。 */
+  const nameQ = String(raw.name || '').trim().toLowerCase()
+  if (nameQ) results = results.filter((r) => r.path.toLowerCase().indexOf(nameQ) >= 0)
+  const imgSrc = String(raw.img_src || '').trim().toLowerCase()
+  if (imgSrc) results = results.filter((r) => String(r.imgSrc || '').toLowerCase() === imgSrc)
 
   const bl = useBl ? blacklistMatcher() : null
   // 替换规则组(2026-10-04): raw.replace_set 指定用哪一套, 空 = 当前默认组。

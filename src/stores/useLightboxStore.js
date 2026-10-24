@@ -313,7 +313,9 @@ export const useLightboxStore = defineStore('lightbox', () => {
    * 每层现场由宿主自己快照(见各视图的 tagLevels), 不共用这份单例记忆。 */
   let lastJump = null
 
-  /** 光箱点标签跳走之前调: 记住当前图和翻页列表 */
+  /** 光箱点标签跳走之前调: 记住当前图和翻页列表。
+   *  key 一般就是标签名; 「库内命中」页用 `meta:<图片路径>` 这种自带前缀的 key,
+   *  与真标签名不会撞。 */
   function rememberJump(tag) {
     lastJump = {
       tag,
@@ -337,19 +339,33 @@ export const useLightboxStore = defineStore('lightbox', () => {
     list.value = []
     index.value = -1    // gonePaths 故意不清 —— 见它的注释: 清了会让"收藏页保留了已删记录"那条链路再撞 404
     // lastPath 故意不清(见上面的注释)。这里再帮一把:
-    //   1) 广播 'tv:lb-closed' —— 有的视图是累加分页/无限滚动, 高亮那张可能还没
+    //   1) 广播 'tv:lb-closed' —— 有的视图是累加分页/窗口分页, 高亮那张可能还没
     //      渲染出来, 视图自己决定要不要把分页补齐(ScanView 就补);
     //   2) nextTick 后把高亮那张卡滚进可视区(block:'nearest' = 已可见就不动, 不会跳屏)。
     // 事件是同步广播的, 视图补页的渲染会排在同一次 flush 里, 所以这里的
     // nextTick 回调一定能看到补齐后的 DOM。
     if (lastPath.value && typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('tv:lb-closed', { detail: { path: lastPath.value } }))
-      nextTick(() => {
-        document.querySelector('.card.last-viewed')
-          ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-      })
-      scrollPending.value = false   // 已经滚过了, 卡片挂载时不要再滚一次
+      /* 滚不到(卡片还没挂载/这页此刻没显示)时**不能**把 scrollPending 抹掉:
+         抹了就等于"这次一定要滚过去", 之后卡片挂回来了反而没人负责滚 ——
+         叠层里切走再切回就再也定位不到上次那张(2026-10-24 用户报的第三条)。
+         留着由 TvImageCard 挂载时自己认。 */
+      nextTick(() => { if (revealLastViewed({ block: 'nearest' })) scrollPending.value = false })
     }
+  }
+
+  /**
+   * 把「上次看到这张」那张卡滚进视野 —— 只有**真的看得见**的卡片才算数
+   * (叠层底下那层是 v-show 藏起来的, offsetParent 为 null, 拿它滚等于白滚)。
+   * 返回是否真的滚了, 调用方据此决定要不要接着恢复自己的滚动位置。
+   */
+  function revealLastViewed({ block = 'center', clearPending = false } = {}) {
+    if (!lastPath.value || visible.value || typeof document === 'undefined') return false
+    const el = [...document.querySelectorAll('.card.last-viewed')].find((e) => e.offsetParent !== null)
+    if (!el) return false
+    el.scrollIntoView({ block, behavior: 'smooth' })
+    if (clearPending) scrollPending.value = false
+    return true
   }
 
   /* ---------------- 复制 ---------------- */
@@ -476,14 +492,14 @@ export const useLightboxStore = defineStore('lightbox', () => {
     if (!path.value) return
     // 把当前标签一起存进收藏(扫描图不在标签库, 收藏页显示标签只能靠这份快照)
     const added = fav.toggle(path.value, sortedTags.value)
-    ui.ok(added ? '★ 已收藏' : '已取消收藏', 'ok', 1200)
+    ui.ok(added ? '★ 已收藏' : '已取消收藏', 1200)
   }
 
   return {
     visible, loading, path, data, zhMap, error,
     sortedTags, needBg, bgAppend, isFav, bannedTags,
     list, index, count, pos, canPrev, canNext, inList, lastPath, scrollPending,
-    open, close, next, prev, go, jump, setList, removeCurrent, isGone,
+    open, close, revealLastViewed, next, prev, go, jump, setList, removeCurrent, isGone,
     rememberJump, takeJump,
     copyPlain, copyNoBan, copyRaw, copyFiltered, toggleBan, unbanAll, toggleFav, maybeAddBg,
   }

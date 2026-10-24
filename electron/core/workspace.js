@@ -120,14 +120,16 @@ export function saveSettings(patch) {
         path: String(f.path),
       }))
   }
-  // recentOpenWith: 右键「用其他程序打开」二级菜单的最近使用列表, [{ name, path }]。
-  // MRU 语义: 调用方已把最新项放最前, 这里只做去重 + 截断(留 6 个, 菜单别太长)。
-  if (Array.isArray(patch.recentOpenWith)) {
+  // openWithApps: 右键「用其他程序打开」子菜单的程序清单, [{ name, path }]。
+  // 2026-10-24 由用户自己管(设置页增删排序), 所以按**提交的顺序**原样存, 不做 MRU 置顶;
+  // 只做去重(路径大小写不敏感) + 截断(20 个, 菜单别太长)。
+  // 取代了老的 recentOpenWith(MRU): 那份数据只读不写, 首次读清单时迁进 openWithApps。
+  if (Array.isArray(patch.openWithApps)) {
     const seen = new Set()
-    next.recentOpenWith = patch.recentOpenWith
+    next.openWithApps = patch.openWithApps
       .filter((a) => a && typeof a.path === 'string' && a.path && !seen.has(a.path.toLowerCase()) && seen.add(a.path.toLowerCase()))
-      .slice(0, 6)
-      .map((a) => ({ name: String(a.name || a.path.split(/[\\/]+/).pop() || a.path), path: String(a.path) }))
+      .slice(0, 20)
+      .map((a) => ({ name: String(a.name || '').trim() || a.path.split(/[\\/]+/).pop() || a.path, path: String(a.path) }))
   }
   // 反推偏好(2026-10-15 设置弹窗): 推理后端覆盖(auto/cuda/dml/cpu) + 置信度阈值。
   // 落 settings.json; 进程内环境变量由 applyTaggerEnv() 同步, 下一次反推生效。

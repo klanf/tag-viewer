@@ -290,8 +290,23 @@ function patchRun(id, patch) {
  * 2026-10-20 起是 **async 分片管线**(buildExportAsync + promise 写盘): 大库上
  * 几秒钟的导出不再占死主进程 —— 界面假死/一切 IPC 排队就是这条同步管线造成的。
  * 抛错时也会把错误写进预设的 lastError(界面上能看见"上次失败原因")。
+ *
+ * 同一个预设**串行**执行(2026-10-24 实测踩到): 手动「立即导出」和 1.5 秒后到点的
+ * 自动导出撞在一起时, 两者用同一个 `.tmp<pid>` 临时名 —— 先跑完的那个把临时文件
+ * rename 走了, 另一个 rename 直接 ENOENT, 界面上就是"导出失败、文件没更新"。
+ * 排队后第二次导出重新算一遍, 结果仍然是最后一次的状态, 不存在互相踩。
  */
-export async function runPreset(id, { trigger = 'manual' } = {}) {
+const running = new Map()
+let tmpSeq = 0
+
+export function runPreset(id, opts = {}) {
+  const prev = running.get(id) || Promise.resolve()
+  const next = prev.catch(() => {}).then(() => runPresetOnce(id, opts))
+  running.set(id, next)
+  return next.finally(() => { if (running.get(id) === next) running.delete(id) })
+}
+
+async function runPresetOnce(id, { trigger = 'manual' } = {}) {
   const store = readStore()
   const preset = store.presets.find((p) => p.id === id)
   if (!preset) throw new Error('预设不存在(可能已被删除)')
@@ -300,7 +315,8 @@ export async function runPreset(id, { trigger = 'manual' } = {}) {
     const r = await buildExportAsync(toExportQuery(preset.params))
     fs.mkdirSync(preset.dir, { recursive: true })
     const full = path.join(preset.dir, preset.file)
-    const tmp = `${full}.tmp${process.pid}`
+    // 临时名带进程号 + 序号: 两个预设指向同一个目标文件时不至于互相踩掉临时文件
+    const tmp = `${full}.tmp${process.pid}-${++tmpSeq}`
     await fs.promises.writeFile(tmp, r.text, 'utf8')
     // 原子替换: 下游(ComfyUI 等)固定读这个文件, 不会读到半截。
     // 走 replaceFileWithRetry —— Windows 上刚写出的文件可能被扫描器/索引器短暂占住,

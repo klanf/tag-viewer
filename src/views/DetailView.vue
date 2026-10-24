@@ -105,7 +105,7 @@ async function toggleBan(tag) {
     if (data.value?.ban_map) {
       data.value.ban_map[tag] = { banned: !!r.banned, rule: r.banned ? tag.toLowerCase() : '' }
     }
-    ui.ok(r.banned ? `🚫 已 ban: ${tag}` : `已取消 ban: ${tag}`, 'info', 1600)
+    ui.ok(r.banned ? `🚫 已 ban: ${tag}` : `已取消 ban: ${tag}`, 1600)
   } catch (e) {
     ui.err('操作失败: ' + e.message)
   }
@@ -113,7 +113,7 @@ async function toggleBan(tag) {
 
 function toggleFav() {
   const added = fav.toggle(path.value, tags.value)
-  ui.ok(added ? '★ 已收藏' : '已取消收藏', 'info', 1200)
+  ui.ok(added ? '★ 已收藏' : '已取消收藏', 1200)
 }
 
 async function reveal() {

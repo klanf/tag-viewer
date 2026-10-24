@@ -27,6 +27,7 @@ import TvTagSuggestInput from '@/components/tag/TvTagSuggestInput.vue'
 import TvImageCard from '@/components/image/TvImageCard.vue'
 import TvEntityCard from '@/components/series/TvEntityCard.vue'
 import TvState from '@/components/base/TvState.vue'
+import TvInfoTip from '@/components/base/TvInfoTip.vue'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { usePrefsStore } from '@/stores/usePrefsStore.js'
@@ -41,8 +42,12 @@ import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import TvZoomBadge from '@/components/base/TvZoomBadge.vue'
 import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
 import TagImagesPanel from '@/components/tag/TagImagesPanel.vue'
+import TvSeriesCharsPanel from '@/components/series/TvSeriesCharsPanel.vue'
+import MetaHitsPanel from '@/components/tag/MetaHitsPanel.vue'
 import { usePagePath } from '@/composables/usePagePath.js'
-import { useTagHost } from '@/composables/useTagHost.js'
+import { useTagHost, useMetaHost } from '@/composables/useTagHost.js'
+import { useSeriesHost } from '@/composables/useSeriesHost.js'
+import { useLevelStack } from '@/composables/useLevelStack.js'
 import { api, onPush } from '@/utils/api.js'
 import { nfmt } from '@/utils/format.js'
 import { LS } from '@/utils/lskey.js'
@@ -70,57 +75,22 @@ const taggerMissingText = computed(() => (app.tagger?.config?.missing || []).joi
 /* ---------------- 一级: 文件夹库 ---------------- */
 const level = ref('list')            // list | folder
 
-/* 来源内 tag 页(2026-10-23): 文件夹里的大图点标签 = 就地翻到「扫描 > 文件夹 > 标签」,
- * 标签页光箱里再点标签可以继续往下叠(扫描 > 文件夹 > A > B)。
+/* 来源内叠层(2026-10-23, 2026-10-24 补系列层): 文件夹里的大图点标签 = 就地翻到
+ * 「扫描 > 文件夹 > 标签」, 叠层的光箱里再点标签可以继续往下叠(扫描 > 文件夹 > A > B);
+ * 点系列药丸叠的是该系列的角色列表, 点角色再接一层该角色的图。
  * 每层记下 from(开这一层时的光箱 + 翻页列表): 返回箭头退一层并把光箱原样拉回来;
- * 点文件夹 crumb / 回扫描列表是直接跳过去, 不恢复光箱。 */
-let tagSeq = 0
-const tagLevels = ref([])          // [{ id, tag, from: { imgPath, list } | null }]
-const curTag = computed(() => tagLevels.value[tagLevels.value.length - 1]?.tag || '')
-const topLevel = computed(() => tagLevels.value[tagLevels.value.length - 1] || null)
-
-function openTagPage(tag) {
-  if (!tag) return
-  tagLevels.value.push({
-    id: ++tagSeq,
-    tag: String(tag),
-    /* 光箱此刻还开着(gotoTag 先调宿主再 close): 记下这一层返回时要恢复的图和翻页列表 */
-    from: lb.path ? { imgPath: lb.path, list: lb.list.length > 1 ? [...lb.list] : null } : null,
-  })
-}
-function restoreFrom(lv) {
-  const f = lv?.from
-  if (!f?.imgPath) return
-  /* 等 tag 页收起、文件夹图集渲染回来再开, 不然光箱会被同一帧的渲染盖住 */
-  nextTick(() => lb.open(f.imgPath, { list: f.list || [f.imgPath] }))
-}
-/** 返回箭头: 退一层并恢复开那一层时的光箱 */
-function backFromTagPage() {
-  restoreFrom(tagLevels.value.pop())
-}
-/** 点祖先 tag crumb: 直接回到那一层, 不恢复光箱 */
-function goTagLevel(i) {
-  if (i < 0 || i >= tagLevels.value.length - 1) return
-  tagLevels.value.splice(i + 1)
-}
-/** 回文件夹图集: 整栈清空, 并恢复第一层打开时的光箱(与点文件夹 crumb 的老行为一致) */
-function backToRootPage() {
-  const first = tagLevels.value[0]
-  tagLevels.value = []
-  restoreFrom(first)
-}
-/** 回扫描列表: 整栈清空, 不恢复光箱 */
-function clearTagPages() {
-  tagLevels.value = []
-}
+ * 点文件夹 crumb / 回扫描列表是直接跳过去, 不恢复光箱。
+ * 栈本体在 useLevelStack(看板/系列/扫描三页共用), 这里只留别名与两个宿主登记。 */
+const {
+  levels: tagLevels,
+  openTagPage, openSeriesPage, openMetaPage,
+  backOneLevel: backFromTagPage, clearLevels: clearTagPages,
+  backToRoot: backToRootPage, popLevel: onTagDeletedInPage,
+  renameTopLevel: onTagRenamedInPage, levelCrumbs,
+} = useLevelStack()
 useTagHost('scan', openTagPage)
-function onTagRenamedInPage(t) {
-  if (topLevel.value) topLevel.value.tag = String(t)
-}
-/** 当前层被删: 只收起这一层, 不恢复光箱 */
-function onTagDeletedInPage() {
-  tagLevels.value.pop()
-}
+useMetaHost('scan', openMetaPage)
+useSeriesHost('scan', openSeriesPage)
 const folders = ref([])
 const loadingList = ref(false)
 const listError = ref('')
@@ -272,7 +242,7 @@ const { wrapEl: rowsEl, rows: scanRows } = useJustifiedRows(pagedItems, { base: 
  * 光箱还把它算在翻页序列里, 于是往后翻会翻到一张已经不在网格里的幽灵图。
  * (「删掉当前这张就前进」由 useLightboxStore 订阅 tv:trashed / tv:moved 自己负责,
  *  这里管的是另外那种情况: 被剔掉的是**别的**图。) */
-watch(imgPaths, (arr) => { if (scanActive.value && lb.visible) lb.setList(arr) })
+watch(imgPaths, (arr) => { if (scanActive.value && !tagLevels.value.length && lb.visible) lb.setList(arr) })
 /* 激活守卫(2026-10-03): 本页被 KeepAlive 休眠时上面的 watch 依然活跃 —— 若用户
  * 在别的页面(看板)开着光箱, 这边后台刷新把扫描列表塞进光箱会污染翻页序列
  * (当前图不在其中 -> index 丢失 -> 再移一张图 removeCurrent 就 close())。
@@ -453,7 +423,13 @@ async function openFolder(f, { refresh = false } = {}) {  if (!f.exists) { ui.wa
     }
     // 高亮框持久化的场景: 重启后第一次打开这个文件夹, 高亮那张可能落在第 2+ 页,
     // 不补页的话它根本不会被渲染, TvImageCard 里的"自动滚过去"就永远等不到。
-    if (lb.scrollPending && lb.lastPath) expandPageForPath(lb.lastPath)
+    // 这里**不再看 lb.scrollPending** —— 那个标志是一次性的, 用户逛过一圈(光箱/标签层)
+    // 再回来早已被消费掉, 于是既不补页也不滚(2026-10-24 用户报的 0)。
+    // 分隔符要归一: folders 表里存的是正斜杠, 图片路径是反斜杠。
+    const norm = (s) => String(s || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    const lp = norm(lb.lastPath)
+    revealWanted = !!lp && lp.startsWith(norm(f.path) + '/')
+    if (revealWanted) revealLastViewedInFolder()
     if (d.folder_record) {
       const i = folders.value.findIndex((x) => x.path.toLowerCase() === f.path.toLowerCase())
       if (i >= 0) folders.value[i] = d.folder_record
@@ -472,6 +448,8 @@ function backToList() {
    * 但把所有夹都"活动"一遍没有任何必要, 用户诉求就是"只刷新退出的文件夹"。
    * 两个返回入口(右下悬浮箭头 / 右上「← 返回」按钮)都走这里, 改一处即可。 */
   const exited = cur.value?.path || null
+  revealWanted = false
+  revealSeq++                 // 作废还在重试的「滚到上次那张」
   level.value = 'list'
   cur.value = null
   result.value = null
@@ -686,9 +664,12 @@ async function doCopy(target) {
 
 /** Esc 退出选择 / Ctrl+A 全选 / Del 批量删除 —— 只在本页、二级网格、非光箱时接管。
  *  ⚠️ 本视图在 KeepAlive 白名单里, 监听器卸载前一直在 —— 必须先判 route.name,
- *  否则在别的页面按 Esc/Ctrl+A 会被这里抢走。 */
+ *  否则在别的页面按 Esc/Ctrl+A 会被这里抢走。
+ *  ⚠️ 叠层(标签页/角色列表)压上来时图片网格只是藏起来, 同样要让键盘给栈顶那一层 ——
+ *  不然在标签层里按 Delete 会删掉藏在底下的扫描图。 */
 function onScanKey(e) {
   if (route.name !== 'scan' || level.value !== 'folder') return
+  if (tagLevels.value.length) return
   if (lb.visible || moveOpen.value || copyOpen.value) return   // 光箱/弹窗自己管键盘
   if (!selectMode.value) return
   const k = e.key?.toLowerCase()
@@ -799,6 +780,35 @@ function expandPageForPath(p) {
   return true
 }
 
+/* 「上次看的那张」找回来: 补到它所在的那页, 再滚进视野。
+ *
+ * 为什么不复用 TvImageCard 里那条 scrollPending 的路: 那是个**一次性**标志, 光箱关一次
+ * 就被清掉。用户进夹 → 开光箱 → 点标签逛一圈 → 点「扫描」回列表 → 再进同一个夹, 标志
+ * 早没了, 于是这次既不补页也不滚(2026-10-24 用户报的第 0 条)。现在改成由这里负责,
+ * 进夹、流式补图都来叫一次。
+ *
+ * 重试的理由: 卡片要等 justified-rows 量完容器宽度才有行/单元格, 第一次 nextTick 时
+ * 未必渲染出来; 流式夹里高亮那张也可能还没扫到。每 80ms 再试, 约 2 秒后放弃。 */
+let revealWanted = false
+let revealSeq = 0
+async function revealLastViewedInFolder() {
+  if (!revealWanted || lb.visible || level.value !== 'folder' || !lb.lastPath) return
+  const seq = ++revealSeq
+  for (let i = 0; i < 24; i++) {
+    if (seq !== revealSeq || !revealWanted || level.value !== 'folder' || lb.visible) return
+    if (expandPageForPath(lb.lastPath)) {
+      await nextTick()
+      if (seq !== revealSeq || !revealWanted) return
+      if (lb.revealLastViewed({ block: 'center' })) {
+        revealWanted = false
+        lb.scrollPending = false   // 已经滚过了, 别让卡片挂载时再滚一次
+        return
+      }
+    }
+    await new Promise((r) => setTimeout(r, 80))
+  }
+}
+
 function onLbClosed(e) {
   expandPageForPath(e.detail?.path)
 }
@@ -838,6 +848,7 @@ const offScanPartial = onPush('scan:partial', (p) => {
   const fresh = (p.items || []).filter((it) => !have.has(it.path))
   if (fresh.length) result.value.items.push(...fresh)
   streamInfo.value = { done: p.done, total: p.total }
+  revealLastViewedInFolder()   // 高亮那张可能这一批才扫到
 })
 
 const offScanFinal = onPush('scan:final', (out) => {
@@ -847,6 +858,7 @@ const offScanFinal = onPush('scan:final', (out) => {
   streaming.value = false
   streamInfo.value = null
   fillScanZh(out)                     // 流式期间新出现的标签补中文映射
+  revealLastViewedInFolder()          // 全量到齐后再试一次(排序/数量可能变了)
 })
 
 onMounted(() => {
@@ -877,7 +889,39 @@ onBeforeUnmount(() => {
  * 存的时刻用路由离开守卫(onBeforeRouteLeave) —— onDeactivated 触发时 DOM 已经
  * 被 KeepAlive 摘离 document, querySelector 会扑空。 */
 let savedScroll = { list: 0, folder: 0 }
+/** 叠层压上来之前文件夹网格的滚动位置(见下面 watch) —— 藏起来的元素读不出真值 */
+let baseScroll = 0
+
+/* 叠层压上来时底层是 `display:none`(见模板注释), 藏起来之后**读不到也存不住**滚动位置:
+ * 实测顶部 1200 压上标签层、退回来变成 0(元素在隐藏态下 scrollHeight=0, scrollTop 被夹成 0)。
+ * 所以进出叠层各做一次现场搬运 —— 压上去的那一帧(pre 队列, 底层还没被藏)先量下来,
+ * 整个栈收干净后再写回去。 */
+watch(() => tagLevels.value.length, (n, o) => {
+  if (!o && n) {
+    const box = document.querySelector('.scan-body .result-scroll')
+    if (box) baseScroll = box.scrollTop
+    revealWanted = false        // 底层马上被藏起来, 别再重试「滚到上次那张」
+    revealSeq++
+    return
+  }
+  if (o && !n) {
+    nextTick(() => {
+      const box = document.querySelector('.scan-body .result-scroll')
+      if (box && baseScroll) box.scrollTo({ top: baseScroll })
+    })
+  }
+}, { flush: 'pre' })
+
 onBeforeRouteLeave(() => {
+  /* 走别的 tab = 离开这一页, 叠层不跨页带走(2026-10-24 用户报: 从次级页点了看板再回来,
+   * 人还停在标签那一层, 而那一层的滚动已经没了 —— 回来就该是文件夹网格本身)。
+   * 顺带把这一页的现场记在离开之前: 栈还在时底层是藏着的, 直接读 scrollTop 会读到 0,
+   * 用上面量好的 baseScroll。 */
+  if (tagLevels.value.length) {
+    savedScroll[level.value] = baseScroll
+    clearTagPages()
+    return
+  }
   const box = document.querySelector(level.value === 'folder' ? '.scan-body .result-scroll' : '.list-panel')
   if (box) savedScroll[level.value] = box.scrollTop
 })
@@ -885,7 +929,14 @@ onBeforeRouteLeave(() => {
    再查一次纯属白跑, 用一个开关跳过它。 */
 let firstActivate = true
 onActivated(() => {
+  /* ③ 回到上次在看的那张(2026-10-24 用户报「重新进扫描没有停在最后看的那张、也没高亮」):
+   * 关掉光箱时的 'tv:lb-closed' 只在**当时**这一页可见才管用; 用户是在别的 tab 上关的光箱、
+   * 或者从次级页误点根路径离开再回来, 那边的事件这页收不到。所以激活时自己补一遍:
+   * 先把窗口分页换到那张所在的页(高亮描边由 TvImageCard 读 lb.lastPath 画, 前提是它被渲染),
+   * 换页要等一帧才落到 DOM, 滚动放在 nextTick 里。 */
+  const moved = !lb.visible && lb.lastPath && expandPageForPath(lb.lastPath)
   nextTick(() => {
+    if (moved && lb.revealLastViewed({ block: 'nearest' })) return
     const sel = level.value === 'folder' ? '.scan-body .result-scroll' : '.list-panel'
     const box = document.querySelector(sel)
     const top = savedScroll[level.value] || 0
@@ -902,14 +953,7 @@ onActivated(() => {
   if (level.value === 'list') kickStatsRefresh()
 })
 
-/** tag 栈的一串 crumb: 祖先层点了直接跳回那层(不恢复光箱), 栈顶挂复制按钮 */
-function tagCrumbs(stack) {
-  return stack.map((lv, i) => (i === stack.length - 1
-    ? { label: lv.tag, copy: lv.tag, copyLabel: '标签名' }
-    : { label: lv.tag, onClick: () => goTagLevel(i), back: backFromTagPage }))
-}
-
-/* 路径栏: 扫描 > 文件夹 > 标签…(标签页是就地翻开的, 关掉仍在原文件夹) */
+/* 路径栏: 扫描 > 文件夹 > 标签…(叠层是就地翻开的, 关掉仍在原文件夹) */
 usePagePath('scan', computed(() => {
   const stack = tagLevels.value
   const crumbs = [{
@@ -917,38 +961,42 @@ usePagePath('scan', computed(() => {
     onClick: () => { clearTagPages(); backToList() },
     back: stack.length ? backFromTagPage : undefined,
   }]
-  if (level.value !== 'folder' || !cur.value) return [...crumbs, ...tagCrumbs(stack)]
+  if (level.value !== 'folder' || !cur.value) return [...crumbs, ...levelCrumbs(stack)]
   crumbs.push({
     label: cur.value.name || cur.value.path,
     onClick: () => { if (stack.length) backToRootPage() },
     back: stack.length ? backFromTagPage : backToList,
   })
-  return [...crumbs, ...tagCrumbs(stack)]
+  return [...crumbs, ...levelCrumbs(stack)]
 }))
 </script>
 
 <template>
   <div class="scan-view" :class="{ 'pick-on': selectMode, 'tag-mode': tagLevels.length }">
-    <!-- 来源管理的入口(2026-10-04 从顶栏挪来; 2026-10-16 改为只在一级列表页显示:
-         原先绝对定位右上角, 和二级文件夹详情的「← 返回」按钮重叠(用户截图反馈)。
-         二级视图里改并入头部按钮行, 见下面 head 里的那份)。 -->
-    <RouterLink
-      v-if="!tagLevels.length && level === 'list'"
-      to="/sources"
-      class="to-sources"
-      data-test="goto-sources"
-      title="文件夹登记表: 登记来源/扫描夹、开关用途、追平"
-    >🗄️ 来源管理</RouterLink>
-
+    <!-- 扫描页本体(来源管理入口 + 一级文件夹库 + 二级图片网格): 叠层压上来时**藏起来**
+         (v-show)而不是拆掉 —— 拆掉会把窗口分页与滚动位置一起扔掉, 退回时重新扫描 =
+         跳回第一页 + 图重加载(2026-10-24 用户报)。display:contents 让包装层不参与排布。 -->
+    <div v-show="!tagLevels.length" class="layer-base">
     <!-- ==================== 一级: 文件夹库 ==================== -->
-    <template v-if="!tagLevels.length && level === 'list'">
+    <template v-if="level === 'list'">
       <div class="panel bar-panel">
-        <h2>📂 扫描文件夹</h2>
-        <div class="tip">
-          加入过的文件夹会一直留在这里, 下次点开即用(不用重新选目录)。<br>
-          支持 ComfyUI / A1111 / NovelAI / InvokeAI 生成图的 png 元数据。<br>
-          <b>与「看板」的分工</b>: 这里按<b>磁盘文件夹</b>浏览全部图片(含未入库的), 负责就地整理文件
-          (移动 / 复制 / 删除 / 打标); 已入库图片的标签搜索 / 组词 / 导出标签去「看板」。
+        <div class="bar-head">
+          <h2>📂 扫描文件夹</h2>
+          <!-- 三行长说明收进 ⓘ(设置页同款): 常驻会把一整行网格顶掉, 需要时再点开看 -->
+          <TvInfoTip :width="360">
+            <div class="itip-line">加入过的文件夹会一直留在这里, 下次点开即用(不用重新选目录)。</div>
+            <div class="itip-line">支持 ComfyUI / A1111 / NovelAI / InvokeAI 生成图的 png 元数据。</div>
+            <div class="itip-line"><b>与「看板」的分工</b>: 这里按<b>磁盘文件夹</b>浏览全部图片(含未入库的), 负责就地整理文件(移动 / 复制 / 删除 / 打标); 已入库图片的标签搜索 / 组词 / 导出标签去「看板」。</div>
+          </TvInfoTip>
+          <span class="spacer" />
+          <span class="head-cnt">共 {{ nfmt(folders.length) }} 个</span>
+          <!-- 来源管理入口(原先是绝对定位在页面右上角, 会和这行标题抢位置) -->
+          <RouterLink
+            to="/sources"
+            class="to-sources-inline"
+            data-test="goto-sources"
+            title="文件夹登记表: 登记来源/扫描夹、开关用途、追平"
+          >🗄️ 来源管理</RouterLink>
         </div>
 
         <!-- 反推环境不全: 常驻一条可操作的引导(点开是三步装法), 不是干瘪的"已跳过" -->
@@ -1046,36 +1094,7 @@ usePagePath('scan', computed(() => {
     </template>
 
     <!-- ==================== 二级: 文件夹里的图片 ==================== -->
-    <template v-else-if="!tagLevels.length">
-      <div class="panel bar-panel">
-        <div class="head">
-          <span class="spacer" />
-          <!-- 这里原来有一颗「☑ 选择」按钮(2026-10-22 第十八轮去掉)。
-               去掉的理由不是嫌它占地方, 是它把动线切成三趟: 右上角开模式 → 左边勾图
-               → 再回右上角点移动。现在进模式改成在网格里就地发生: 点卡片左上角的勾选框 /
-               长按卡片 / Ctrl+点击, 三条路都把手留在图上。 -->
-          <TvButton size="sm" variant="secondary" :loading="rescanning" @click="openFolder(cur, { refresh: true })">
-            🔄 重扫这个文件夹
-          </TvButton>
-          <RouterLink
-            to="/sources"
-            class="to-sources-inline"
-            data-test="goto-sources-folder"
-            title="文件夹登记表: 登记来源/扫描夹、开关用途、追平"
-          >🗄️ 来源管理</RouterLink>
-        </div>
-
-        <div class="path-line" :title="cur?.path">{{ cur?.path }}</div>
-
-        <!-- 流式扫描的后台进度(2026-10-16): 不挡网格, 一行小字 + 细条, 扫完自动消失 -->
-        <div v-if="streaming" class="stream-line" data-test="scan-stream-line">
-          <span class="sp-mini"><span class="sp-fill" :style="{ width: streamPct + '%' }" /></span>
-          <span>后台扫描中 <b>{{ nfmt(streamInfo?.done ?? rawItems.length) }}</b> / {{ nfmt(streamInfo?.total || 0) }} 张 · 完成前标签筛选只覆盖已扫描的部分</span>
-        </div>
-
-        <div v-if="error" class="err">{{ error }}</div>
-      </div>
-
+    <template v-else>
       <div class="panel result scan-body">
         <TvState
           v-if="opening"
@@ -1085,12 +1104,15 @@ usePagePath('scan', computed(() => {
         <div v-if="opening && scanProg" class="scan-prog">
           <div class="sp-bar"><div class="sp-fill" :style="{ width: scanPct + '%' }" /></div>
         </div>
-        <TvState v-else-if="!opening && !rawItems.length" state="empty" text="没有可显示的图片" />
+        <TvState v-else-if="!opening && !rawItems.length" state="empty" :text="error || '没有可显示的图片'" />
         <template v-else>
           <!-- 工具条挪到滚动区**外**(2026-10-16 用户反馈: 往下拉图片, 搜索框那排就看不见了)
                与批量条同款结构性常驻 —— 滚动只发生在 .result-scroll 里, 工具条天生钉在顶上。
-               (批量操作条已经在 2026-10-22 从这里搬走, 改浮在网格底部正中, 见文件末尾的 .pick-dock) -->
+               2026-10-24 方案 C: 夹名 / 重扫 / 来源管理并进这一行, 上面那块独立面板与整行
+               路径一起撤掉(用户要求不显示路径), 二级顶栏从 ≈154px 压到一行。 -->
           <div class="pager-bar">
+            <span class="cur-folder">📁 {{ cur?.name || cur?.path }}</span>
+            <span class="cur-count">{{ nfmt(rawItems.length) }} 张</span>
             <!-- 按标签 / 文件名筛选: 复用首页/标签页那个带补全的搜索框, 但补全走**本夹的标签池**
                  (扫描图是库外的, 它们的标签在标签库里可能根本不存在; 文件名压根不在标签库里)。
                  multi 胶囊模式(2026-10-16): 敲逗号定格成胶囊、继续输入时补全针对下一个词 ——
@@ -1140,7 +1162,24 @@ usePagePath('scan', computed(() => {
             <TvButton size="sm" variant="ghost" :disabled="page <= 1" title="上一页" @click="turnToPage(page - 1)">◀</TvButton>
             <TvButton size="sm" variant="ghost" :disabled="page >= totalPages" title="下一页(从页首开始)" @click="turnToPage(page + 1)">▶</TvButton>
             <TvButton size="sm" variant="ghost" title="滚到当前窗口的末尾(到底后继续加载)" @click="scrollToLoadedEnd">⏭</TvButton>
+            <TvButton size="sm" variant="secondary" :loading="rescanning" title="忽略 5 分钟缓存, 重扫这个文件夹" @click="openFolder(cur, { refresh: true })">
+              🔄 重扫
+            </TvButton>
+            <RouterLink
+              to="/sources"
+              class="to-sources-inline"
+              data-test="goto-sources-folder"
+              title="文件夹登记表: 登记来源/扫描夹、开关用途、追平"
+            >🗄️ 来源管理</RouterLink>
           </div>
+
+          <!-- 流式扫描的后台进度(2026-10-16): 不挡网格, 一行小字 + 细条, 扫完自动消失 -->
+          <div v-if="streaming" class="stream-line" data-test="scan-stream-line">
+            <span class="sp-mini"><span class="sp-fill" :style="{ width: streamPct + '%' }" /></span>
+            <span>后台扫描中 <b>{{ nfmt(streamInfo?.done ?? rawItems.length) }}</b> / {{ nfmt(streamInfo?.total || 0) }} 张 · 完成前标签筛选只覆盖已扫描的部分</span>
+          </div>
+
+          <div v-if="error" class="err">{{ error }}</div>
 
           <!-- 滚动只发生在这一层: 上面两排工具条都在滚动区外, 常驻顶上 -->
           <div class="result-scroll">
@@ -1259,17 +1298,36 @@ usePagePath('scan', computed(() => {
         @pick="doCopy"
       />
     </template>
+    </div>
 
-    <!-- 只渲染栈顶; key 用层 id —— 换一层就是新面板, 不把上一层的批量勾选带过来 -->
-    <TagImagesPanel
-      v-else-if="topLevel"
-      :key="topLevel.id"
-      :tag="curTag"
-      use-source-scan
-      :active="route.name === 'scan'"
-      @renamed="onTagRenamedInPage"
-      @deleted="onTagDeletedInPage"
-    />
+    <!-- 就地叠的次级页: 每一层都挂在 DOM 里、只露出栈顶(其余 v-show 藏起来)。
+         全挂而不是只渲染栈顶 —— 退一层时底下那层不用重新挂载, 它的图片流、翻页窗口、
+         滚动位置原样还在; 藏起来不影响滚动位置是实测过的(display:none 后 scrollTop 会被记住)。
+         key 用层 id: 换一层就是新面板, 不把上一层的批量勾选带过来。 -->
+    <template v-for="(lv, i) in tagLevels" :key="lv.id">
+      <TagImagesPanel
+        v-if="lv.kind === 'tag'"
+        v-show="i === tagLevels.length - 1"
+        :tag="lv.tag"
+        use-source-scan
+        :active="route.name === 'scan' && i === tagLevels.length - 1"
+        @renamed="onTagRenamedInPage"
+        @deleted="onTagDeletedInPage"
+      />
+      <TvSeriesCharsPanel
+        v-else-if="lv.kind === 'series'"
+        v-show="i === tagLevels.length - 1"
+        :series="lv.series"
+        :active="route.name === 'scan' && i === tagLevels.length - 1"
+        @open-char="(c) => openTagPage(c.tag)"
+      />
+      <MetaHitsPanel
+        v-else
+        v-show="i === tagLevels.length - 1"
+        :src="lv.meta"
+        :active="route.name === 'scan' && i === tagLevels.length - 1"
+      />
+    </template>
   </div>
 </template>
 
@@ -1283,12 +1341,21 @@ usePagePath('scan', computed(() => {
 }
 /* 标签次级页自带内边距; 外层再留 12px 会变成双层白边 */
 .scan-view.tag-mode { padding: 0; gap: 0; }
-.bar-panel { flex: 0 0 auto; padding: 14px; }
-.bar-panel h2 { font-size: 16px; margin-bottom: 6px; }
-.tip { color: var(--muted); font-size: 12px; line-height: 1.7; margin-bottom: 12px; }
+/* 底层包装层不参与排布(见模板注释): 藏起来时 v-show 会把它整棵子树 display:none,
+   露脸时清空 inline style 又恢复成 contents —— 布局与没有这层包装时完全一致。 */
+.layer-base { display: contents; }
+.bar-panel { flex: 0 0 auto; padding: 12px 14px; }
+.bar-panel h2 { font-size: 15px; margin: 0; }
+/* 一级标题行: 标题 + ⓘ + 总数 + 来源管理(都在一行, 不再单独占段) */
+.bar-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.bar-head .to-sources-inline { flex: none; }
+.head-cnt { color: var(--muted); font-size: 12px; }
+/* ⓘ 气泡是 Teleport 到 body 的, 这里只靠类名定段落间距(元素本身带着本组件的 scope 标记) */
+.itip-line { margin-bottom: 6px; }
+.itip-line:last-child { margin-bottom: 0; }
 
-.bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.bar2 { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+.bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.bar2 { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 .path { flex: 1; min-width: 260px; }
 .kw { max-width: 320px; }
 .progress { color: var(--accent2); font-size: 12px; margin-top: 8px; }
@@ -1307,7 +1374,6 @@ usePagePath('scan', computed(() => {
 
 .info { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.7; }
 .info b { color: var(--accent2); }
-.path-line { color: var(--faint); font-size: 11px; word-break: break-all; margin-top: 6px; }
 .warn-box {
   margin-top: 6px; color: var(--warn);
   background: var(--warn-soft); border-radius: var(--r-sm); padding: 6px 9px;
@@ -1317,7 +1383,6 @@ usePagePath('scan', computed(() => {
 .hint-line { margin-top: 6px; }
 .err { color: var(--danger); font-size: 12px; margin-top: 10px; }
 
-.head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* 二级视图头部里的「来源管理」入口: 观感对齐 TvButton secondary(顶栏链接同款 pill) */
 .to-sources-inline {
   font-size: 12px; text-decoration: none; line-height: 1;
@@ -1335,8 +1400,12 @@ usePagePath('scan', computed(() => {
 
 .pager-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .pager-bar .hint { color: var(--muted); font-size: 12px; }
+/* 二级工具栏最左边的夹名: 路径整行撤掉了(用户要求), 名字留在这里当"我在哪" */
+.cur-folder { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.cur-count { color: var(--muted); font-size: 11px; white-space: nowrap; margin-right: 2px; }
+.pager-bar .to-sources-inline { flex: none; white-space: nowrap; }
 /* 筛选框: 可伸缩但别把右边的排序/分页挤走 */
-.pager-bar .tag-filter { flex: 1 1 300px; max-width: 360px; margin-right: 4px; }
+.pager-bar .tag-filter { flex: 1 1 240px; max-width: 360px; margin-right: 4px; }
 .pager-bar .hit { color: var(--accent); font-size: 13px; }
 
 /* 批量操作条(选择模式) —— 见模板里 .pick-dock 那段注释: 浮在网格底部正中, 不 sticky。 */
@@ -1417,14 +1486,6 @@ usePagePath('scan', computed(() => {
 }
 .fbtns button:hover { background: var(--accent); }
 /* 就地改名(不用 window.prompt, 见 renameFolder 注释) */
-.to-sources {
-  position: absolute; top: 10px; right: 14px; z-index: 3;
-  font-size: 12px; text-decoration: none;
-  color: var(--muted); background: var(--panel);
-  border: 1px solid var(--border); border-radius: var(--r-pill);
-  padding: 3px 12px;
-}
-.to-sources:hover { color: var(--accent); border-color: var(--accent); }
 .rename-box { display: inline-flex; align-items: center; gap: 4px; width: 100%; }
 .rename-box :deep(.tv-field) { flex: 1; min-width: 0; }
 .mini {

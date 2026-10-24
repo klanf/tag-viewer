@@ -10,7 +10,7 @@
  * 原版用 window.scrollY 记忆滚动位置, 这个 SPA 里滚动发生在面板内部,
  * 所以改成记录/恢复面板的 scrollTop —— 返回时同样"回到刚才的位置"。
  */
-import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import TvSourceChips from '@/components/filter/TvSourceChips.vue'
 import TvEntityCard from '@/components/series/TvEntityCard.vue'
@@ -28,11 +28,16 @@ import TvCategoryManager from '@/components/rules/TvCategoryManager.vue'
 import TvCoverPickerModal from '@/components/series/TvCoverPickerModal.vue'
 import TvCharEditModal from '@/components/series/TvCharEditModal.vue'
 import TagImagesPanel from '@/components/tag/TagImagesPanel.vue'
+import TvSeriesCharsPanel from '@/components/series/TvSeriesCharsPanel.vue'
+import MetaHitsPanel from '@/components/tag/MetaHitsPanel.vue'
 import { useImageFeed } from '@/composables/useImageFeed.js'
 import { useBatchOps } from '@/composables/useBatchOps.js'
 import { useGridZoom } from '@/composables/useGridZoom.js'
 import { usePagePath } from '@/composables/usePagePath.js'
-import { useTagHost } from '@/composables/useTagHost.js'
+import { useTagHost, useMetaHost } from '@/composables/useTagHost.js'
+import { useSeriesHost } from '@/composables/useSeriesHost.js'
+import { useLevelStack } from '@/composables/useLevelStack.js'
+import { useScrollKeep } from '@/composables/useScrollKeep.js'
 import { useSourceStore } from '@/stores/useSourceStore.js'
 import { useCartStore } from '@/stores/useCartStore.js'
 import { useLightboxStore } from '@/stores/useLightboxStore.js'
@@ -59,59 +64,24 @@ const view = ref('series')        // series | chars | images
 const loading = ref(false)
 const listError = ref('')
 
-/* ---------------- 来源内 tag 页 + 全局路径栏(2026-10-23) ----------------
+/* ---------------- 来源内叠层 + 全局路径栏(2026-10-23, 2026-10-24 补系列层) ----------------
  * 在某一层的图集光箱里点标签 = 就地翻到下一层「该标签的图片」, 层级接着当前上下文:
  *   全部系列 > 系列 > 角色 > 标签
  * 标签页的光箱里再点标签可以继续往下叠(全部系列 > 系列 > 角色 > A > B)。
+ * 点**系列药丸**叠的是「该系列的角色列表」(kind=series), 再点角色 = 接一层该角色的图。
  * 每层记下 from(开这一层时的光箱 + 翻页列表): 返回箭头退一层并把光箱原样拉回来;
- * 点祖先 crumb / 回角色图集是直接跳过去, 不恢复光箱。 */
-let tagSeq = 0
-const tagLevels = ref([])          // [{ id, tag, from: { imgPath, list } | null }]
-const curTag = computed(() => tagLevels.value[tagLevels.value.length - 1]?.tag || '')
-const topLevel = computed(() => tagLevels.value[tagLevels.value.length - 1] || null)
-
-function openTagPage(tag) {
-  if (!tag) return
-  tagLevels.value.push({
-    id: ++tagSeq,
-    tag: String(tag),
-    /* 光箱此刻还开着(gotoTag 先调宿主再 close): 记下这一层返回时要恢复的图和翻页列表 */
-    from: lb.path ? { imgPath: lb.path, list: lb.list.length > 1 ? [...lb.list] : null } : null,
-  })
-}
-function restoreFrom(lv) {
-  const f = lv?.from
-  if (!f?.imgPath) return
-  /* 等 tag 页收起、图集渲染回来再开, 不然光箱会被同一帧的渲染盖住 */
-  nextTick(() => lb.open(f.imgPath, { list: f.list || [f.imgPath] }))
-}
-/** 返回箭头: 退一层并恢复开那一层时的光箱 */
-function backFromTagPage() {
-  restoreFrom(tagLevels.value.pop())
-}
-/** 点祖先 tag crumb: 直接回到那一层, 不恢复光箱 */
-function goTagLevel(i) {
-  if (i < 0 || i >= tagLevels.value.length - 1) return
-  tagLevels.value.splice(i + 1)
-}
-/** 回角色图集: 整栈清空, 并恢复第一层打开时的光箱(与点角色 crumb 的老行为一致) */
-function backToRootPage() {
-  const first = tagLevels.value[0]
-  tagLevels.value = []
-  restoreFrom(first)
-}
-/** 点系列 / 全部系列: 整栈清空, 不恢复光箱 */
-function clearTagPages() {
-  tagLevels.value = []
-}
+ * 点祖先 crumb / 回角色图集是直接跳过去, 不恢复光箱。
+ * 栈本体搬进 useLevelStack(看板/系列/扫描三页共用), 这里只留别名与宿主登记。 */
+const {
+  levels: tagLevels,
+  openTagPage, openSeriesPage, openMetaPage,
+  backOneLevel: backFromTagPage, clearLevels: clearTagPages,
+  backToRoot: backToRootPage, popLevel: onTagDeletedInPage,
+  renameTopLevel: onTagRenamedInPage, levelCrumbs,
+} = useLevelStack({ seriesLabel: (name) => seriesZh.value[name] || String(name || '') })
 useTagHost('series', openTagPage)
-function onTagRenamedInPage(t) {
-  if (topLevel.value) topLevel.value.tag = String(t)
-}
-/** 当前层被删: 只收起这一层, 不恢复光箱 */
-function onTagDeletedInPage() {
-  tagLevels.value.pop()
-}
+useMetaHost('series', openMetaPage)
+useSeriesHost('series', openSeriesPage)
 
 
 /* ---------------- 一: 系列列表 ---------------- */
@@ -198,6 +168,8 @@ async function loadSeries(opts = {}) {
       try {
         const m = await api.translate(names)
         seriesZh.value = { ...seriesZh.value, ...m }
+        /* 深链是数据先到、翻译后到: 打开系列时中文名还没并进来, 这里补上 */
+        if (curSeries.value) curSeriesZh.value = seriesZh.value[curSeries.value] || ''
       } catch { /* 没有翻译库也能用 */ }
     }
   } catch (e) {
@@ -278,6 +250,16 @@ async function openSeries(s) {
   view.value = 'chars'
   await loadChars(s.name)
   requestAnimationFrame(() => { if (charScrollEl.value) charScrollEl.value.scrollTop = scrollChars.value })
+}
+
+/** 按名字打开某个系列: 供 /series?series=xxx 路由直达(光箱里的系列药丸优先就地叠角色列表,
+ *  只有在系列/看板/扫描之外——比如详情页——才落到这条路由上) */
+function openSeriesByName(name) {
+  const hit = (seriesData.value?.series || []).find((s) => s.name === name)
+  if (!hit) return false
+  clearTagPages()
+  openSeries(hit)
+  return true
 }
 
 function backToChars() {
@@ -533,7 +515,9 @@ const imgFeed = useImageFeed({ infinite: true, pageSize: 60 })
  */
 const shownResults = computed(() => safety.filterItems(imgFeed.results.value))
 const imgPaths = computed(() => shownResults.value.map((i) => i.path).filter(Boolean))
-watch(imgPaths, (arr) => { if (lb.visible) lb.setList(arr) })
+/* 叠层压上来时系列页自己只是藏起来(见模板 layer-base): 这份列表不能再往光箱里塞,
+   否则会把栈顶那一层的翻页序列换成系列页的(2026-10-24 v-show 改造后补的守卫) */
+watch(imgPaths, (arr) => { if (route.name === 'series' && !tagLevels.value.length && lb.visible) lb.setList(arr) })
 const imgSort = ref(prefs.sortSeries)
 const imgPageSize = ref(prefs.seriesImgPageSize)
 const curChar = ref(null)
@@ -581,7 +565,8 @@ const {
 })
 
 function onSeriesKey(e) {
-  if (route.name !== 'series') return
+  // 叠层压上来时本页只是藏起来(见模板 layer-base), 键盘要让给栈顶那一层
+  if (route.name !== 'series' || tagLevels.value.length) return
   imgBatchKey(e)
 }
 onMounted(() => window.addEventListener('keydown', onSeriesKey))
@@ -696,31 +681,33 @@ watch(charSort, (v) => { prefs.sortSeriesChars = v })
 
 const route = useRoute()
 const router = useRouter()
-// 支持 /series?series=xxx 直达(从标签页/看板跳过来)
-watch(() => route.query.series, async (name) => {
-  if (name && seriesData.value) {
-    const hit = seriesData.value.series.find((s) => s.name === name)
-    if (hit) openSeries(hit)
-  }
-})
-
-/** tag 栈的一串 crumb: 祖先层点了直接跳回那层(不恢复光箱), 栈顶挂复制按钮 */
-function tagCrumbs(stack) {
-  return stack.map((lv, i) => (i === stack.length - 1
-    ? { label: lv.tag, copy: lv.tag, copyLabel: '标签名' }
-    : { label: lv.tag, onClick: () => goTagLevel(i), back: backFromTagPage }))
+/** 回系列列表时摘掉 ?series=, 否则之后换来源重载数据会又自动翻开它 */
+function clearSeriesQuery() {
+  if (route.query.series) router.replace({ name: 'series' })
 }
+// /series?series=xxx 直达(从光箱/其它页面跳过来)。不能只盯 query: 组件可能
+// 在 query 已定之后才挂载, 系列数据也是异步到的 —— 两个依赖一起看, 谁后到都能定位。
+watch(
+  [() => route.query.series, () => seriesData.value],
+  ([name, data]) => {
+    if (!name || !data) return
+    if (curSeries.value === name) return
+    if (!openSeriesByName(String(name))) ui.toast(`没找到系列「${name}」`, 'info', 2200)
+  },
+  { immediate: true },
+)
 
+/** 叠层的一串 crumb(tag 层 / 系列层)由 useLevelStack 统一生成 */
 /* 路径栏的内容(放在末尾: 引用了上面所有的层级状态与返回函数) */
 usePagePath('series', computed(() => {
   const stack = tagLevels.value
   const inTag = stack.length > 0
   const crumbs = [{
     label: '全部系列',
-    onClick: () => { clearTagPages(); showSeriesList() },
+    onClick: () => { clearSeriesQuery(); clearTagPages(); showSeriesList() },
     back: inTag ? backFromTagPage : undefined,
   }]
-  if (!curSeries.value) return [...crumbs, ...tagCrumbs(stack)]
+  if (!curSeries.value) return [...crumbs, ...levelCrumbs(stack)]
   const zh = curSeriesZh.value
   crumbs.push({
     label: zh || curSeries.value,
@@ -731,10 +718,10 @@ usePagePath('series', computed(() => {
       clearTagPages()
       if (view.value === 'images') backToChars()
     },
-    // 箭头 = 真的退一层: 图片层退回角色列表; 标签页退回去是光箱那一页
+    // 箭头 = 真的退一层: 图片层退回角色列表; 叠层退回去是光箱那一页
     back: inTag ? backFromTagPage : (view.value === 'images' ? backToChars : undefined),
   })
-  if (view.value !== 'images' || !curChar.value) return [...crumbs, ...tagCrumbs(stack)]
+  if (view.value !== 'images' || !curChar.value) return [...crumbs, ...levelCrumbs(stack)]
   crumbs.push({
     label: curChar.value.tag,
     copy: curChar.value.tag,
@@ -742,13 +729,21 @@ usePagePath('series', computed(() => {
     onClick: () => { if (inTag) backToRootPage() },
     back: inTag ? backFromTagPage : undefined,
   })
-  return [...crumbs, ...tagCrumbs(stack)]
+  return [...crumbs, ...levelCrumbs(stack)]
 }))
+
+/* 切走再切回系列页: 停在离开时的地方, 这一页有「上次看到这张」时优先滚到那张。
+   本页自己会记 系列/角色/图片 三层的内部分页滚动, 这里是补路由离开那一次 ——
+   useScrollKeep 只挑**当前看得见**的那个滚动层, 不会去动藏起来的层。 */
+useScrollKeep('.series-view .scroll')
 </script>
 
 <template>
   <div class="series-view">
-    <template v-if="!tagLevels.length">
+    <!-- 系列页本体: 叠层压上来时**藏起来**(v-show)而不是拆掉 —— 拆掉会把已加载的角色/图片
+         网格连同滚动位置一起扔掉, 退回时重新查询 = 跳回第一页 + 图重加载(2026-10-24 用户报)。
+         display:contents 让这层包装不影响原来的排布。 -->
+    <div v-show="!tagLevels.length" class="layer-base">
     <!-- 顶栏: 来源 + 安全模式(路径已搬到全局路径栏) -->
     <div class="head">
       <TvSourceChips
@@ -1029,19 +1024,36 @@ usePagePath('series', computed(() => {
         </div>
       </template>
     </div>
-    </template>
+    </div>
 
-    <!-- 标签次级页(2026-10-23): 图集光箱点标签 = 就地翻开, 层级接着当前系列/角色。
-         只渲染栈顶; key 用层 id —— 换一层就是新面板, 不把上一层的批量勾选带过来。 -->
-    <TagImagesPanel
-      v-else-if="topLevel"
-      :key="topLevel.id"
-      :tag="curTag"
-      use-source-scan
-      :active="route.name === 'series'"
-      @renamed="onTagRenamedInPage"
-      @deleted="onTagDeletedInPage"
-    />
+    <!-- 就地叠的次级页(2026-10-23, 2026-10-24 加系列层): 光箱点标签 = 该标签的图,
+         点系列药丸 = 该系列的角色列表; 层级接着当前系列/角色。
+         **每层都挂着、只露栈顶**(2026-10-24): 退一层时那一层的分页/滚动还在;
+         key 用层 id —— 换一层就是新面板, 不把上一层的批量勾选带过来。 -->
+    <template v-for="(lv, i) in tagLevels" :key="lv.id">
+      <TagImagesPanel
+        v-if="lv.kind === 'tag'"
+        v-show="i === tagLevels.length - 1"
+        :tag="lv.tag"
+        use-source-scan
+        :active="route.name === 'series' && i === tagLevels.length - 1"
+        @renamed="onTagRenamedInPage"
+        @deleted="onTagDeletedInPage"
+      />
+      <TvSeriesCharsPanel
+        v-else-if="lv.kind === 'series'"
+        v-show="i === tagLevels.length - 1"
+        :series="lv.series"
+        :active="route.name === 'series' && i === tagLevels.length - 1"
+        @open-char="(c) => openTagPage(c.tag)"
+      />
+      <MetaHitsPanel
+        v-else
+        v-show="i === tagLevels.length - 1"
+        :src="lv.meta"
+        :active="route.name === 'series' && i === tagLevels.length - 1"
+      />
+    </template>
 
     <TvCategoryManager v-model="showCatMgr" :series-list="seriesData?.series || []" @saved="showSeriesList" />
 
@@ -1100,6 +1112,8 @@ usePagePath('series', computed(() => {
   padding: 12px;
   overflow: hidden;
 }
+/* 系列页本体的包装层: 不参与排布, 只用来整块 v-show(叠层时藏起来而不是拆掉) */
+.layer-base { display: contents; }
 .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 0 0 auto; }
 
 .body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px; }

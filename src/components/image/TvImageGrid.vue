@@ -19,6 +19,7 @@
 import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
 import TvImageCard from './TvImageCard.vue'
 import TvState from '../base/TvState.vue'
+import TvButton from '../base/TvButton.vue'
 import TvZoomBadge from '../base/TvZoomBadge.vue'
 import { useJustifiedRows } from '@/composables/useJustifiedRows.js'
 import { useGridZoom } from '@/composables/useGridZoom.js'
@@ -41,6 +42,8 @@ const props = defineProps({
   thumbWidth: { type: Number, default: 400 },
   footnote: { type: String, default: 'path' },
   showSource: { type: Boolean, default: false },
+  /** (item) => number 相似度, 返回 >0 时卡片左上角显示百分比(库内命中页) */
+  simOf: { type: Function, default: null },
   selectable: { type: Boolean, default: false },
   /** Set<string> 或数组 */
   selectedTags: { type: [Object, Array], default: null },
@@ -118,11 +121,22 @@ function onHover(payload) {
       state="loading"
       :text="loadingText"
     />
-    <TvState
-      v-else-if="allHidden"
-      state="empty"
-      :text="`${nfmt(results.length)} 张都被安全模式隐藏了 —— 在工具栏关掉它就能看到`"
-    />
+    <div v-else-if="allHidden" class="all-hidden">
+      <TvState
+        state="empty"
+        :text="`这一批 ${nfmt(results.length)} 张都被安全模式隐藏了 —— 在工具栏关掉它就能看到`"
+      />
+      <!--
+        整批都被藏时**没有网格、也就没有哨兵**, 无限滚动彻底停摆(2026-10-24 用户问到的死路)。
+        不能改成"哨兵照挂、自动往下拉": 全库十万张里若安全图集中在后面, 会在几秒内
+        连拉上千页。给个手动按钮, 拉一批看一批 —— 有能显示的图之后哨兵自然回来。
+      -->
+      <div v-if="infinite && hasMore" class="hidden-more">
+        <TvButton size="sm" :loading="loading" @click="emit('load-more')">继续拉下一批</TvButton>
+        <div class="hidden-tip">没有可显示的内容, 滚到底也不会自动加载; 点上面继续往后翻</div>
+      </div>
+      <div v-else-if="infinite" class="hidden-tip">已经到底了 —— 后面的图也都被藏了</div>
+    </div>
     <TvState
       v-else-if="!shown.length && loadedOnce"
       state="empty"
@@ -152,6 +166,7 @@ function onHover(payload) {
               :favable="favable"
               :favorited="favable && isFav(c.item.path)"
               :show-source="showSource"
+              :sim="simOf ? (simOf(c.item) || 0) : 0"
               :tag-mode="tagMode"
               :footnote="footnote"
               :selectable="selectable"
@@ -181,6 +196,9 @@ function onHover(payload) {
 <style scoped>
 .wrap-grid { min-height: 0; }
 .sentinel { height: 2px; }
+.all-hidden { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.hidden-more { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-bottom: 12px; }
+.hidden-tip { color: var(--faint); font-size: 11px; }
 .more-msg {
   text-align: center; color: var(--muted); font-size: 12px;
   padding: 14px 0;

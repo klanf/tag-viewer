@@ -18,13 +18,24 @@ import { spawn } from 'node:child_process'
 
 export function spawnOpenWith(exe, imgPath, deps = {}) {
   const notify = deps.notify || (() => {})
+  const spawnFn = deps.spawn || spawn     // 单测注入用(见 test-ipc-ctxmenu.mjs 的 windowsHide 断言)
   return new Promise((resolve) => {
     let settled = false
     const t0 = Date.now()
     const done = (r) => { if (!settled) { settled = true; resolve(r) } }
     try {
-      const child = spawn(exe, [imgPath], {
-        detached: true, stdio: 'ignore', windowsHide: true, cwd: path.dirname(exe),
+      /**
+       * `windowsHide` 必须是 **false** —— 2026-10-23 破案的那个「点了没反应」。
+       * true 会让 Node 在 STARTUPINFO 里带上 STARTF_USESHOWWINDOW + SW_HIDE,
+       * 而 Qt 系的程序(Inpaint 就是)会**照办**: 窗口建出来了、位置尺寸全正常,
+       * 就是不给 WS_VISIBLE。实测 pid 6060 的 `xxx.png - Inpaint` 窗口 rect
+       * (1896,396,3343,1711) 稳稳在主屏里, 手动 ShowWindow 一下就出来了。
+       * 表现就是「进程有、任务栏有、屏幕上一个东西都没有」——
+       * 从资源管理器双击打开反而是正常的, 因为那条路给的是 SW_SHOWNORMAL。
+       * (这里不需要担心控制台黑框: 目标本来就是"打开图片的 GUI 程序"。)
+       */
+      const child = spawnFn(exe, [imgPath], {
+        detached: true, stdio: 'ignore', windowsHide: false, cwd: path.dirname(exe),
       })
       child.on('error', (err) => done({ ok: false, error: err?.message || String(err) }))
       child.on('spawn', () => done({ ok: true, pid: child.pid }))

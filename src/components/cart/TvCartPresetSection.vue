@@ -70,11 +70,14 @@ const statusText = computed(() => {
   if (!dir.value) return '还没选目标目录 —— 变更后不会导'
   if (running.value) return '正在导出…'
   if (pending.value) return `待导出(还剩 ${mmss(left.value)})`
-  if (!s.value?.cartCount) return '购物车是空的'
+  /* 空不空看**渲染层手里这份**购物车: 主进程的 cartCount 要等它收到一次
+     cart:changed 才有值(开窗时没有改动就是 0), 拿它判会误报「购物车是空的」。 */
+  if (!cart.count) return '购物车是空的'
   return s.value?.synced ? '已同步' : '购物车有更新，等待导出'
 })
 const statusTone = computed(() => {
   if (!enabled.value || !dir.value) return 'off'
+  if (!cart.count) return 'off'
   if (running.value || pending.value) return 'wait'
   return s.value?.synced ? 'ok' : 'warn'
 })
@@ -211,7 +214,7 @@ onBeforeUnmount(() => {
             @update:model-value="fileFocus = true"
           />
         </span>
-        <span class="faint">wildcard 格式，与「导出全部」一字不差</span>
+        <span class="faint">wildcard 格式，与「⬇ 导出 txt」一字不差</span>
       </div>
 
       <div class="row">
@@ -241,8 +244,8 @@ onBeforeUnmount(() => {
 
       <div class="tip">
         内容就是购物车里的<b>角色标签</b>（一行一个 wildcard，如
-        <code>saori \(blue archive\)</code>）。<b>清空购物车不会导出</b> —— 免得结算
-        （导出 → 存历史 → 自动清空）顺手把下游那份文件清成空的。
+        <code>saori \(blue archive\)</code>）。<b>清空购物车不会导出</b> —— 免得存清单
+        （导出 → 存清单 → 自动清空）顺手把下游那份文件清成空的。
       </div>
     </template>
   </div>

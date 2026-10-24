@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { fileURLToPath } from 'node:url'
 
 register('./stub/electron-loader.mjs', import.meta.url)
@@ -22,6 +23,7 @@ const { registerIpc } = await import('../electron/ipc.js')
 const { readImageSize } = await import('../electron/core/imgsize.js')
 const { copyImage, openWithDialog, openWithCommand, openWithDeps } =
   await import('../electron/core/clipboardImage.js')
+const { spawnOpenWith } = await import('../electron/core/externalApp.js')
 
 let pass = 0
 let fail = 0
@@ -63,7 +65,11 @@ initWorkspace(appDir)
 registerIpc()
 
 const handler = ctl.handlers.get('app:ctxMenu')
-const fakeEvent = () => ({ sender: { __win: { id: 'stub-win' } } })
+/**
+ * 窗口桩要带 getContentSize —— 右键菜单现在自己算落点( ipc.js 的 clampMenuPos):
+ * 二级菜单往右飞, 只按鼠标位置弹会飞到点不到的地方(2026-10-23 用户反馈)。
+ */
+const fakeEvent = (size = [1560, 980]) => ({ sender: { __win: { id: 'stub-win', getContentSize: () => size } } })
 
 console.log(`\n注册 channel 数: ${ctl.handlers.size}`)
 
@@ -77,12 +83,52 @@ await ta('菜单里有「📤 移动到」且含预设项', () => {
   assert.ok(seen.labels.includes('📤 移动到'), '菜单缺少「移动到」')
 })
 
+/* ---------------- 2026-10-23: 三个二级菜单「点了没反应、选不中」的两道闸 ----------------
+ * 复盘: 二级菜单是**往右飞**的。标签里塞了完整路径之后它实测有 585px 宽(本机量的),
+ * 一级 + 二级要 800 多 px; 在窄屏或窗口靠右右键时整块飞出可点区域, 于是
+ * 顶层项能点、二级项选不中。修法两条: 标签只留名字(路径进 toolTip) + 落点自己算。
+ * 下面两个用例就是这两条的回归闸, 谁改回去谁红。 */
+await ta('二级菜单的标签里不许出现盘符路径(窄 = 点得到), 路径改放 toolTip', async () => {
+  let tpl = []
+  ctl.pick = (t) => { tpl = t }
+  await handler(fakeEvent(), { path: path.join(srcDir, 'x.png'), name: 'x.png' })
+  const flat = tpl.filter((i) => Array.isArray(i.submenu)).flatMap((i) => i.submenu)
+  assert.ok(flat.length >= 4, `二级菜单是空的? ${JSON.stringify(flat.map((i) => i.label))}`)
+  const wide = flat.filter((i) => /[A-Za-z]:[\\/]/.test(String(i.label)))
+  assert.deepEqual(wide.map((i) => i.label), [], `这些二级项把路径写进了标签: ${JSON.stringify(wide.map((i) => i.label))}`)
+  const tooLong = flat.filter((i) => String(i.label).length > 42)
+  assert.deepEqual(tooLong.map((i) => i.label), [], `二级项标签过长(>42 字符): ${JSON.stringify(tooLong.map((i) => i.label))}`)
+  const preset = tpl.find((i) => i.label === '📤 移动到').submenu.find((i) => i.toolTip === presetDir)
+  assert.ok(preset, '预设文件夹项没把路径放进 toolTip')
+})
+
+await ta('带鼠标坐标来 → 落点被收进窗口内(整块一级+二级都放得下)', async () => {
+  ctl.calls = []
+  ctl.pick = () => {}
+  await handler(fakeEvent([1560, 980]), { path: path.join(srcDir, 'x.png'), name: 'x.png', x: 1500, y: 900 })
+  const call = ctl.calls.find((c) => c[0] === 'menu.popup')
+  assert.ok(call, 'popup 没被调用')
+  const { x, y } = call[1]
+  assert.ok(x < 1500, `光标在 1500 却原样用了: x=${x} —— 没往左收`)
+  assert.ok(y < 900, `光标在 900 却原样用了: y=${y} —— 没往上收`)
+  assert.ok(x >= 0 && y >= 0, `落点算到窗口外了: ${x},${y}`)
+})
+
+await ta('没带坐标的调用方 → 不设 x/y, 仍旧交给系统按鼠标位置弹', async () => {
+  ctl.calls = []
+  ctl.pick = () => {}
+  await handler(fakeEvent(), { path: path.join(srcDir, 'x.png'), name: 'x.png' })
+  const call = ctl.calls.find((c) => c[0] === 'menu.popup')
+  assert.equal(call[1].x, undefined, `不该有 x: ${JSON.stringify(call[1])}`)
+  assert.equal(call[1].y, undefined, `不该有 y: ${JSON.stringify(call[1])}`)
+})
+
 await ta('选预设文件夹 → 文件真的被移走, 且返回 moved', async () => {
   const img = path.join(srcDir, 'a.png')
   fs.writeFileSync(img, 'png-bytes')
   ctl.pick = (tpl) => {
     const move = tpl.find((i) => i.label === '📤 移动到')
-    const hit = move.submenu.find((i) => String(i.label).includes(presetDir))
+    const hit = move.submenu.find((i) => i.toolTip === presetDir)
     assert.ok(hit, '预设文件夹不在子菜单里')
     hit.click()
   }
@@ -98,7 +144,7 @@ await ta('同名文件自动改名, 不覆盖', async () => {
   fs.writeFileSync(img, 'second-bytes')
   ctl.pick = (tpl) => {
     const move = tpl.find((i) => i.label === '📤 移动到')
-    move.submenu.find((i) => String(i.label).includes(presetDir)).click()
+    move.submenu.find((i) => i.toolTip === presetDir).click()
   }
   const r = await handler(fakeEvent(), { path: img, name: 'a.png' })
   assert.equal(r.action, 'moved')
@@ -109,7 +155,7 @@ await ta('同名文件自动改名, 不覆盖', async () => {
 await ta('选「选择其他文件夹…」→ 走 dialog, 取消则 nothing', async () => {
   const img = path.join(srcDir, 'b.png')
   fs.writeFileSync(img, 'b')
-  ctl.pick = (tpl) => tpl.find((i) => i.label === '📤 移动到').submenu.find((i) => i.label === '选择其他文件夹…').click()
+  ctl.pick = (tpl) => tpl.find((i) => i.label === '📤 移动到').submenu.find((i) => i.label === '📂 选择其他文件夹…').click()
   ctl.openDialog = null // 取消
   const r = await handler(fakeEvent(), { path: img, name: 'b.png' })
   assert.equal(r.action, null)
@@ -128,7 +174,7 @@ await ta('目标目录不存在 → 自动创建后搬入', async () => {
   const img = path.join(srcDir, 'c.png')
   fs.writeFileSync(img, 'c')
   const fresh = path.join(root, '全新目录')
-  ctl.pick = (tpl) => tpl.find((i) => i.label === '📤 移动到').submenu.find((i) => i.label === '选择其他文件夹…').click()
+  ctl.pick = (tpl) => tpl.find((i) => i.label === '📤 移动到').submenu.find((i) => i.label === '📂 选择其他文件夹…').click()
   ctl.openDialog = () => ({ canceled: false, filePaths: [fresh] })
   const r = await handler(fakeEvent(), { path: img, name: 'c.png' })
   assert.equal(r.action, 'moved', `意外 action: ${r.action} (${r.result?.error})`)
@@ -138,7 +184,7 @@ await ta('目标目录不存在 → 自动创建后搬入', async () => {
 await ta('选到图片自己所在的目录 → 拒绝原地生成 (2)', async () => {
   const img = path.join(srcDir, 'g.png')
   fs.writeFileSync(img, 'g')
-  ctl.pick = (tpl) => tpl.find((i) => i.label === '📤 移动到').submenu.find((i) => i.label === '选择其他文件夹…').click()
+  ctl.pick = (tpl) => tpl.find((i) => i.label === '📤 移动到').submenu.find((i) => i.label === '📂 选择其他文件夹…').click()
   ctl.openDialog = () => ({ canceled: false, filePaths: [srcDir] })
   const r = await handler(fakeEvent(), { path: img, name: 'g.png' })
   assert.equal(r.action, 'move-failed', `意外 action: ${r.action}`)
@@ -159,7 +205,7 @@ await ta('复制文件路径 → 写进剪贴板', async () => {
 await ta('「把当前文件夹存为预设」→ 真的写进 settings.json(白名单没丢)', async () => {
   const img = path.join(srcDir, 'e.png')
   fs.writeFileSync(img, 'e')
-  ctl.pick = (tpl) => tpl.find((i) => i.label === '📤 移动到').submenu.find((i) => i.label === '把当前文件夹存为预设').click()
+  ctl.pick = (tpl) => tpl.find((i) => i.label === '📤 移动到').submenu.find((i) => i.label === '⭐ 把当前文件夹存为预设').click()
   const r = await handler(fakeEvent(), { path: img, name: 'e.png' })
   assert.equal(r.error, undefined, `handler 抛错: ${r.error}`)
   assert.match(String(r.action), /^quick-/, `意外 action: ${r.action}`)
@@ -174,10 +220,10 @@ await ta('「把当前文件夹存为预设」→ 真的写进 settings.json(白
 await ta('新增的预设立刻出现在下一次菜单里(读回生效)', async () => {
   const img = path.join(srcDir, 'f.png')
   fs.writeFileSync(img, 'f')
-  let labels = []
-  ctl.pick = (tpl) => { labels = tpl.find((i) => i.label === '📤 移动到').submenu.map((i) => String(i.label)) }
+  let tips = []
+  ctl.pick = (tpl) => { tips = tpl.find((i) => i.label === '📤 移动到').submenu.map((i) => String(i.toolTip || '')) }
   await handler(fakeEvent(), { path: img, name: 'f.png' })
-  assert.ok(labels.some((l) => l.includes(srcDir)), `菜单里没有新预设: ${JSON.stringify(labels)}`)
+  assert.ok(tips.some((l) => l === srcDir), `菜单里没有新预设: ${JSON.stringify(tips)}`)
 })
 
 console.log('\n[2.5] 复制图片到剪贴板 / 用其他程序打开（2026-09-24 修的那个「点了没反应」）')
@@ -221,7 +267,7 @@ await ta('「🗂️ 用其他程序打开」是二级菜单: 含「Windows 打�
   const openWith = tpl0.find((i) => i.label === '🗂️ 用其他程序打开')
   assert.ok(openWith, `菜单缺少该项: ${JSON.stringify(tpl0.map((i) => i.label || i.type))}`)
   assert.ok(Array.isArray(openWith.submenu), '「用其他程序打开」不是二级菜单')
-  assert.ok(openWith.submenu.some((i) => i.label === 'Windows 打开方式…'), '二级菜单里没有「Windows 打开方式…」')
+  assert.ok(openWith.submenu.some((i) => i.label === '🪟 Windows 打开方式…'), '二级菜单里没有「Windows 打开方式…」')
   assert.ok(!tpl0.some((i) => i.label === '🖥️ 用系统查看器打开'), '「用系统查看器打开」应该已经移除了')
 })
 
@@ -315,7 +361,7 @@ await ta('点二级菜单「Windows 打开方式…」→ detached 子进程 + �
   const orig = openWithDeps.spawn
   openWithDeps.spawn = (exe, args, opts) => { seen.push({ exe, args, opts }); return { on() {}, unref() {} } }
   try {
-    ctl.pick = pickDeep('Windows 打开方式…')
+    ctl.pick = pickDeep('🪟 Windows 打开方式…')
     const r = await handler(fakeEvent(), { path: copySrc, name: 'copy-me.png' })
     assert.equal(r.action, 'open-with', `意外 action: ${r.action}`)
     assert.equal(r.result?.ok, true, `失败: ${r.result?.error}`)
@@ -346,6 +392,133 @@ await ta('「打开方式」起进程失败 → 返回原因（菜单点了不�
     assert.match(r.error, /ENOENT/)
   } finally { openWithDeps.spawn = orig }
 })
+
+await ta('「用其他程序打开」必须 windowsHide:false（2026-10-23 真机破案的根因）', async () => {
+  // true 会让 Node 在 STARTUPINFO 里带 STARTF_USESHOWWINDOW + SW_HIDE，Qt 系程序
+  // (Inpaint) 照办：窗口建好、位置正常，但永远不给 WS_VISIBLE
+  // → 「进程有、任务栏有、屏幕上什么都没有」。谁改回 true 这条就红。
+  const seen = []
+  const fakeSpawn = (exe, args, opts) => {
+    seen.push({ exe, args, opts })
+    const h = new EventEmitter()
+    h.unref = () => {}
+    setTimeout(() => h.emit('spawn'), 0)   // 真机的 spawn 事件也是异步到的
+    return h
+  }
+  // path-check-ignore: 下面两行是**假路径**(spawn 已被换成 fakeSpawn, 不会真去拉进程),
+  // 只是要断言 cwd 取的是 exe 所在目录 —— 绿色版单 exe 从别处起来会白启动
+  const fakeExe = 'F:\\软件\\Inpaint_v9.1_x64.exe'
+  const fakeDir = 'F:\\软件'
+  const r = await spawnOpenWith(fakeExe, copySrc, { spawn: fakeSpawn })
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].opts.windowsHide, false, 'windowsHide 被改回 true 了 —— 外部程序会隐形启动')
+  assert.equal(seen[0].opts.cwd, fakeDir, 'cwd 不是 exe 所在目录(绿色版会白启动)')
+  assert.equal(seen[0].args[0], copySrc, '传进去的不是这张图')
+  assert.equal(r.ok, true, `没等到 spawn 事件: ${JSON.stringify(r)}`)
+})
+
+console.log('\n[2b] 外部程序清单(2026-10-24 用户要求: 删掉「未找到 Photoshop」占位项, 列表放进设置页管)')
+/* 这份清单从「每次现拼(预置+MRU)」改成 settings.openWithApps 里的一份用户数据:
+ *   · 菜单只渲染它, 而且只渲染**文件还在**的那些 —— 不许再挂 `enabled:false` 的说明行
+ *   · 「➕ 选择程序加进列表…」选中的程序**永久**进列表
+ * 下面这几个用例把这三条钉住; 跑完会把 settings.json 恢复成开头的样子, 不影响后面的段。 */
+const settingsFile = path.join(appDir, 'settings.json')
+const owReset = (extra = {}) => {
+  fs.writeFileSync(settingsFile, JSON.stringify({
+    dataDir,
+    quickFolders: [{ name: '预设目标', path: presetDir }],
+    ...extra,
+  }, null, 2))
+  initWorkspace(appDir)
+}
+/** 打开右键菜单, 拿到「🗂️ 用其他程序打开」的子菜单 */
+const openWithSub = async () => {
+  let tpl = []
+  ctl.pick = (t) => { tpl = t }
+  await handler(fakeEvent(), { path: path.join(srcDir, 'ow.png'), name: 'ow.png' })
+  const item = tpl.find((i) => i.label === '🗂️ 用其他程序打开')
+  assert.ok(item && Array.isArray(item.submenu), `没有「用其他程序打开」二级菜单: ${JSON.stringify(tpl.map((i) => i.label || i.type))}`)
+  return item.submenu
+}
+
+await ta('第一次读清单会把老配置(recentOpenWith)迁进来并落盘, 子菜单里没有任何占位灰项', async () => {
+  const ghost = path.join(presetDir, '不存在的程序.exe')
+  owReset({ recentOpenWith: [{ name: 'Ghost', path: ghost }] })
+  const sub = await openWithSub()
+  const written = JSON.parse(fs.readFileSync(settingsFile, 'utf8'))
+  assert.ok(Array.isArray(written.openWithApps), '迁移后没把 openWithApps 写进 settings.json')
+  assert.ok(written.openWithApps.some((a) => a.path.toLowerCase() === ghost.toLowerCase()), `老配置没迁进来: ${JSON.stringify(written.openWithApps)}`)
+  assert.ok(written.openWithApps.every((a) => a.path), `清单里有空路径(占位项的来源): ${JSON.stringify(written.openWithApps)}`)
+  assert.ok(!sub.some((i) => /未找到|⚠️/.test(String(i.label))), `子菜单里又挂出了占位说明项: ${JSON.stringify(sub.map((i) => i.label))}`)
+  assert.ok(!sub.some((i) => i.enabled === false && String(i.label).startsWith('▶️')), '有程序被灰着列进来了')
+  assert.ok(!sub.some((i) => i.toolTip === ghost), '文件不存在的程序不该上菜单')
+})
+
+await ta('openWithApps: 提交的顺序就是菜单顺序 · 路径大小写重复被去掉 · 不存在的不上菜单', async () => {
+  const realExe = path.join(presetDir, 'real.exe')
+  fs.writeFileSync(realExe, 'MZ')
+  const gone = path.join(presetDir, 'gone.exe')
+  owReset()
+  const set = ctl.handlers.get('app:openWithApps:set')
+  const r = await set({}, { apps: [
+    { name: '已卸载的程序', path: gone },
+    { name: '真程序', path: realExe },
+    { name: '重复项', path: realExe.toUpperCase() },
+  ] })
+  assert.equal(r.ok, true, `保存失败: ${JSON.stringify(r)}`)
+  assert.deepEqual(r.apps.map((a) => a.name), ['已卸载的程序', '真程序'], `顺序/去重不对: ${JSON.stringify(r.apps)}`)
+  assert.equal(r.apps.find((a) => a.name === '真程序').exists, true, '存在的程序该标 exists:true')
+  assert.equal(r.apps.find((a) => a.name === '已卸载的程序').exists, false, '缺文件的程序该标 exists:false(设置页要能看到并删掉)')
+  const labels = (await openWithSub()).filter((i) => String(i.label).startsWith('▶️')).map((i) => i.label)
+  assert.deepEqual(labels, ['▶️ 真程序'], `菜单只该列文件还在的那个: ${JSON.stringify(labels)}`)
+})
+
+await ta('菜单里「➕ 选择程序加进列表…」挑中的程序永久进列表(单测只 spawn 一个假 .exe, 不会拉起真程序)', async () => {
+  const newExe = path.join(presetDir, 'paint.exe')
+  fs.writeFileSync(newExe, 'MZ')       // 不是真 PE: CreateProcess 会失败 -> 回执 ok:false, 但登记照样生效
+  owReset({ openWithApps: [{ name: '真程序', path: path.join(presetDir, 'real.exe') }] })
+  ctl.openDialog = () => ({ canceled: false, filePaths: [newExe] })
+  ctl.pick = (tpl) => {
+    const hit = tpl.find((i) => i.label === '🗂️ 用其他程序打开').submenu.find((i) => String(i.label).startsWith('➕'))
+    assert.ok(hit, '子菜单里没有「➕ 选择程序加进列表…」')
+    hit.click()
+  }
+  const r = await handler(fakeEvent(), { path: path.join(srcDir, 'ow.png'), name: 'ow.png' })
+  ctl.openDialog = null
+  assert.equal(r.action, 'open-with')
+  assert.equal(r.result.added, true, `没报"已加进列表": ${JSON.stringify(r.result)}`)
+  const stored = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).openWithApps
+  assert.deepEqual(stored.map((a) => a.name), ['真程序', 'paint'], `列表没追加/顺序变了: ${JSON.stringify(stored)}`)
+})
+
+await ta('设置页「＋ 添加程序」→ app:openWithApps:add 只登记不启动; 取消则列表不动', async () => {
+  const another = path.join(presetDir, 'viewer.exe')
+  fs.writeFileSync(another, 'MZ')
+  owReset({ openWithApps: [] })
+  const add = ctl.handlers.get('app:openWithApps:add')
+  ctl.calls = []
+  ctl.openDialog = () => ({ canceled: false, filePaths: [another] })
+  const r = await add({}, {})
+  ctl.openDialog = null
+  assert.equal(r.canceled, false)
+  assert.equal(r.added, true, `没算加进去了: ${JSON.stringify(r)}`)
+  assert.deepEqual(r.apps.map((a) => a.path), [another], `清单不对: ${JSON.stringify(r.apps)}`)
+  assert.equal(r.apps[0].exists, true, '刚加的程序该标存在')
+  assert.equal(ctl.calls.filter((c) => c[0] === 'spawn').length, 0, '添加时不该启动程序')
+  const c = await add({}, {})          // ctl.openDialog=null → 模拟用户取消
+  assert.equal(c.canceled, true, `取消也改动了列表: ${JSON.stringify(c)}`)
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).openWithApps.map((a) => a.path), [another], '取消后列表被写脏了')
+})
+
+await ta('清单为空时子菜单只留两条入口, 并且有一句人话', async () => {
+  owReset({ openWithApps: [] })
+  const sub = await openWithSub()
+  assert.ok(sub.some((i) => String(i.label).startsWith('➕')), '缺「加进列表」入口')
+  assert.ok(sub.some((i) => i.label === '🪟 Windows 打开方式…'), '缺系统原生「打开方式」兜底')
+  assert.ok(sub.some((i) => /列表为空/.test(String(i.label))), `空列表没给说明: ${JSON.stringify(sub.map((i) => i.label))}`)
+})
+
+owReset()   // 恢复成开头那份设置, 后面 [3] 段还依赖 quickFolders 预设
 
 console.log('\n[3] image:trash / shell API 只认反斜杠(2026-09-20 真机 bug)')
 console.log('     库内正斜杠路径此前被 trashItem 以 "Failed to parse path" 拒收,')
