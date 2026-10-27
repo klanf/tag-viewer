@@ -81,6 +81,9 @@ export function applyFilterGroups(tags, ctx = {}) {
   }
 
   if (!drops.length) return { tags, drops, changed: false }
-  const dropSet = new Set(drops.map((d) => d.tag))
-  return { tags: tags.filter((t) => !dropSet.has(t)), drops, changed: true }
+  // 同一 tag 可能同时命中 keepOne 和 mutex —— 只记首条, 防重复计数(输出无影响, dropSet 本来就收敛)
+  const seen = new Set()
+  const uniq = drops.filter((d) => !seen.has(d.tag) && seen.add(d.tag))
+  const dropSet = new Set(uniq.map((d) => d.tag))
+  return { tags: tags.filter((t) => !dropSet.has(t)), drops: uniq, changed: true }
 }

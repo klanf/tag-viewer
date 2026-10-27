@@ -430,6 +430,7 @@ export const useLightboxStore = defineStore('lightbox', () => {
           view: !!cfg.view,
           safe: !!cfg.safe,
           safe_level: cfg.safe_level || '',
+          groups: !!cfg.groups,
         },
       })
       if (r?.error) throw new Error(r.error)
@@ -444,6 +445,7 @@ export const useLightboxStore = defineStore('lightbox', () => {
     if (banCut) parts.push(`去ban ${banCut}`)
     if (counts?.view) parts.push(`视角 ${counts.view}`)
     if (counts?.safe) parts.push(`安全 ${counts.safe}`)
+    if (counts?.groups) parts.push(`过滤组 ${counts.groups}`)
     if (counts?.replaced) parts.push(`替换 ${counts.replaced}`)
     if (bgOn) parts.push(`补背景 ${bgAppend.value.join('/')}`)
     ui.ok(parts.length ? `✅ 已复制(${parts.join(' · ')})` : '✅ 已复制')

@@ -38,6 +38,7 @@ export const usePrefsStore = defineStore('prefs', () => {
    */
   const COPY_DEF = Object.freeze({
     ban: false, char: true, view: false, safe: false, safe_level: 'follow', replace: false, replace_set: '',
+    groups: false,
   })
   function readCopyFilters() {
     const raw = readLS(LS.lbCopyFilters.key)
@@ -52,6 +53,7 @@ export const usePrefsStore = defineStore('prefs', () => {
         safe_level: ['follow', 'core', 'edge'].includes(o.safe_level) ? o.safe_level : 'follow',
         replace: o.replace === true,
         replace_set: typeof o.replace_set === 'string' ? o.replace_set : '',
+        groups: o.groups === true,
       }
     } catch { return { ...COPY_DEF } }
   }

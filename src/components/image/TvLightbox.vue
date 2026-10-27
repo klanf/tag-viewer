@@ -186,6 +186,7 @@ const copyTitle = computed(() => {
   if (cfg.value.view) on.push('剔视角/机位')
   if (cfg.value.replace) on.push('替换规则')
   if (cfg.value.safe) on.push(`安全标签(${cfg.value.safe_level === 'edge' ? 'edge' : cfg.value.safe_level === 'core' ? 'core' : '跟随全局'})`)
+  if (cfg.value.groups) on.push('过滤组')
   return on.length ? `按当前过滤复制: ${on.join(' + ')}(下拉可调)` : '复制全部标签(下拉可调过滤)'
 })
 function doCopy() { lb.copyFiltered(prefs.lbCopyFilters) }
@@ -458,6 +459,9 @@ function preheat() {
                       <option value="core">core(明确裸露)</option>
                       <option value="edge">edge(再加擦边)</option>
                     </select>
+                  </label>
+                  <label class="cpy-opt" title="过滤组去冲突(词条管线): 同槽位词条只留一个(过膝袜×连裤袜等) + 互斥消解(站×坐/足部特写×全身)。仅单人图生效, 群像不处理">
+                    <input v-model="cfg.groups" type="checkbox"> 过滤组去冲突
                   </label>
                 </div>
               </template>

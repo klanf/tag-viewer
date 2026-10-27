@@ -13,6 +13,11 @@ import { parseQuery, scopeRecords, searchCached } from './search.js'
 import { blacklistMatcher, isBlockedFast, loadReplaceRules, loadReplaceRulesGroup, replaceTag, loadBgConfig, hasBgTagFast, viewTagMatcher, isViewFast } from './rules.js'
 import { safetyExportStripper } from './safety.js'
 import { exportSegSort, sortTags, unwrapWeight } from './tagcats.js'
+import { applyFilterGroups } from './tagfilter.mjs'
+import fs from 'node:fs'
+import path from 'node:path'
+import { BUNDLED_KNOWLEDGE_DIR } from './paths.js'
+import { openDb } from './store.js'
 
 /**
  * 比较两个标签"是不是同一个"用的归一化键: 忽略大小写, 且把下划线/空格视作等价。
@@ -307,9 +312,29 @@ export function buildCartExport(tags, { spaces = true, replace = true, replaceSe
  * opts: { replace_set, view, safe, safe_level, replace } —— replace=false 整体关, 其余缺省=关
  * 返回 { tags, counts: { view, safe, replaced } }
  */
+/**
+ * 过滤组上下文(2026-10-27 词条管线第二层) —— 懒加载+缓存:
+ *   slots  = knowledge/tag_slots.json(槽位词典, build-tag-slots.mjs 产物)
+ *   rules  = knowledge/filter-rules.json(keepOne 槽位 + mutex 互斥组)
+ *   counts = tags 表的本地图片量(keep-one 胜者权重)
+ * 任一文件缺失/损坏 → 返回 null, 过滤组段静默跳过(与 slots 下发同一降级哲学)。
+ */
+let groupsCtxCache = null
+function groupsCtx() {
+  if (groupsCtxCache !== null) return groupsCtxCache
+  try {
+    const slots = JSON.parse(fs.readFileSync(path.join(BUNDLED_KNOWLEDGE_DIR, 'tag_slots.json'), 'utf8')).tags || {}
+    const rules = JSON.parse(fs.readFileSync(path.join(BUNDLED_KNOWLEDGE_DIR, 'filter-rules.json'), 'utf8'))
+    const counts = {}
+    for (const r of openDb().prepare('SELECT name, cnt FROM tags').all()) counts[r.name] = r.cnt
+    groupsCtxCache = { slots, counts, rules }
+  } catch { groupsCtxCache = false }
+  return groupsCtxCache
+}
+
 export function filterTagsLikeExport(tags, opts = {}) {
   let out = (tags || []).slice()
-  const counts = { view: 0, safe: 0, replaced: 0 }
+  const counts = { view: 0, safe: 0, replaced: 0, groups: 0 }
 
   const vm = opts.view ? viewTagMatcher() : null
   if (vm) {
@@ -329,6 +354,17 @@ export function filterTagsLikeExport(tags, opts = {}) {
       else kept.push(t)
     }
     out = kept
+  }
+
+  // ---- 过滤组(词条管线第二层): 槽内单选 + 互斥消解, 仅单人图生效 ----
+  // 排在替换之前 —— 本段是纯删除, 与视角/安全同列; 替换是唯一改写步, 保持压轴。
+  if (opts.groups) {
+    const gctx = groupsCtx()
+    if (gctx) {
+      const res = applyFilterGroups(out, gctx)
+      counts.groups = res.drops.length
+      out = res.tags
+    }
   }
 
   const rules = opts.replace === false ? [] : loadReplaceRulesGroup(String(opts.replace_set || ''))
