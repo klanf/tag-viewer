@@ -1,0 +1,8436 @@
+{
+ "_meta": {
+  "schema": "tag-viewer/tag-slots@1",
+  "built_by": "scripts/build-tag-slots.mjs",
+  "seed_source": "ANIMA Wardrobe v3 pools.json (MIT)",
+  "note": "slot=ANIMA细槽位(可空), 本项目粗分类见 tags.db tags.cat",
+  "tags": 1053,
+  "classified_total": 6465
+ },
+ "tags": {
+  "breasts": {
+   "slot": "body_part",
+   "fieldZh": "胸部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "乳房",
+   "level": null
+  },
+  "1girl": {
+   "slot": "count",
+   "fieldZh": "人数构成 *",
+   "sec": "count",
+   "secZh": "① 数量与身份",
+   "zh": "单人少女",
+   "level": 4
+  },
+  "looking_at_viewer": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "注视镜头",
+   "level": 0
+  },
+  "long_hair": {
+   "slot": "hair_len",
+   "fieldZh": "长度",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "齐腰长发",
+   "level": 0
+  },
+  "blush": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "害羞脸红",
+   "level": 0
+  },
+  "solo": {
+   "slot": "count",
+   "fieldZh": "人数构成 *",
+   "sec": "count",
+   "secZh": "① 数量与身份",
+   "zh": "单人少女",
+   "level": 0
+  },
+  "thighs": {
+   "slot": "body_part",
+   "fieldZh": "腿部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "大腿",
+   "level": null
+  },
+  "large_breasts": {
+   "slot": "figure",
+   "fieldZh": "身材轮廓",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "大胸",
+   "level": 0
+  },
+  "nipples": {
+   "slot": "n_exposure",
+   "fieldZh": "暴露重点",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "乳头",
+   "level": 2
+  },
+  "open_mouth": {
+   "slot": "mouth",
+   "fieldZh": "嘴部",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "张口",
+   "level": 0
+  },
+  "navel": {
+   "slot": "body_part",
+   "fieldZh": "躯干",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "肚脐",
+   "level": null
+  },
+  "hair_ornament": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "发饰",
+   "level": null
+  },
+  "indoors": {
+   "slot": "location",
+   "fieldZh": "场所",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "室内",
+   "level": null
+  },
+  "smile": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "微笑",
+   "level": 0
+  },
+  "pussy": {
+   "slot": "n_exposure",
+   "fieldZh": "暴露重点",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "私处",
+   "level": 2
+  },
+  "very_long_hair": {
+   "slot": "hair_len",
+   "fieldZh": "长度",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "及腰超长发",
+   "level": 0
+  },
+  "hair_between_eyes": {
+   "slot": "hair_bangs",
+   "fieldZh": "刘海",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "八字刘海",
+   "level": 0
+  },
+  "bare_shoulders": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "露肩",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "裸肩",
+   "level": 1
+  },
+  "sitting": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "端坐",
+   "level": 0
+  },
+  "long_sleeves": {
+   "slot": "sleeves",
+   "fieldZh": "袖长",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "长袖",
+   "level": null
+  },
+  "collarbone": {
+   "slot": "body_part",
+   "fieldZh": "躯干",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "锁骨",
+   "level": null
+  },
+  "halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "光环",
+   "level": null
+  },
+  "black_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "黑发",
+   "level": 0
+  },
+  "feet": {
+   "slot": "body_part",
+   "fieldZh": "腿部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "脚",
+   "level": null
+  },
+  "blue_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "蓝瞳",
+   "level": 0
+  },
+  "sweat": {
+   "slot": "n_fluid",
+   "fieldZh": "其他体液",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "香汗淋漓",
+   "level": 2
+  },
+  "mosaic_censoring": {
+   "slot": "censorship",
+   "fieldZh": "审查",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "马赛克",
+   "level": null
+  },
+  "uncensored": {
+   "slot": "censorship",
+   "fieldZh": "审查",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "无码",
+   "level": null
+  },
+  "toes": {
+   "slot": "body_part",
+   "fieldZh": "腿部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "脚趾",
+   "level": null
+  },
+  "stomach": {
+   "slot": "body_part",
+   "fieldZh": "躯干",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "腹部",
+   "level": null
+  },
+  "full_body": {
+   "slot": "shot_size",
+   "fieldZh": "景别",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "全身",
+   "level": 0
+  },
+  "thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "过膝袜",
+   "level": null
+  },
+  "nude": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "closed_mouth": {
+   "slot": "mouth",
+   "fieldZh": "嘴部",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "抿嘴",
+   "level": 0
+  },
+  "purple_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "紫瞳",
+   "level": 0
+  },
+  "shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "衬衫",
+   "level": 0
+  },
+  "hetero": {
+   "slot": "count",
+   "fieldZh": "人数构成 *",
+   "sec": "count",
+   "secZh": "① 数量与身份",
+   "zh": "一男一女",
+   "level": 0
+  },
+  "underwear": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "内衣",
+   "level": null
+  },
+  "censored": {
+   "slot": "censorship",
+   "fieldZh": "审查",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "有码",
+   "level": null
+  },
+  "lying": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "趴卧",
+   "level": 0
+  },
+  "cleavage": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "ass": {
+   "slot": "body_part",
+   "fieldZh": "臀部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "臀部",
+   "level": 1
+  },
+  "1boy": {
+   "slot": "count",
+   "fieldZh": "人数构成 *",
+   "sec": "count",
+   "secZh": "① 数量与身份",
+   "zh": "一男一女",
+   "level": 0
+  },
+  "holding": {
+   "slot": "interact",
+   "fieldZh": "持物动作",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "拿着",
+   "level": null
+  },
+  "red_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "红瞳",
+   "level": 0
+  },
+  "legs": {
+   "slot": "body_part",
+   "fieldZh": "腿部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "双腿",
+   "level": null
+  },
+  "small_breasts": {
+   "slot": "figure",
+   "fieldZh": "身材轮廓",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "小巧胸部",
+   "level": 0
+  },
+  "solo_focus": {
+   "slot": "focus",
+   "fieldZh": "镜头焦点",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "单人焦点",
+   "level": null
+  },
+  "dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "连衣裙",
+   "level": 0
+  },
+  "white_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "白发",
+   "level": 0
+  },
+  "spread_legs": {
+   "slot": "n_pos",
+   "fieldZh": "体态细节",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "张开双腿",
+   "level": 2
+  },
+  "panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "内裤",
+   "level": null
+  },
+  "outdoors": {
+   "slot": "nsfw:fetish",
+   "fieldZh": "暴露癖/情境",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "暴露癖/情境",
+   "level": 1
+  },
+  "skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "半身裙",
+   "level": 0
+  },
+  "penis": {
+   "slot": "body_part",
+   "fieldZh": "生殖器",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "阴茎",
+   "level": 2
+  },
+  "twintails": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "双马尾",
+   "level": 0
+  },
+  "animal_ears": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "兽耳",
+   "level": 0
+  },
+  "soles": {
+   "slot": "body_part",
+   "fieldZh": "腿部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "脚底",
+   "level": null
+  },
+  "medium_breasts": {
+   "slot": "figure",
+   "fieldZh": "身材轮廓",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "中等胸部",
+   "level": 0
+  },
+  "bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蝴蝶结",
+   "level": null
+  },
+  "flower": {
+   "slot": "prop",
+   "fieldZh": "道具",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "花",
+   "level": null
+  },
+  "barefoot": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "赤足",
+   "level": 0
+  },
+  "no_shoes": {
+   "slot": "footwear",
+   "fieldZh": "鞋袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "光脚无鞋",
+   "level": null
+  },
+  "ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "缎带",
+   "level": null
+  },
+  "jewelry": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "珠宝",
+   "level": null
+  },
+  "short_hair": {
+   "slot": "hair_len",
+   "fieldZh": "长度",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "齐颈短发",
+   "level": 0
+  },
+  "standing": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "站立",
+   "level": 0
+  },
+  "white_shirt": {
+   "slot": "top",
+   "fieldZh": "上装",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白衬衫",
+   "level": null
+  },
+  "on_bed": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "卧于床上",
+   "level": 0
+  },
+  "gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "手套",
+   "level": null
+  },
+  "window": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "窗户",
+   "level": 0
+  },
+  "pink_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "粉发",
+   "level": 0
+  },
+  "vaginal": {
+   "slot": "n_act",
+   "fieldZh": "性行为",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "阴道性交",
+   "level": 3
+  },
+  "pantyhose": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "连裤袜",
+   "level": 0
+  },
+  "sex": {
+   "slot": "n_pos",
+   "fieldZh": "体态细节",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "四肢着地被进入",
+   "level": 3
+  },
+  "open_clothes": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "on_back": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "仰躺",
+   "level": 0
+  },
+  "ahoge": {
+   "slot": "hairstyle",
+   "fieldZh": "发型",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "呆毛",
+   "level": null
+  },
+  "braid": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "单编发",
+   "level": 0
+  },
+  "cum": {
+   "slot": "nsfw:fluid",
+   "fieldZh": "体液/事后",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "体液/事后",
+   "level": 3
+  },
+  "blonde_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "浅金发",
+   "level": 0
+  },
+  "yellow_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "金瞳",
+   "level": 0
+  },
+  "completely_nude": {
+   "slot": "n_state",
+   "fieldZh": "脱卸程度",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "全裸",
+   "level": 2
+  },
+  "sky": {
+   "slot": "environment",
+   "fieldZh": "环境",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "天空",
+   "level": null
+  },
+  "day": {
+   "slot": "environment",
+   "fieldZh": "环境",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白天",
+   "level": null
+  },
+  "parted_lips": {
+   "slot": "mouth",
+   "fieldZh": "嘴部",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "微张",
+   "level": 0
+  },
+  "jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "短夹克",
+   "level": 0
+  },
+  "multicolored_hair": {
+   "slot": "hair_color",
+   "fieldZh": "发色",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "多色发",
+   "level": null
+  },
+  "pillow": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "枕头",
+   "level": 0
+  },
+  "choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "颈圈",
+   "level": 0
+  },
+  "brown_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "棕发",
+   "level": 0
+  },
+  "official_alternate_costume": {
+   "slot": "costume_meta",
+   "fieldZh": "官方换装",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "官方异装",
+   "level": null
+  },
+  "white_thighhighs": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白色过膝袜",
+   "level": 0
+  },
+  "grey_hair": {
+   "slot": "hair_color",
+   "fieldZh": "发色",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "灰发",
+   "level": null
+  },
+  "frills": {
+   "slot": "cloth_mat",
+   "fieldZh": "材质",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "荷叶边",
+   "level": 0
+  },
+  "blue_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "蓝发",
+   "level": 0
+  },
+  "water": {
+   "slot": "environment",
+   "fieldZh": "环境",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "水体",
+   "level": null
+  },
+  "pubic_hair": {
+   "slot": "n_body",
+   "fieldZh": "私密细节",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "阴毛",
+   "level": 2
+  },
+  "swimsuit": {
+   "slot": "clothing_type",
+   "fieldZh": "服装类型",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "泳装",
+   "level": null
+  },
+  "hair_flower": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "头花",
+   "level": 0
+  },
+  "blurry": {
+   "slot": "texture_fx",
+   "fieldZh": "质感特效",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "模糊",
+   "level": 0
+  },
+  "hair_ribbon": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "缎带发饰",
+   "level": 0
+  },
+  "clothes_lift": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "off_shoulder": {
+   "slot": "cloth_state_sfw",
+   "fieldZh": "穿着方式",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "一字肩",
+   "level": 1
+  },
+  "tongue": {
+   "slot": "body_part",
+   "fieldZh": "头部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "舌头",
+   "level": null
+  },
+  "purple_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "紫发",
+   "level": 0
+  },
+  "bed_sheet": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "床单",
+   "level": 0
+  },
+  "pleated_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "百褶裙",
+   "level": 0
+  },
+  "heart": {
+   "slot": "graphic",
+   "fieldZh": "画面元素",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "心形符号",
+   "level": null
+  },
+  "tail": {
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "尾巴",
+   "level": null
+  },
+  "multiple_girls": {
+   "slot": "count",
+   "fieldZh": "人数构成 *",
+   "sec": "count",
+   "secZh": "① 数量与身份",
+   "zh": "多人群交",
+   "level": 4
+  },
+  "cum_in_pussy": {
+   "slot": "n_cum",
+   "fieldZh": "精液表现",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "射入体内",
+   "level": 3
+  },
+  "lens_flare": {
+   "slot": "photo",
+   "fieldZh": "摄影效果",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "镜头光晕",
+   "level": null
+  },
+  "black_thighhighs": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑色过膝袜",
+   "level": 0
+  },
+  "tongue_out": {
+   "slot": "mouth",
+   "fieldZh": "嘴部",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "伸舌",
+   "level": 0
+  },
+  "bed": {
+   "slot": "furniture",
+   "fieldZh": "家具场景",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "床",
+   "level": null
+  },
+  "curtains": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "窗帘",
+   "level": 0
+  },
+  "pov": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "主观视角",
+   "level": 3
+  },
+  "pussy_juice": {
+   "slot": "n_fluid",
+   "fieldZh": "其他体液",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "爱液",
+   "level": 2
+  },
+  "hairclip": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "发夹",
+   "level": 0
+  },
+  "hat": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "帽子",
+   "level": null
+  },
+  "from_behind": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "背后",
+   "level": 0
+  },
+  "earrings": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "耳环",
+   "level": 0
+  },
+  "toenails": {
+   "slot": "body_part",
+   "fieldZh": "腿部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "脚趾甲",
+   "level": null
+  },
+  "blue_sky": {
+   "slot": "environment",
+   "fieldZh": "环境",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蓝天",
+   "level": null
+  },
+  "anus": {
+   "slot": "n_body",
+   "fieldZh": "私密细节",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "后穴",
+   "level": 2
+  },
+  "bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "比基尼",
+   "level": 0
+  },
+  "thigh_strap": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "腿环",
+   "level": 0
+  },
+  "female_pubic_hair": {
+   "slot": "body_part",
+   "fieldZh": "生殖器",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "女性体毛",
+   "level": 2
+  },
+  "horns": {
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "角",
+   "level": null
+  },
+  "cloud": {
+   "slot": "environment",
+   "fieldZh": "环境",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "云",
+   "level": null
+  },
+  "nail_polish": {
+   "slot": "nails",
+   "fieldZh": "指甲",
+   "sec": "makeup",
+   "secZh": "⑤ 妆容与细节",
+   "zh": "美甲",
+   "level": 0
+  },
+  "cowboy_shot": {
+   "slot": "shot_size",
+   "fieldZh": "景别",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "七分身",
+   "level": 0
+  },
+  "black_pantyhose": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑色连裤袜",
+   "level": 0
+  },
+  "hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "发带",
+   "level": 0
+  },
+  "breasts_out": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "black_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黑手套",
+   "level": null
+  },
+  "white_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白内裤",
+   "level": null
+  },
+  "school_uniform": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "JK制服",
+   "level": 0
+  },
+  "detached_sleeves": {
+   "slot": "sleeves",
+   "fieldZh": "袖长",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "分离袖",
+   "level": null
+  },
+  "bare_legs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "裸腿",
+   "level": null
+  },
+  "no_panties": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "black_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑半身裙",
+   "level": 0
+  },
+  "cleft_of_venus": {
+   "slot": "body_part",
+   "fieldZh": "生殖器",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "阴丘",
+   "level": 2
+  },
+  "short_sleeves": {
+   "slot": "sleeves",
+   "fieldZh": "袖长",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "短袖",
+   "level": null
+  },
+  "animal_ear_fluff": {
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "兽耳绒毛",
+   "level": null
+  },
+  "mole": {
+   "slot": "feature",
+   "fieldZh": "身体特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "痣",
+   "level": null
+  },
+  "armpits": {
+   "slot": "body_part",
+   "fieldZh": "上肢",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "腋下",
+   "level": null
+  },
+  "looking_back": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "回眸",
+   "level": 0
+  },
+  "hair_bun": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "丸子头",
+   "level": 0
+  },
+  "ponytail": {
+   "slot": "hairstyle",
+   "fieldZh": "发型",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "马尾",
+   "level": null
+  },
+  "green_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "绿瞳",
+   "level": 0
+  },
+  "black_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑连衣裙",
+   "level": 0
+  },
+  "black_choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑颈圈",
+   "level": 0
+  },
+  "2girls": {
+   "slot": "count",
+   "fieldZh": "人数构成 *",
+   "sec": "count",
+   "secZh": "① 数量与身份",
+   "zh": "双女",
+   "level": 2
+  },
+  "black_footwear": {
+   "slot": "footwear",
+   "fieldZh": "鞋袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黑鞋",
+   "level": null
+  },
+  "white_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白连衣裙",
+   "level": 0
+  },
+  "foot_focus": {
+   "slot": "focus",
+   "fieldZh": "镜头焦点",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "足部焦点",
+   "level": null
+  },
+  "symbol-shaped_pupils": {
+   "slot": "eyes_detail",
+   "fieldZh": "瞳孔细节",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "符号形瞳孔",
+   "level": null
+  },
+  "pointy_ears": {
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "尖耳",
+   "level": null
+  },
+  "centered": {
+   "slot": "composition",
+   "fieldZh": "构图",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "居中构图",
+   "level": null
+  },
+  "huge_breasts": {
+   "slot": "figure",
+   "fieldZh": "身材轮廓",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "巨乳",
+   "level": 0
+  },
+  "alternate_costume": {
+   "slot": "costume_meta",
+   "fieldZh": "官方换装",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "私服异装",
+   "level": null
+  },
+  "shoes": {
+   "slot": "footwear",
+   "fieldZh": "鞋袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "鞋",
+   "level": null
+  },
+  "erection": {
+   "slot": "nsfw:arousal",
+   "fieldZh": "生理反应",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "勃起",
+   "level": 2
+  },
+  "skindentation": {
+   "slot": "body_detail",
+   "fieldZh": "身体细节",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "压痕",
+   "level": null
+  },
+  "bowtie": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "领结",
+   "level": null
+  },
+  "blunt_bangs": {
+   "slot": "hair_bangs",
+   "fieldZh": "刘海",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "齐刘海",
+   "level": 0
+  },
+  "hair_spread_out": {
+   "slot": "hairstyle",
+   "fieldZh": "发型",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "头发散开",
+   "level": null
+  },
+  "simple_background": {
+   "slot": "background",
+   "fieldZh": "背景",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "简洁背景",
+   "level": null
+  },
+  "girl_on_top": {
+   "slot": "n_pos",
+   "fieldZh": "体态细节",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "女方在上",
+   "level": 3
+  },
+  "from_below": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "低角度仰拍",
+   "level": 0
+  },
+  "open_jacket": {
+   "slot": "cloth_state_sfw",
+   "fieldZh": "穿着方式",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "外套敞开",
+   "level": 2
+  },
+  "white_background": {
+   "slot": "background",
+   "fieldZh": "背景",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白背景",
+   "level": null
+  },
+  "from_above": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "高角度俯拍",
+   "level": 0
+  },
+  "blurry_background": {
+   "slot": "dof",
+   "fieldZh": "景深",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "浅景深虚化",
+   "level": 0
+  },
+  "sleeveless": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "wings": {
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "翅膀",
+   "level": null
+  },
+  "pink_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "粉光环",
+   "level": null
+  },
+  "virtual_youtuber": {
+   "slot": "identity",
+   "fieldZh": "身份",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "虚拟主播",
+   "level": null
+  },
+  "pink_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "粉瞳",
+   "level": null
+  },
+  "high_heels": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "高跟鞋",
+   "level": 0
+  },
+  "clitoris": {
+   "slot": "n_body",
+   "fieldZh": "私密细节",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "阴蒂",
+   "level": 2
+  },
+  "detached_collar": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "分离领",
+   "level": null
+  },
+  "see-through_clothes": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "透视服装",
+   "level": 1
+  },
+  "breasts_apart": {
+   "slot": "body_detail",
+   "fieldZh": "身体细节",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "乳分离",
+   "level": null
+  },
+  "covered_navel": {
+   "slot": "clothing_state",
+   "fieldZh": "遮露状态",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "遮住肚脐",
+   "level": null
+  },
+  "hair_bow": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "蝴蝶结",
+   "level": 0
+  },
+  "straddling": {
+   "slot": "n_pos",
+   "fieldZh": "体态细节",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "跨坐",
+   "level": 3
+  },
+  "plant": {
+   "slot": "prop",
+   "fieldZh": "道具",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "植物",
+   "level": null
+  },
+  "collared_shirt": {
+   "slot": "top",
+   "fieldZh": "上装",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "有领衬衫",
+   "level": null
+  },
+  "ocean": {
+   "slot": "environment",
+   "fieldZh": "环境",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "海洋",
+   "level": null
+  },
+  "black_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黑内裤",
+   "level": null
+  },
+  "hair_over_one_eye": {
+   "slot": "hairstyle",
+   "fieldZh": "发型",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "发遮单眼",
+   "level": null
+  },
+  "socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "袜子",
+   "level": null
+  },
+  "beach": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "海滩",
+   "level": 0
+  },
+  "bottomless": {
+   "slot": "n_state",
+   "fieldZh": "脱卸程度",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "仅下裸",
+   "level": 2
+  },
+  "red_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "红发",
+   "level": 0
+  },
+  "food": {
+   "slot": "prop",
+   "fieldZh": "道具",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "食物",
+   "level": null
+  },
+  "cat_ears": {
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "猫耳",
+   "level": null
+  },
+  "sex_from_behind": {
+   "slot": "n_act",
+   "fieldZh": "性行为",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "后入位",
+   "level": 3
+  },
+  "clothes_pull": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "拉扯衣物",
+   "level": 2
+  },
+  "red_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "红光环",
+   "level": null
+  },
+  "on_side": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "侧躺",
+   "level": 0
+  },
+  "sailor_collar": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "水手领",
+   "level": null
+  },
+  "saliva": {
+   "slot": "nsfw:fluid",
+   "fieldZh": "体液",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "唾液",
+   "level": 1
+  },
+  "miniskirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "迷你裙",
+   "level": 0
+  },
+  "torn_clothes": {
+   "slot": "cloth_state_sfw",
+   "fieldZh": "穿着方式",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "破洞衣物",
+   "level": 2
+  },
+  "fake_animal_ears": {
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "假兽耳",
+   "level": null
+  },
+  "maid_headdress": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "女仆头饰",
+   "level": 0
+  },
+  "two-tone_hair": {
+   "slot": "hair_color",
+   "fieldZh": "发色",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "双色发",
+   "level": null
+  },
+  "white_pantyhose": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白色连裤袜",
+   "level": 0
+  },
+  "tree": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "树木",
+   "level": 0
+  },
+  "teeth": {
+   "slot": "mouth",
+   "fieldZh": "嘴部",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "露齿笑",
+   "level": 0
+  },
+  "arm_up": {
+   "slot": "pose",
+   "fieldZh": "姿势",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "举臂",
+   "level": null
+  },
+  "couch": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "沙发",
+   "level": 0
+  },
+  "heart-shaped_pupils": {
+   "slot": "n_orgasm",
+   "fieldZh": "高潮表现",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "心形瞳孔",
+   "level": 3
+  },
+  "mole_under_eye": {
+   "slot": "skin_detail",
+   "fieldZh": "肌肤细节",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "眼下泪痣",
+   "level": 0
+  },
+  "thighband_pantyhose": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "大腿环连裤袜",
+   "level": null
+  },
+  "legs_up": {
+   "slot": "n_pos",
+   "fieldZh": "体态细节",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "双腿高举",
+   "level": 2
+  },
+  "blue_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蓝光环",
+   "level": null
+  },
+  "arms_up": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "双手举高",
+   "level": 0
+  },
+  "open_shirt": {
+   "slot": "n_state",
+   "fieldZh": "脱卸程度",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "衬衫全开",
+   "level": 2
+  },
+  "no_bra": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视/湿身",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "透视/湿身",
+   "level": 2
+  },
+  "elbow_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "长手套",
+   "level": null
+  },
+  "cup": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "杯子",
+   "level": 0
+  },
+  "rabbit_ears": {
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "兔耳",
+   "level": null
+  },
+  "streaked_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "挑染",
+   "level": 0
+  },
+  "brown_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "棕色瞳",
+   "level": 0
+  },
+  "sleeveless_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "无袖连衣裙",
+   "level": 1
+  },
+  "sparse_pubic_hair": {
+   "slot": "body_part",
+   "fieldZh": "生殖器",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "稀疏体毛",
+   "level": 2
+  },
+  "japanese_clothes": {
+   "slot": "ethnic_wear",
+   "fieldZh": "民族服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "和服类",
+   "level": null
+  },
+  "foreshortening": {
+   "slot": "technique",
+   "fieldZh": "画法",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "透视缩短法",
+   "level": null
+  },
+  "leotard": {
+   "slot": "clothing_type",
+   "fieldZh": "服装类型",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "紧身衣",
+   "level": null
+  },
+  "skirt_lift": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "撩起裙摆",
+   "level": 2
+  },
+  "white_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白手套",
+   "level": null
+  },
+  "cameltoe": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "black_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑短夹克",
+   "level": 0
+  },
+  "shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "短裤",
+   "level": 0
+  },
+  "maid": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "女仆装",
+   "level": 0
+  },
+  "serafuku": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水手服",
+   "level": 0
+  },
+  "shirt_lift": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "撩起上衣",
+   "level": 2
+  },
+  "bare_arms": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "foot_out_of_frame": {
+   "slot": "framing",
+   "fieldZh": "出画",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "脚出画",
+   "level": null
+  },
+  "after_sex": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "事后余韵",
+   "level": 2
+  },
+  "blue_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝半身裙",
+   "level": 0
+  },
+  "night": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "夜晚",
+   "level": 0
+  },
+  "wrist_cuffs": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "腕套",
+   "level": null
+  },
+  "demon_horns": {
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "魔角",
+   "level": null
+  },
+  ":d": {
+   "slot": "expression",
+   "fieldZh": "表情",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "咧嘴笑",
+   "level": null
+  },
+  "wide_sleeves": {
+   "slot": "sleeves",
+   "fieldZh": "袖长",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "宽袖",
+   "level": null
+  },
+  "fox_ears": {
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "狐耳",
+   "level": null
+  },
+  "closed_eyes": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "闭眼",
+   "level": 0
+  },
+  "black_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑比基尼",
+   "level": 0
+  },
+  "arm_support": {
+   "slot": "pose",
+   "fieldZh": "姿势",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "手臂支撑",
+   "level": null
+  },
+  "leg_up": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "抬腿",
+   "level": 1
+  },
+  "toenail_polish": {
+   "slot": "body_part",
+   "fieldZh": "腿部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "脚趾甲油",
+   "level": null
+  },
+  "clothed_sex": {
+   "slot": "n_act",
+   "fieldZh": "性行为",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "衣着性交",
+   "level": 3
+  },
+  "depth_of_field": {
+   "slot": "dof",
+   "fieldZh": "景深",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "浅景深虚化",
+   "level": 0
+  },
+  "chair": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "椅子",
+   "level": 0
+  },
+  "feet_out_of_frame": {
+   "slot": "framing",
+   "fieldZh": "出画",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "双脚出画",
+   "level": null
+  },
+  "parted_bangs": {
+   "slot": "hair_bangs",
+   "fieldZh": "刘海",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "空气刘海",
+   "level": 0
+  },
+  "male_pubic_hair": {
+   "slot": "body_part",
+   "fieldZh": "生殖器",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "男性体毛",
+   "level": 2
+  },
+  "clothed_female_nude_male": {
+   "slot": "nsfw:cfnm",
+   "fieldZh": "裸露差",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "女衣男裸",
+   "level": 2
+  },
+  "colored_inner_hair": {
+   "slot": "hair_color",
+   "fieldZh": "发色",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "挑染内层",
+   "level": null
+  },
+  "collar": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "颈环",
+   "level": null
+  },
+  "double_bun": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "双丸子头",
+   "level": 0
+  },
+  "pelvic_curtain": {
+   "slot": "nsfw:censorship_alt",
+   "fieldZh": "遮挡物",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "骨盆帘",
+   "level": 1
+  },
+  "all_fours": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "四肢着地",
+   "level": 3
+  },
+  "necklace": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "项链",
+   "level": 0
+  },
+  "book": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "书本",
+   "level": 0
+  },
+  "groin": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "apron": {
+   "slot": "clothing_type",
+   "fieldZh": "服装类型",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "围裙",
+   "level": null
+  },
+  "chinese_clothes": {
+   "slot": "ethnic_wear",
+   "fieldZh": "民族服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "中华风",
+   "level": null
+  },
+  "garter_straps": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "吊袜带",
+   "level": 0
+  },
+  "kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "和服",
+   "level": 0
+  },
+  "back": {
+   "slot": "body_part",
+   "fieldZh": "躯干",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "背部",
+   "level": null
+  },
+  "sunlight": {
+   "slot": "lighting",
+   "fieldZh": "光照",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "日光",
+   "level": null
+  },
+  "highleg": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "cum_on_breasts": {
+   "slot": "n_cum",
+   "fieldZh": "精液表现",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "射在胸口",
+   "level": 2
+  },
+  "clitoral_hood": {
+   "slot": "body_part",
+   "fieldZh": "生殖器",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "阴蒂包皮",
+   "level": 2
+  },
+  "black_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "黑发带",
+   "level": 0
+  },
+  "medium_shot": {
+   "slot": "shot_size",
+   "fieldZh": "景别",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "中景",
+   "level": null
+  },
+  "kneeling": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "跪姿",
+   "level": 0
+  },
+  "yellow_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黄光环",
+   "level": null
+  },
+  "thigh_gap": {
+   "slot": "leg",
+   "fieldZh": "腿部线条",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "大腿缝隙",
+   "level": 1
+  },
+  "dutch_angle": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "倾斜构图",
+   "level": 0
+  },
+  "bracelet": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "手镯",
+   "level": 0
+  },
+  "blue_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蓝蝴蝶结",
+   "level": null
+  },
+  "grin": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "大笑",
+   "level": 0
+  },
+  "topless": {
+   "slot": "n_state",
+   "fieldZh": "脱卸程度",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "仅上裸",
+   "level": 2
+  },
+  "white_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白色比基尼",
+   "level": 0
+  },
+  "fang": {
+   "slot": "mouth",
+   "fieldZh": "嘴部",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "小虎牙",
+   "level": 0
+  },
+  "puffy_sleeves": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "泡泡袖上衣",
+   "level": 0
+  },
+  "medium_hair": {
+   "slot": "hair_len",
+   "fieldZh": "长度",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "锁骨中长发",
+   "level": 0
+  },
+  "spread_pussy": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "pov_crotch": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "第一人称下体视角",
+   "level": 2
+  },
+  "black_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黑缎带",
+   "level": null
+  },
+  "phone": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "手机",
+   "level": 0
+  },
+  "black_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黑蝴蝶结",
+   "level": null
+  },
+  "dark_skin": {
+   "slot": "skin",
+   "fieldZh": "肤色",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "古铜色",
+   "level": 0
+  },
+  "wariza": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "W坐",
+   "level": 0
+  },
+  "china_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "旗袍",
+   "level": 0
+  },
+  "missionary": {
+   "slot": "n_act",
+   "fieldZh": "性行为",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "正常位",
+   "level": 3
+  },
+  "lace_trim": {
+   "slot": "cloth_mat",
+   "fieldZh": "材质",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蕾丝边",
+   "level": 1
+  },
+  "white_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白袜子",
+   "level": null
+  },
+  "tears": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "含泪",
+   "level": 2
+  },
+  "desk": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "书桌",
+   "level": 0
+  },
+  "short_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "热裤",
+   "level": 1
+  },
+  "table": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "桌子",
+   "level": 0
+  },
+  "from_side": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "正侧面",
+   "level": 0
+  },
+  "black_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黑胸罩",
+   "level": null
+  },
+  "group_sex": {
+   "slot": "count",
+   "fieldZh": "人数构成 *",
+   "sec": "count",
+   "secZh": "① 数量与身份",
+   "zh": "一女多男",
+   "level": 4
+  },
+  "halterneck": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "挂脖泳衣",
+   "level": 0
+  },
+  "grey_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "灰色瞳",
+   "level": 0
+  },
+  "green_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "绿色",
+   "level": 0
+  },
+  "multiple_boys": {
+   "slot": "count",
+   "fieldZh": "人数构成 *",
+   "sec": "count",
+   "secZh": "① 数量与身份",
+   "zh": "一女多男",
+   "level": 4
+  },
+  "squatting": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "蹲姿",
+   "level": 0
+  },
+  "kneehighs": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "及膝袜",
+   "level": 0
+  },
+  "boots": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "靴子",
+   "level": 0
+  },
+  "twin_braids": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "麻花辫",
+   "level": 0
+  },
+  "black_shirt": {
+   "slot": "top",
+   "fieldZh": "上装",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黑衬衫",
+   "level": null
+  },
+  "crossed_legs": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "双腿交叠",
+   "level": 0
+  },
+  "highleg_leotard": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "grey_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "灰光环",
+   "level": null
+  },
+  "sunglasses": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "墨镜",
+   "level": 0
+  },
+  "night_sky": {
+   "slot": "environment",
+   "fieldZh": "环境",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "夜空",
+   "level": null
+  },
+  "standing_on_one_leg": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "单腿站立",
+   "level": 0
+  },
+  "fur_trim": {
+   "slot": "cloth_mat",
+   "fieldZh": "材质",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "毛绒滚边",
+   "level": 0
+  },
+  "red_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "红缎带",
+   "level": null
+  },
+  "gradient_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "渐变发色",
+   "level": 0
+  },
+  "single_thighhigh": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "单腿过膝袜",
+   "level": 1
+  },
+  "pov_hands": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "第一人称手部",
+   "level": 0
+  },
+  "veil": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "头纱",
+   "level": null
+  },
+  "bedroom": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "卧室",
+   "level": 0
+  },
+  "on_stomach": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "俯卧",
+   "level": 0
+  },
+  "sandals": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "凉鞋",
+   "level": 0
+  },
+  "side_ponytail": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "侧马尾",
+   "level": 0
+  },
+  "leaning_forward": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "前倾",
+   "level": 1
+  },
+  "v": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "比耶",
+   "level": 0
+  },
+  "dress_lift": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "撩起连衣裙",
+   "level": 2
+  },
+  "standing_sex": {
+   "slot": "n_act",
+   "fieldZh": "性行为",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "站立后入",
+   "level": 3
+  },
+  "upper_body": {
+   "slot": "shot_size",
+   "fieldZh": "景别",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "上半身",
+   "level": 0
+  },
+  "bow_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蝴蝶结内裤",
+   "level": null
+  },
+  "one-piece_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "连体泳衣",
+   "level": 0
+  },
+  "red_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "红蝴蝶结",
+   "level": null
+  },
+  "beret": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "贝雷帽",
+   "level": 0
+  },
+  "crop_top": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "露脐上衣",
+   "level": 1
+  },
+  "black_pubic_hair": {
+   "slot": "n_body",
+   "fieldZh": "私密细节",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "黑阴毛",
+   "level": 2
+  },
+  "sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "毛衣",
+   "level": 0
+  },
+  "flat_chest": {
+   "slot": "figure",
+   "fieldZh": "身材轮廓",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "平胸",
+   "level": 0
+  },
+  "black_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黑光环",
+   "level": null
+  },
+  "looking_at_another": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "望向他人",
+   "level": 0
+  },
+  "panties_aside": {
+   "slot": "n_exposure",
+   "fieldZh": "暴露重点",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "内裤拨开",
+   "level": 2
+  },
+  "steam": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "蒸汽氤氲",
+   "level": 0
+  },
+  "black_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑短裤",
+   "level": 0
+  },
+  "blue_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蓝缎带",
+   "level": null
+  },
+  "bar_censor": {
+   "slot": "censorship",
+   "fieldZh": "审查",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "色条打码",
+   "level": null
+  },
+  "drill_hair": {
+   "slot": "hair_curl",
+   "fieldZh": "卷直",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "羊毛卷",
+   "level": 0
+  },
+  "black_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黑袜子",
+   "level": null
+  },
+  "white_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白半身裙",
+   "level": 0
+  },
+  "white_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白缎带",
+   "level": null
+  },
+  "white_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白蝴蝶结",
+   "level": null
+  },
+  "cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "开衫",
+   "level": 0
+  },
+  "white_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白短夹克",
+   "level": 0
+  },
+  "garter_belt": {
+   "slot": "n_fabric",
+   "fieldZh": "NSFW材质",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "吊袜腰带",
+   "level": 2
+  },
+  "light_brown_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "茶色发",
+   "level": 0
+  },
+  "cherry_blossoms": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "樱花飘落",
+   "level": 0
+  },
+  "white_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白胸罩",
+   "level": null
+  },
+  "blue_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝连衣裙",
+   "level": 0
+  },
+  "towel": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "毛巾",
+   "level": 0
+  },
+  "blue_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝短夹克",
+   "level": 0
+  },
+  "bookshelf": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "书架",
+   "level": 0
+  },
+  "anal": {
+   "slot": "n_act",
+   "fieldZh": "性行为",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "肛交",
+   "level": 3
+  },
+  "classroom": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "教室",
+   "level": 0
+  },
+  "arms_behind_back": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "双手背后",
+   "level": 0
+  },
+  "green_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "绿光环",
+   "level": null
+  },
+  "umbrella": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "雨伞",
+   "level": 0
+  },
+  "bound_wrists": {
+   "slot": "n_pos",
+   "fieldZh": "体态细节",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "手腕束缚",
+   "level": 3
+  },
+  "glasses": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "眼镜",
+   "level": 0
+  },
+  "onsen": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "温泉",
+   "level": 0
+  },
+  "sleeveless_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "无袖上衣",
+   "level": 1
+  },
+  "purple_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "紫光环",
+   "level": null
+  },
+  "heterochromia": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "异色瞳",
+   "level": 0
+  },
+  "pink_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "粉内裤",
+   "level": null
+  },
+  "side_slit": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "backlighting": {
+   "slot": "light_fx",
+   "fieldZh": "光效氛围",
+   "sec": "lighting",
+   "secZh": "⑩ 光影氛围",
+   "zh": "逆光",
+   "level": 0
+  },
+  "white_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "白发带",
+   "level": 0
+  },
+  "handjob": {
+   "slot": "n_act",
+   "fieldZh": "性行为",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "手交",
+   "level": 2
+  },
+  "red_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红连衣裙",
+   "level": 0
+  },
+  "hands_up": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "双手举起",
+   "level": 0
+  },
+  "see-through_shirt": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视/湿身",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "透视/湿身",
+   "level": 2
+  },
+  "one_breast_out": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "wet_shirt": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视/湿身",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "透视/湿身",
+   "level": 2
+  },
+  "threesome": {
+   "slot": "n_theme",
+   "fieldZh": "主题元素",
+   "sec": "special_nsfw",
+   "secZh": "🔞 特殊主题（NSFW）",
+   "zh": "3P",
+   "level": 4
+  },
+  "lactation": {
+   "slot": "nsfw:extreme_fluid",
+   "fieldZh": "极限体液",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "极限体液",
+   "level": 4
+  },
+  "water_drop": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "水珠",
+   "level": 0
+  },
+  "side-tie_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "侧系内裤",
+   "level": null
+  },
+  "clenched_teeth": {
+   "slot": "mouth",
+   "fieldZh": "嘴部",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "咬牙",
+   "level": 0
+  },
+  "camisole": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "细肩带背心",
+   "level": 1
+  },
+  "hand_on_own_chest": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "手抚胸前",
+   "level": 1
+  },
+  "holding_hands": {
+   "slot": "interact",
+   "fieldZh": "持物动作",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "手牵手",
+   "level": null
+  },
+  "black_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "黑瞳",
+   "level": 0
+  },
+  "fellatio": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "第一人称口交",
+   "level": 3
+  },
+  "leash": {
+   "slot": "nsfw:bondage",
+   "fieldZh": "束缚/BDSM",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "束缚/BDSM",
+   "level": 3
+  },
+  "thick_thighs": {
+   "slot": "figure",
+   "fieldZh": "身材轮廓",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "肉感大腿",
+   "level": 0
+  },
+  "bound_arms": {
+   "slot": "n_pos",
+   "fieldZh": "体态细节",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "手臂束缚",
+   "level": 3
+  },
+  "white_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白光环",
+   "level": null
+  },
+  "blue_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝比基尼",
+   "level": 0
+  },
+  "loafers": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "乐福鞋",
+   "level": 0
+  },
+  "red_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红半身裙",
+   "level": 0
+  },
+  "wet_hair": {
+   "slot": "hair_fx",
+   "fieldZh": "动态状态",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "湿发",
+   "level": 0
+  },
+  "cleavage_cutout": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "micro_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "微距比基尼",
+   "level": 1
+  },
+  "starry_sky": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "星空",
+   "level": 0
+  },
+  "ring": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "戒指",
+   "level": 0
+  },
+  "swept_bangs": {
+   "slot": "hair_bangs",
+   "fieldZh": "刘海",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "斜刘海",
+   "level": 0
+  },
+  "backless_outfit": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "brown_thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "棕过膝袜",
+   "level": null
+  },
+  "pencil_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "铅笔裙",
+   "level": 0
+  },
+  "aqua_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "水蓝瞳",
+   "level": 0
+  },
+  "bathroom": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "浴室",
+   "level": 0
+  },
+  "orange_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "橙瞳",
+   "level": null
+  },
+  "bodystocking": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视/湿身",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "透视/湿身",
+   "level": 2
+  },
+  "cum_pool": {
+   "slot": "nsfw:fluid",
+   "fieldZh": "体液/事后",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "体液/事后",
+   "level": 3
+  },
+  "blue_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蓝内裤",
+   "level": null
+  },
+  "stomach_bulge": {
+   "slot": "nsfw:extreme_insert",
+   "fieldZh": "极端插入/扩张",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "极端插入/扩张",
+   "level": 4
+  },
+  "asymmetrical_legwear": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "x-ray": {
+   "slot": "n_cum",
+   "fieldZh": "精液表现",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "透视断面",
+   "level": 3
+  },
+  "bare_back": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "looking_down": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "向下看",
+   "level": 0
+  },
+  "vase": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "花瓶",
+   "level": 0
+  },
+  "undressing": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "宽衣",
+   "level": 2
+  },
+  "crotchless": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "blue_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "蓝发带",
+   "level": 0
+  },
+  "single_glove": {
+   "slot": "nsfw:fetish",
+   "fieldZh": "暴露癖/情境",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "暴露癖/情境",
+   "level": 1
+  },
+  "pasties": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "gym_uniform": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "体操服",
+   "level": 0
+  },
+  "babydoll": {
+   "slot": "n_fabric",
+   "fieldZh": "NSFW材质",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "婴儿睡裙",
+   "level": 2
+  },
+  "inverted_nipples": {
+   "slot": "n_body",
+   "fieldZh": "私密细节",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "乳尖凹陷",
+   "level": 2
+  },
+  "white_choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白颈圈",
+   "level": 0
+  },
+  "orange_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "橙色",
+   "level": 0
+  },
+  "nature": {
+   "slot": "environment",
+   "fieldZh": "环境",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "自然",
+   "level": null
+  },
+  "mirror": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "镜面反射",
+   "level": 0
+  },
+  "licking_lips": {
+   "slot": "mouth",
+   "fieldZh": "嘴部",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "舔唇",
+   "level": 0
+  },
+  "sneakers": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "运动鞋",
+   "level": 0
+  },
+  "high-waist_skirt": {
+   "slot": "cloth_state_sfw",
+   "fieldZh": "穿着方式",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "高腰",
+   "level": 0
+  },
+  "finger_to_mouth": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "指尖触唇",
+   "level": 0
+  },
+  "gangbang": {
+   "slot": "n_theme",
+   "fieldZh": "主题元素",
+   "sec": "special_nsfw",
+   "secZh": "🔞 特殊主题（NSFW）",
+   "zh": "群交",
+   "level": 4
+  },
+  "nipple_slip": {
+   "slot": "n_exposure",
+   "fieldZh": "暴露重点",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "胸前微露",
+   "level": 2
+  },
+  "pink_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "粉蝴蝶结",
+   "level": null
+  },
+  "see-through": {
+   "slot": "n_state",
+   "fieldZh": "脱卸程度",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "透视装",
+   "level": 2
+  },
+  "bikini_pull": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "拉扯比基尼",
+   "level": 2
+  },
+  "single_bare_shoulder": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "white_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白和服",
+   "level": 0
+  },
+  "tiptoes": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "踮脚",
+   "level": 1
+  },
+  "selfie": {
+   "slot": "device",
+   "fieldZh": "设备质感",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "手机自拍",
+   "level": 0
+  },
+  "cake": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "蛋糕",
+   "level": 0
+  },
+  "hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "连帽卫衣",
+   "level": 0
+  },
+  "purple_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫连衣裙",
+   "level": 0
+  },
+  "upskirt": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "yukata": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "浴衣",
+   "level": 0
+  },
+  "blue_one-piece_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝连体泳衣",
+   "level": 0
+  },
+  "open_kimono": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "lace": {
+   "slot": "cloth_mat",
+   "fieldZh": "材质",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蕾丝",
+   "level": 0
+  },
+  "railing": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "栏杆",
+   "level": 0
+  },
+  "turtleneck": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "高领毛衣",
+   "level": 0
+  },
+  "blue_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝和服",
+   "level": 0
+  },
+  "black_one-piece_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑连体泳衣",
+   "level": 0
+  },
+  "wedding_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "婚纱",
+   "level": 0
+  },
+  "red_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红比基尼",
+   "level": 0
+  },
+  "scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "丝巾",
+   "level": 0
+  },
+  "see-through_dress": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视/湿身",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "透视/湿身",
+   "level": 2
+  },
+  "forest": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "森林",
+   "level": 0
+  },
+  "pink_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "粉缎带",
+   "level": null
+  },
+  "blue_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝衬衫",
+   "level": 0
+  },
+  "white_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白毛衣",
+   "level": 0
+  },
+  "crossed_ankles": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "脚踝交叉",
+   "level": 0
+  },
+  "blue_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝短裤",
+   "level": 0
+  },
+  "thigh_boots": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "过膝长靴",
+   "level": 2
+  },
+  "unworn_panties": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "candle": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "蜡烛",
+   "level": 0
+  },
+  "footjob": {
+   "slot": "n_act",
+   "fieldZh": "性行为",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "足交",
+   "level": 2
+  },
+  "white_one-piece_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白连体泳衣",
+   "level": 0
+  },
+  "grey_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰半身裙",
+   "level": 0
+  },
+  "poolside": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "泳池边",
+   "level": 0
+  },
+  "office_lady": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "OL套装",
+   "level": 0
+  },
+  "soft_lighting": {
+   "slot": "light_fx",
+   "fieldZh": "光效氛围",
+   "sec": "lighting",
+   "secZh": "⑩ 光影氛围",
+   "zh": "柔光漫射",
+   "level": 0
+  },
+  "sleeping": {
+   "slot": "action",
+   "fieldZh": "动态动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "睡眠",
+   "level": 0
+  },
+  "straw_hat": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "草帽",
+   "level": 0
+  },
+  "blazer": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "西装外套",
+   "level": 0
+  },
+  "vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "马甲背心",
+   "level": 0
+  },
+  "purple_pubic_hair": {
+   "slot": "n_body",
+   "fieldZh": "私密细节",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "紫阴毛",
+   "level": 2
+  },
+  "paizuri": {
+   "slot": "n_act",
+   "fieldZh": "性行为",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "乳交",
+   "level": 2
+  },
+  "pink_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "粉胸罩",
+   "level": null
+  },
+  "snow": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "雪景",
+   "level": 0
+  },
+  "high_ponytail": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "高马尾",
+   "level": 0
+  },
+  "french_braid": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "公主编",
+   "level": 0
+  },
+  "blue_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蓝胸罩",
+   "level": null
+  },
+  "cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "披风",
+   "level": 0
+  },
+  "purple_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "紫内裤",
+   "level": null
+  },
+  "cushion": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "靠垫",
+   "level": 0
+  },
+  "hand_on_own_hip": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "叉腰",
+   "level": 0
+  },
+  "white_babydoll": {
+   "slot": "n_fabric",
+   "fieldZh": "NSFW材质",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "白婴儿睡裙",
+   "level": 2
+  },
+  "stairs": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "楼梯",
+   "level": 0
+  },
+  "t-shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "T恤",
+   "level": 0
+  },
+  "leaning_back": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "后仰",
+   "level": 1
+  },
+  "denim": {
+   "slot": "cloth_mat",
+   "fieldZh": "材质",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "牛仔布",
+   "level": 0
+  },
+  "evening_gown": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "晚礼服",
+   "level": 0
+  },
+  "close-up": {
+   "slot": "shot_size",
+   "fieldZh": "景别",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "面部特写",
+   "level": 0
+  },
+  "fishnet_thighhighs": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "渔网袜",
+   "level": 0
+  },
+  "handcuffs": {
+   "slot": "nsfw:bondage",
+   "fieldZh": "束缚/BDSM",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "束缚/BDSM",
+   "level": 3
+  },
+  "hand_in_own_hair": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "拨弄头发",
+   "level": 0
+  },
+  "standing_split": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "站立一字马",
+   "level": 0
+  },
+  "purple_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "紫缎带",
+   "level": null
+  },
+  "half-closed_eyes": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "半闭眼",
+   "level": 0
+  },
+  "looking_up": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "抬眼",
+   "level": 0
+  },
+  "head_rest": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "托腮",
+   "level": 0
+  },
+  "fisheye": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "鱼眼镜头",
+   "level": 0
+  },
+  "profile": {
+   "slot": "comp",
+   "fieldZh": "构图",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "侧脸轮廓",
+   "level": 0
+  },
+  "tank_top": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "背心",
+   "level": 0
+  },
+  "purple_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫和服",
+   "level": 0
+  },
+  "wavy_hair": {
+   "slot": "hair_curl",
+   "fieldZh": "卷直",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "自然微卷",
+   "level": 0
+  },
+  "red_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "红内裤",
+   "level": null
+  },
+  "school_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "死库水",
+   "level": 0
+  },
+  "red_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红短裤",
+   "level": 0
+  },
+  "black_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑和服",
+   "level": 0
+  },
+  "futanari": {
+   "slot": "n_theme",
+   "fieldZh": "主题元素",
+   "sec": "special_nsfw",
+   "secZh": "🔞 特殊主题（NSFW）",
+   "zh": "扶她",
+   "level": 3
+  },
+  "low_twin_braids": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "低双辫",
+   "level": 0
+  },
+  "door": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "门",
+   "level": 0
+  },
+  "aqua_hair": {
+   "slot": "hair_color",
+   "fieldZh": "颜色",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "水蓝色",
+   "level": 0
+  },
+  "rain": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "雨天",
+   "level": 0
+  },
+  "red_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红短夹克",
+   "level": 0
+  },
+  "navel_cutout": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "aqua_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "水色蝴蝶结",
+   "level": null
+  },
+  "low_ponytail": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "低马尾",
+   "level": 0
+  },
+  "pink_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉比基尼",
+   "level": 0
+  },
+  "shackles": {
+   "slot": "nsfw:bondage",
+   "fieldZh": "束缚/BDSM",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "束缚/BDSM",
+   "level": 3
+  },
+  "black_garter_belt": {
+   "slot": "n_fabric",
+   "fieldZh": "NSFW材质",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "黑吊袜腰带",
+   "level": 2
+  },
+  "high_heel_boots": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "高跟长靴",
+   "level": 0
+  },
+  "bob_cut": {
+   "slot": "hair_len",
+   "fieldZh": "长度",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "波波头",
+   "level": 0
+  },
+  "nightgown": {
+   "slot": "nsfw:suggestive",
+   "fieldZh": "轻度暗示",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "轻度暗示",
+   "level": 1
+  },
+  "wind": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "大风",
+   "level": 0
+  },
+  "denim_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "牛仔短裤",
+   "level": 0
+  },
+  "mary_janes": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "玛丽珍鞋",
+   "level": 0
+  },
+  "butt_plug": {
+   "slot": "n_theme",
+   "fieldZh": "主题元素",
+   "sec": "special_nsfw",
+   "secZh": "🔞 特殊主题（NSFW）",
+   "zh": "肛塞",
+   "level": 3
+  },
+  "pajamas": {
+   "slot": "nsfw:suggestive",
+   "fieldZh": "轻度暗示",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "轻度暗示",
+   "level": 1
+  },
+  "nurse": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "护士服",
+   "level": 0
+  },
+  "aqua_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "水色光环",
+   "level": null
+  },
+  "desk_lamp": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "台灯",
+   "level": 0
+  },
+  "white_garter_belt": {
+   "slot": "n_fabric",
+   "fieldZh": "NSFW材质",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "白吊袜腰带",
+   "level": 2
+  },
+  "bikini_top_only": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "仅比基尼上衣",
+   "level": 0
+  },
+  "pussy_juice_stain": {
+   "slot": "nsfw:fluid",
+   "fieldZh": "体液/事后",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "体液/事后",
+   "level": 3
+  },
+  "midriff_peek": {
+   "slot": "cloth_state_sfw",
+   "fieldZh": "穿着方式",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "露腰",
+   "level": 0
+  },
+  "striped_thighhighs": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "条纹过膝袜",
+   "level": 0
+  },
+  "hood_up": {
+   "slot": "nsfw:suggestive",
+   "fieldZh": "轻度暗示",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "轻度暗示",
+   "level": 1
+  },
+  "sunset": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "黄昏",
+   "level": 0
+  },
+  "ice_cream": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "冰淇淋",
+   "level": 0
+  },
+  "mountain": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "山间",
+   "level": 0
+  },
+  "orange_halo": {
+   "slot": "headwear",
+   "fieldZh": "头饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "橙光环",
+   "level": null
+  },
+  "pink_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉半身裙",
+   "level": 0
+  },
+  "purple_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫比基尼",
+   "level": 0
+  },
+  "folding_fan": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "折扇",
+   "level": 0
+  },
+  "hand_on_own_cheek": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "摸脸颊",
+   "level": 0
+  },
+  "see-through_silhouette": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视/湿身",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "透视/湿身",
+   "level": 2
+  },
+  "brown_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "棕手套",
+   "level": null
+  },
+  "purple_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "紫手套",
+   "level": null
+  },
+  "pink_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉短夹克",
+   "level": 0
+  },
+  "condom_box": {
+   "slot": "nsfw:fluid",
+   "fieldZh": "体液/事后",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "体液/事后",
+   "level": 3
+  },
+  "hugging_own_legs": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "抱膝蜷坐",
+   "level": 1
+  },
+  "breast_sucking": {
+   "slot": "nsfw:sexual",
+   "fieldZh": "性行为",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "性行为",
+   "level": 3
+  },
+  "crop_top_overhang": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "loose_socks": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "堆堆袜",
+   "level": 0
+  },
+  "see-through_sleeves": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视/湿身",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "透视/湿身",
+   "level": 2
+  },
+  "corset": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "束腰",
+   "level": 2
+  },
+  "looking_to_the_side": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "侧目",
+   "level": 0
+  },
+  "harness": {
+   "slot": "nsfw:bondage",
+   "fieldZh": "束缚/BDSM",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "束缚/BDSM",
+   "level": 3
+  },
+  "purple_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "紫胸罩",
+   "level": null
+  },
+  "sundress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "太阳裙",
+   "level": 1
+  },
+  "chromatic_aberration": {
+   "slot": "texture_fx",
+   "fieldZh": "质感特效",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "色差",
+   "level": 0
+  },
+  "crying": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "哭泣",
+   "level": 0
+  },
+  "grey_cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰开衫",
+   "level": 0
+  },
+  "church": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "教堂",
+   "level": 0
+  },
+  "purple_thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "紫过膝袜",
+   "level": null
+  },
+  "mismatched_legwear": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "pants_pull": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "skirt_pull": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "拉拽裙摆",
+   "level": 1
+  },
+  "sleeves_rolled_up": {
+   "slot": "cloth_state_sfw",
+   "fieldZh": "穿着方式",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "挽起袖子",
+   "level": 0
+  },
+  "micro_shorts": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "underwater": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "水下",
+   "level": 0
+  },
+  "lotion": {
+   "slot": "nsfw:fluid",
+   "fieldZh": "体液/事后",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "体液/事后",
+   "level": 3
+  },
+  "leather": {
+   "slot": "cloth_mat",
+   "fieldZh": "材质",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "皮革",
+   "level": 0
+  },
+  "purple_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "紫蝴蝶结",
+   "level": null
+  },
+  "blue_pubic_hair": {
+   "slot": "n_body",
+   "fieldZh": "私密细节",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "蓝阴毛",
+   "level": 2
+  },
+  "unbuttoned_shirt": {
+   "slot": "n_state",
+   "fieldZh": "脱卸程度",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "解扣敞开",
+   "level": 2
+  },
+  "red_choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红颈圈",
+   "level": 0
+  },
+  "blue_choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝颈圈",
+   "level": 0
+  },
+  "suit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "西装套装",
+   "level": 0
+  },
+  "yellow_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄短夹克",
+   "level": 0
+  },
+  "crotchless_panties": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "purple_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "紫发带",
+   "level": 0
+  },
+  "blanket": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "毛毯",
+   "level": 0
+  },
+  "crotch_cutout": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "arched_back": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "弓背",
+   "level": 1
+  },
+  "kitchen": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "厨房",
+   "level": 0
+  },
+  "fur-trimmed_coat": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "皮草滚边大衣",
+   "level": 0
+  },
+  "bar_(place)": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "酒吧",
+   "level": 0
+  },
+  "gym_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "运动短裤",
+   "level": 0
+  },
+  "parasol": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "遮阳伞",
+   "level": 0
+  },
+  "library": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "图书馆",
+   "level": 0
+  },
+  "gyaru": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "辣妹风",
+   "level": 0
+  },
+  "handbag": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "手提包",
+   "level": 0
+  },
+  "train_interior": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "电车内",
+   "level": 0
+  },
+  "legs_together": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "双腿并拢",
+   "level": 0
+  },
+  "white_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白短裤",
+   "level": 0
+  },
+  "grey_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰短夹克",
+   "level": 0
+  },
+  "slippers": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "拖鞋",
+   "level": 0
+  },
+  "red_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红和服",
+   "level": 0
+  },
+  "brown_cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕开衫",
+   "level": 0
+  },
+  "red_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "红手套",
+   "level": null
+  },
+  "unbuttoned": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "sports_bra": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "运动内衣",
+   "level": 0
+  },
+  "eye_contact": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "对视",
+   "level": 0
+  },
+  "waterfall": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "瀑布",
+   "level": 0
+  },
+  "oversized_shirt": {
+   "slot": "nsfw:suggestive",
+   "fieldZh": "轻度暗示",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "轻度暗示",
+   "level": 1
+  },
+  "blindfold": {
+   "slot": "n_theme",
+   "fieldZh": "主题元素",
+   "sec": "special_nsfw",
+   "secZh": "🔞 特殊主题（NSFW）",
+   "zh": "蒙眼",
+   "level": 3
+  },
+  "green_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "绿蝴蝶结",
+   "level": null
+  },
+  "white_cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白开衫",
+   "level": 0
+  },
+  "cunnilingus": {
+   "slot": "nsfw:sexual",
+   "fieldZh": "性行为",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "性行为",
+   "level": 3
+  },
+  "see-through_leotard": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视/湿身",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "透视/湿身",
+   "level": 2
+  },
+  "bridge": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "桥",
+   "level": 0
+  },
+  "field": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "原野",
+   "level": 0
+  },
+  "pout": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "傲娇嘟嘴",
+   "level": 0
+  },
+  "road": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "公路",
+   "level": 0
+  },
+  "river": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "河边",
+   "level": 0
+  },
+  "straight_hair": {
+   "slot": "hair_curl",
+   "fieldZh": "卷直",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "直发顺滑",
+   "level": 0
+  },
+  "black_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑连帽卫衣",
+   "level": 0
+  },
+  "off-shoulder_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "露肩毛衣",
+   "level": 0
+  },
+  "camera": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "相机",
+   "level": 0
+  },
+  "motion_blur": {
+   "slot": "texture_fx",
+   "fieldZh": "质感特效",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "动态模糊",
+   "level": 0
+  },
+  "pink_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉连衣裙",
+   "level": 0
+  },
+  "black_babydoll": {
+   "slot": "n_fabric",
+   "fieldZh": "NSFW材质",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "黑婴儿睡裙",
+   "level": 2
+  },
+  "pink_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉衬衫",
+   "level": 0
+  },
+  "french_kiss": {
+   "slot": "nsfw:yuri",
+   "fieldZh": "百合",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "百合",
+   "level": 2
+  },
+  "highleg_panties": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "red_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "红胸罩",
+   "level": null
+  },
+  "knee_boots": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "及膝长靴",
+   "level": 0
+  },
+  "stiletto_heels": {
+   "slot": "n_shoes_keep",
+   "fieldZh": "保留单品",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "细高跟",
+   "level": 2
+  },
+  "wet_dress": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视/湿身",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "透视/湿身",
+   "level": 2
+  },
+  "yellow_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黄蝴蝶结",
+   "level": null
+  },
+  "holding_own_hair": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "撩发",
+   "level": 0
+  },
+  "condom_belt": {
+   "slot": "nsfw:fluid",
+   "fieldZh": "体液/事后",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "体液/事后",
+   "level": 3
+  },
+  "hair_over_eyes": {
+   "slot": "hair_fx",
+   "fieldZh": "动态状态",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "湿发贴脸",
+   "level": 0
+  },
+  "green_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿连衣裙",
+   "level": 0
+  },
+  "blue_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蓝手套",
+   "level": null
+  },
+  "oversized_clothes": {
+   "slot": "cloth_state_sfw",
+   "fieldZh": "穿着方式",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "宽松版型",
+   "level": 0
+  },
+  "walking": {
+   "slot": "action",
+   "fieldZh": "动态动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "行走",
+   "level": 0
+  },
+  "flower_field": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "花田",
+   "level": 0
+  },
+  "long_legs": {
+   "slot": "leg",
+   "fieldZh": "腿部线条",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "双腿修长笔直",
+   "level": 0
+  },
+  "miko": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "巫女装束",
+   "level": 0
+  },
+  "slingshot_swimsuit": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "black_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑毛衣",
+   "level": 0
+  },
+  "crossed_arms": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "双臂交叉",
+   "level": 0
+  },
+  "ruins": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "废墟",
+   "level": 0
+  },
+  "blue_thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蓝过膝袜",
+   "level": null
+  },
+  "coat_on_shoulders": {
+   "slot": "cloth_state_sfw",
+   "fieldZh": "穿着方式",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "外套披肩",
+   "level": 0
+  },
+  "pink_cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉开衫",
+   "level": 0
+  },
+  "aqua_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "水色内裤",
+   "level": null
+  },
+  "green_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿半身裙",
+   "level": 0
+  },
+  "reading": {
+   "slot": "action",
+   "fieldZh": "动态动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "阅读",
+   "level": 0
+  },
+  "grey_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰和服",
+   "level": 0
+  },
+  "red_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "红发带",
+   "level": 0
+  },
+  "lips": {
+   "slot": "body_part",
+   "fieldZh": "头部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "嘴唇",
+   "level": null
+  },
+  "latex": {
+   "slot": "cloth_mat",
+   "fieldZh": "材质",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "乳胶",
+   "level": 2
+  },
+  "boy_on_top": {
+   "slot": "n_pos",
+   "fieldZh": "体态细节",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "男上位",
+   "level": 3
+  },
+  "red_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红衬衫",
+   "level": 0
+  },
+  "yellow_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄比基尼",
+   "level": 0
+  },
+  "w": {
+   "slot": "role",
+   "fieldZh": "角色（可选）",
+   "sec": "count",
+   "secZh": "① 数量与身份",
+   "zh": "W",
+   "level": 0
+  },
+  "purple_choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫颈圈",
+   "level": 0
+  },
+  "purple_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫半身裙",
+   "level": 0
+  },
+  "bloomers": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灯笼裤",
+   "level": 0
+  },
+  "grey_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰连衣裙",
+   "level": 0
+  },
+  "breast_curtain": {
+   "slot": "nsfw:nudity",
+   "fieldZh": "裸露",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裸露",
+   "level": 2
+  },
+  "lake": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "湖畔",
+   "level": 0
+  },
+  "car_interior": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "车后座",
+   "level": 0
+  },
+  "uwabaki": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "室内鞋",
+   "level": 0
+  },
+  "moonlight": {
+   "slot": "light_fx",
+   "fieldZh": "光效氛围",
+   "sec": "lighting",
+   "secZh": "⑩ 光影氛围",
+   "zh": "冷色月光",
+   "level": 0
+  },
+  "aqua_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "水色胸罩",
+   "level": null
+  },
+  "old_school_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "旧式死库水",
+   "level": 0
+  },
+  "yawning": {
+   "slot": "action",
+   "fieldZh": "动态动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "打哈欠",
+   "level": 0
+  },
+  "stadium": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "体育馆",
+   "level": 0
+  },
+  "o-ring_choker": {
+   "slot": "nsfw:bondage",
+   "fieldZh": "束缚/BDSM",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "束缚/BDSM",
+   "level": 3
+  },
+  "blue_cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝开衫",
+   "level": 0
+  },
+  "brown_pubic_hair": {
+   "slot": "n_body",
+   "fieldZh": "私密细节",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "棕阴毛",
+   "level": 2
+  },
+  "red_hands": {
+   "slot": "body_part",
+   "fieldZh": "上肢",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "红手",
+   "level": null
+  },
+  "green_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "绿内裤",
+   "level": null
+  },
+  "street": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "街头",
+   "level": 0
+  },
+  "hands_on_own_thighs": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "双手抚腿",
+   "level": 1
+  },
+  "suspender_skirt": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "背带裙",
+   "level": 0
+  },
+  "indian_style": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "盘腿坐",
+   "level": 0
+  },
+  "micro_panties": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "sleepy": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "困倦",
+   "level": 0
+  },
+  "white_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白丝巾",
+   "level": 0
+  },
+  "competition_school_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "竞泳校园泳衣",
+   "level": 0
+  },
+  "green_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "绿缎带",
+   "level": null
+  },
+  "pink_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉和服",
+   "level": 0
+  },
+  "high-waist_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "高腰短裤",
+   "level": 0
+  },
+  "side_cutout": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "wristwatch": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "手表",
+   "level": 0
+  },
+  "sweater_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "针织连衣裙",
+   "level": 0
+  },
+  "green_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿短夹克",
+   "level": 0
+  },
+  "wide_shot": {
+   "slot": "shot_size",
+   "fieldZh": "景别",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "远景",
+   "level": 0
+  },
+  "gothic_lolita": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "哥特萝莉",
+   "level": 0
+  },
+  "nipple_clamps": {
+   "slot": "n_theme",
+   "fieldZh": "主题元素",
+   "sec": "special_nsfw",
+   "secZh": "🔞 特殊主题（NSFW）",
+   "zh": "乳夹",
+   "level": 3
+  },
+  "orange_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "橙蝴蝶结",
+   "level": null
+  },
+  "castle": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "城堡",
+   "level": 0
+  },
+  "sweater_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "针织马甲",
+   "level": 0
+  },
+  "purple_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫短夹克",
+   "level": 0
+  },
+  "cafe": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "咖啡厅",
+   "level": 0
+  },
+  "green_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "绿胸罩",
+   "level": null
+  },
+  "white_umbrella": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "白雨伞",
+   "level": 0
+  },
+  "long_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "长裙",
+   "level": 0
+  },
+  "sailor_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水手领衬衫",
+   "level": 0
+  },
+  "aqua_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "水色缎带",
+   "level": null
+  },
+  "stomach_cutout": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "brown_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕半身裙",
+   "level": 0
+  },
+  "hands_on_own_knees": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "双手扶膝",
+   "level": 0
+  },
+  "red_thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "红过膝袜",
+   "level": null
+  },
+  "wide_hips": {
+   "slot": "figure",
+   "fieldZh": "身材轮廓",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "宽胯",
+   "level": 0
+  },
+  "green_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿比基尼",
+   "level": 0
+  },
+  "clothes_around_waist": {
+   "slot": "nsfw:undressed",
+   "fieldZh": "半脱/掀起",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "半脱/掀起",
+   "level": 2
+  },
+  "aqua_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水色比基尼",
+   "level": 0
+  },
+  "alley": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "小巷",
+   "level": 0
+  },
+  "rainbow": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "彩虹",
+   "level": 0
+  },
+  "against_window": {
+   "slot": "nsfw:fetish",
+   "fieldZh": "暴露癖/情境",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "暴露癖/情境",
+   "level": 1
+  },
+  "double_dildo": {
+   "slot": "nsfw:toy",
+   "fieldZh": "性道具",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "性道具",
+   "level": 3
+  },
+  "pink_choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉颈圈",
+   "level": 0
+  },
+  "yellow_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黄内裤",
+   "level": null
+  },
+  "stage": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "舞台",
+   "level": 0
+  },
+  "red_pubic_hair": {
+   "slot": "n_body",
+   "fieldZh": "私密细节",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "红阴毛",
+   "level": 2
+  },
+  "red_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红丝巾",
+   "level": 0
+  },
+  "shrine": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "神社",
+   "level": 0
+  },
+  "hip_vent": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "aqua_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水色连衣裙",
+   "level": 0
+  },
+  "rooftop": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "天台",
+   "level": 0
+  },
+  "pink_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "粉手套",
+   "level": null
+  },
+  "hime_cut": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "公主切",
+   "level": 0
+  },
+  "blue_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "蓝袜子",
+   "level": null
+  },
+  "red_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红毛衣",
+   "level": 0
+  },
+  "tanlines": {
+   "slot": "skin",
+   "fieldZh": "肤色",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "小麦色",
+   "level": 0
+  },
+  "yellow_cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄开衫",
+   "level": 0
+  },
+  "geta": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "木屐",
+   "level": 0
+  },
+  "bokeh": {
+   "slot": "comp",
+   "fieldZh": "构图",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "散景",
+   "level": 0
+  },
+  "black_sports_bra": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑运动内衣",
+   "level": 0
+  },
+  "aqua_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水色半身裙",
+   "level": 0
+  },
+  "asymmetrical_hair": {
+   "slot": "hair_tie",
+   "fieldZh": "扎法",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "不对称剪裁",
+   "level": 0
+  },
+  "blue_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝连帽卫衣",
+   "level": 0
+  },
+  "leg_lock": {
+   "slot": "n_act",
+   "fieldZh": "性行为",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "锁腿",
+   "level": 3
+  },
+  "gigantic_breasts": {
+   "slot": "figure",
+   "fieldZh": "身材轮廓",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "爆乳",
+   "level": 0
+  },
+  "orange_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙和服",
+   "level": 0
+  },
+  "grey_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰毛衣",
+   "level": 0
+  },
+  "blue_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝毛衣",
+   "level": 0
+  },
+  "police_uniform": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "警服",
+   "level": 0
+  },
+  "brown_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕短夹克",
+   "level": 0
+  },
+  "white_pubic_hair": {
+   "slot": "n_body",
+   "fieldZh": "私密细节",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "白阴毛",
+   "level": 2
+  },
+  "drinking": {
+   "slot": "action",
+   "fieldZh": "动态动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "饮水",
+   "level": 0
+  },
+  "jacket_around_waist": {
+   "slot": "cloth_state_sfw",
+   "fieldZh": "穿着方式",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "腰间系衣",
+   "level": 0
+  },
+  "black_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑披风",
+   "level": 0
+  },
+  "blue_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝丝巾",
+   "level": 0
+  },
+  "brown_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕毛衣",
+   "level": 0
+  },
+  "frown": {
+   "slot": "mouth",
+   "fieldZh": "嘴部",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "皱眉",
+   "level": 0
+  },
+  "eyeliner": {
+   "slot": "makeup",
+   "fieldZh": "妆容风格",
+   "sec": "makeup",
+   "secZh": "⑤ 妆容与细节",
+   "zh": "眼线",
+   "level": 0
+  },
+  "pink_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "粉袜子",
+   "level": null
+  },
+  "bike_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "骑行短裤",
+   "level": 0
+  },
+  "eye_mask": {
+   "slot": "nsfw:bondage",
+   "fieldZh": "束缚/BDSM",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "束缚/BDSM",
+   "level": 3
+  },
+  "ankle_boots": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "短靴",
+   "level": 0
+  },
+  "landscape": {
+   "slot": "comp",
+   "fieldZh": "构图",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "横构图",
+   "level": 0
+  },
+  "yoga_pants": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "瑜伽裤",
+   "level": 0
+  },
+  "white_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白连帽卫衣",
+   "level": 0
+  },
+  "black_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑马甲背心",
+   "level": 0
+  },
+  "white_sports_bra": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白运动内衣",
+   "level": 0
+  },
+  "park": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "公园",
+   "level": 0
+  },
+  "pink_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉毛衣",
+   "level": 0
+  },
+  "aqua_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "水色发带",
+   "level": 0
+  },
+  "grey_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰衬衫",
+   "level": 0
+  },
+  "swimming": {
+   "slot": "action",
+   "fieldZh": "动态动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "游泳",
+   "level": 0
+  },
+  "waving": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "挥手",
+   "level": 0
+  },
+  "black_cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑开衫",
+   "level": 0
+  },
+  "messy_hair": {
+   "slot": "hair_curl",
+   "fieldZh": "卷直",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "蓬松凌乱",
+   "level": 0
+  },
+  "sailor_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水手连衣裙",
+   "level": 0
+  },
+  "yellow_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黄缎带",
+   "level": null
+  },
+  "transparent": {
+   "slot": "nsfw:see_through",
+   "fieldZh": "透视/湿身",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "透视/湿身",
+   "level": 2
+  },
+  "fetal_position": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "蜷缩",
+   "level": 0
+  },
+  "looking_away": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "目光躲开",
+   "level": 0
+  },
+  "candlelight": {
+   "slot": "light_fx",
+   "fieldZh": "光效氛围",
+   "sec": "lighting",
+   "secZh": "⑩ 光影氛围",
+   "zh": "烛光摇曳",
+   "level": 0
+  },
+  "grey_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "灰内裤",
+   "level": null
+  },
+  "pink_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉短裤",
+   "level": 0
+  },
+  "jumping": {
+   "slot": "action",
+   "fieldZh": "动态动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "跳跃",
+   "level": 0
+  },
+  "swing": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "秋千",
+   "level": 0
+  },
+  "convenience_store": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "便利店",
+   "level": 0
+  },
+  "pinafore_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "背心裙",
+   "level": 0
+  },
+  "red_umbrella": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "红雨伞",
+   "level": 0
+  },
+  "pink_thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "粉过膝袜",
+   "level": null
+  },
+  "headband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "头箍",
+   "level": 0
+  },
+  "transparent_umbrella": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "透明雨伞",
+   "level": 0
+  },
+  "red_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "红袜子",
+   "level": null
+  },
+  "expressionless": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "冷漠",
+   "level": 0
+  },
+  "orange_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙比基尼",
+   "level": 0
+  },
+  "pearl_hair_ornament": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "珍珠发饰",
+   "level": 0
+  },
+  "changing_room": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "更衣室",
+   "level": 0
+  },
+  "leggings": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紧身打底裤",
+   "level": 0
+  },
+  "sex_machine": {
+   "slot": "nsfw:extreme_bondage",
+   "fieldZh": "极端拘束/装置",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "极端拘束/装置",
+   "level": 4
+  },
+  "jeans": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "牛仔裤",
+   "level": 0
+  },
+  "black_umbrella": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "黑雨伞",
+   "level": 0
+  },
+  "black_headband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "黑头箍",
+   "level": 0
+  },
+  "hanfu": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "汉服",
+   "level": 0
+  },
+  "yellow_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄半身裙",
+   "level": 0
+  },
+  "curly_hair": {
+   "slot": "hair_curl",
+   "fieldZh": "卷直",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "大波浪",
+   "level": 0
+  },
+  "yellow_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄衬衫",
+   "level": 0
+  },
+  "grey_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰短裤",
+   "level": 0
+  },
+  "balcony": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "阳台",
+   "level": 0
+  },
+  "legs_apart": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "双腿分开",
+   "level": 0
+  },
+  "pointing": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "指",
+   "level": 0
+  },
+  "bus_stop": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "公交车站",
+   "level": 0
+  },
+  "surprised": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "惊讶",
+   "level": 0
+  },
+  "bicycle": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "骑自行车",
+   "level": 0
+  },
+  "green_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿披风",
+   "level": 0
+  },
+  "white_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白披风",
+   "level": 0
+  },
+  "green_thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "绿过膝袜",
+   "level": null
+  },
+  "tube_top": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "抹胸",
+   "level": 0
+  },
+  "red_cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红开衫",
+   "level": 0
+  },
+  "red_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红披风",
+   "level": 0
+  },
+  "dancing": {
+   "slot": "action",
+   "fieldZh": "动态动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "起舞",
+   "level": 0
+  },
+  "orange_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "橙内裤",
+   "level": null
+  },
+  "vending_machine": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "自动贩卖机",
+   "level": 0
+  },
+  "grey_thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "灰过膝袜",
+   "level": null
+  },
+  "green_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "绿手套",
+   "level": null
+  },
+  "sweater_around_waist": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "腰间系衣",
+   "level": 0
+  },
+  "arm_between_breasts": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "手臂夹胸",
+   "level": 1
+  },
+  "dark_background": {
+   "slot": "light_fx",
+   "fieldZh": "光效氛围",
+   "sec": "lighting",
+   "secZh": "⑩ 光影氛围",
+   "zh": "昏暗背景",
+   "level": 0
+  },
+  "blue_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝披风",
+   "level": 0
+  },
+  "smug": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "得意",
+   "level": 0
+  },
+  "areolae": {
+   "slot": "n_exposure",
+   "fieldZh": "暴露重点",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "乳晕",
+   "level": 2
+  },
+  "bit_gag": {
+   "slot": "nsfw:bondage",
+   "fieldZh": "束缚/BDSM",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "束缚/BDSM",
+   "level": 3
+  },
+  "pink_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "粉发带",
+   "level": 0
+  },
+  "yellow_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黄胸罩",
+   "level": null
+  },
+  "orange_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "橙发带",
+   "level": 0
+  },
+  "black_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑丝巾",
+   "level": 0
+  },
+  "pink_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉连帽卫衣",
+   "level": 0
+  },
+  "arms_at_sides": {
+   "slot": "pose_base",
+   "fieldZh": "基础姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "垂手而立",
+   "level": 0
+  },
+  "grey_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰连帽卫衣",
+   "level": 0
+  },
+  "angry": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "生气",
+   "level": 0
+  },
+  "yellow_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "黄发带",
+   "level": 0
+  },
+  "yellow_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄和服",
+   "level": 0
+  },
+  "green_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "绿发带",
+   "level": 0
+  },
+  "high-waist_pants": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "高腰长裤",
+   "level": 0
+  },
+  "fur_coat": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "皮草大衣",
+   "level": 0
+  },
+  "neon_lights": {
+   "slot": "light_fx",
+   "fieldZh": "光效氛围",
+   "sec": "lighting",
+   "secZh": "⑩ 光影氛围",
+   "zh": "霓虹夜色",
+   "level": 0
+  },
+  "yellow_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄毛衣",
+   "level": 0
+  },
+  "fitting_room": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "试衣间",
+   "level": 0
+  },
+  "concert": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "演唱会",
+   "level": 0
+  },
+  "running": {
+   "slot": "action",
+   "fieldZh": "动态动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "奔跑",
+   "level": 0
+  },
+  "red_one-piece_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红连体泳衣",
+   "level": 0
+  },
+  "aqua_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "水色手套",
+   "level": null
+  },
+  "purple_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫衬衫",
+   "level": 0
+  },
+  "grey_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "灰胸罩",
+   "level": null
+  },
+  "disgust": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "厌恶",
+   "level": 0
+  },
+  "brown_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕短裤",
+   "level": 0
+  },
+  "pink_one-piece_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉连体泳衣",
+   "level": 0
+  },
+  "ferris_wheel": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "摩天轮",
+   "level": 0
+  },
+  "train_station": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "车站",
+   "level": 0
+  },
+  "yellow_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄连衣裙",
+   "level": 0
+  },
+  "purple_one-piece_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫连体泳衣",
+   "level": 0
+  },
+  "white_headband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "白头箍",
+   "level": 0
+  },
+  "ankle_socks": {
+   "slot": "socks",
+   "fieldZh": "腿上",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "短袜",
+   "level": 0
+  },
+  "salute": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "敬礼",
+   "level": 0
+  },
+  "blue_umbrella": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "蓝雨伞",
+   "level": 0
+  },
+  "grey_sports_bra": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰运动内衣",
+   "level": 0
+  },
+  "blue_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝马甲背心",
+   "level": 0
+  },
+  "garden": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "花园",
+   "level": 0
+  },
+  "aqua_thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "水色过膝袜",
+   "level": null
+  },
+  "purple_cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫开衫",
+   "level": 0
+  },
+  "yellow_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黄袜子",
+   "level": null
+  },
+  "white_towel": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "白毛巾",
+   "level": 0
+  },
+  "pink_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉丝巾",
+   "level": 0
+  },
+  "aqua_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水色短夹克",
+   "level": 0
+  },
+  "steepled_fingers": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "十指交叉托腮",
+   "level": 0
+  },
+  "denim_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "牛仔外套",
+   "level": 0
+  },
+  "purple_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫毛衣",
+   "level": 0
+  },
+  "overalls": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "背带裤",
+   "level": 0
+  },
+  "green_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿衬衫",
+   "level": 0
+  },
+  "brown_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕丝巾",
+   "level": 0
+  },
+  "denim_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "牛仔裙",
+   "level": 0
+  },
+  "orange_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙短夹克",
+   "level": 0
+  },
+  "aquarium": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "水族馆",
+   "level": 0
+  },
+  "white_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "白瞳",
+   "level": null
+  },
+  "yellow_choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄颈圈",
+   "level": 0
+  },
+  "green_one-piece_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿连体泳衣",
+   "level": 0
+  },
+  "chest_belt": {
+   "slot": "nsfw:bondage",
+   "fieldZh": "束缚/BDSM",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "束缚/BDSM",
+   "level": 3
+  },
+  "purple_headband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "紫头箍",
+   "level": 0
+  },
+  "orange_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "橙胸罩",
+   "level": null
+  },
+  "brown_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕衬衫",
+   "level": 0
+  },
+  "brown_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕马甲背心",
+   "level": 0
+  },
+  "yellow_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黄手套",
+   "level": null
+  },
+  "trench_coat": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "风衣",
+   "level": 0
+  },
+  "partially_undressed": {
+   "slot": "n_state",
+   "fieldZh": "脱卸程度",
+   "sec": "cloth_nsfw",
+   "secZh": "🔞 服装状态（NSFW）",
+   "zh": "半褪衣物",
+   "level": 2
+  },
+  "suspender_shorts": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "背带短裤",
+   "level": 0
+  },
+  "green_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿和服",
+   "level": 0
+  },
+  "grey_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "灰袜子",
+   "level": null
+  },
+  "grey_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰比基尼",
+   "level": 0
+  },
+  "blue_sweater_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝针织马甲",
+   "level": 0
+  },
+  "exposed_pocket": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "pale_skin": {
+   "slot": "skin",
+   "fieldZh": "肤色",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "白皙",
+   "level": 0
+  },
+  "track_pants": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "运动长裤",
+   "level": 0
+  },
+  "purple_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "紫袜子",
+   "level": null
+  },
+  "black_leggings": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑紧身打底裤",
+   "level": 0
+  },
+  "blue_sports_bra": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "蓝运动内衣",
+   "level": 0
+  },
+  "graveyard": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "墓地",
+   "level": 0
+  },
+  "yellow_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄短裤",
+   "level": 0
+  },
+  "pink_umbrella": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "粉雨伞",
+   "level": 0
+  },
+  "hands_in_pockets": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "手插口袋",
+   "level": 0
+  },
+  "yellow_thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黄过膝袜",
+   "level": null
+  },
+  "purple_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫丝巾",
+   "level": 0
+  },
+  "sports_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "运动比基尼",
+   "level": 0
+  },
+  "green_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿短裤",
+   "level": 0
+  },
+  "orange_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙衬衫",
+   "level": 0
+  },
+  "black_hands": {
+   "slot": "body_part",
+   "fieldZh": "上肢",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "黑手",
+   "level": null
+  },
+  "orange_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙短裤",
+   "level": 0
+  },
+  "polo_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "Polo衫",
+   "level": 0
+  },
+  "brown_panties": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "棕内裤",
+   "level": null
+  },
+  "purple_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫短裤",
+   "level": 0
+  },
+  "bustier": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紧身胸衣",
+   "level": 1
+  },
+  "aqua_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水色和服",
+   "level": 0
+  },
+  "purple_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫连帽卫衣",
+   "level": 0
+  },
+  "grey_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "灰蝴蝶结",
+   "level": null
+  },
+  "aqua_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水色丝巾",
+   "level": 0
+  },
+  "freckles": {
+   "slot": "skin_detail",
+   "fieldZh": "肌肤细节",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "雀斑",
+   "level": 0
+  },
+  "orange_skirt": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙半身裙",
+   "level": 0
+  },
+  "pink_sports_bra": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉运动内衣",
+   "level": 0
+  },
+  "yellow_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄马甲背心",
+   "level": 0
+  },
+  "brown_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "棕袜子",
+   "level": null
+  },
+  "scared": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "惊恐",
+   "level": 0
+  },
+  "green_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "绿袜子",
+   "level": null
+  },
+  "brown_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "棕发带",
+   "level": 0
+  },
+  "leather_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "皮夹克",
+   "level": 0
+  },
+  "silhouette": {
+   "slot": "texture_fx",
+   "fieldZh": "质感特效",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "剪影",
+   "level": 0
+  },
+  "brown_bra": {
+   "slot": "underwear",
+   "fieldZh": "内衣层",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "棕胸罩",
+   "level": null
+  },
+  "on_motorcycle": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "摩托车",
+   "level": 0
+  },
+  "brown_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕连衣裙",
+   "level": 0
+  },
+  "clenched_hands": {
+   "slot": "arms_hands",
+   "fieldZh": "手部动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "握拳",
+   "level": 0
+  },
+  "brown_bikini": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕比基尼",
+   "level": 0
+  },
+  "orange_choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙颈圈",
+   "level": 0
+  },
+  "orange_socks": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "橙袜子",
+   "level": null
+  },
+  "new_school_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "新式死库水",
+   "level": 0
+  },
+  "yellow_sweater_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄针织马甲",
+   "level": 0
+  },
+  "green_cardigan": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿开衫",
+   "level": 0
+  },
+  "brown_sweater_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕针织马甲",
+   "level": 0
+  },
+  "green_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿连帽卫衣",
+   "level": 0
+  },
+  "red_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红马甲背心",
+   "level": 0
+  },
+  "orange_thighhighs": {
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "橙过膝袜",
+   "level": null
+  },
+  "grey_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰丝巾",
+   "level": 0
+  },
+  "orange_dress": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙连衣裙",
+   "level": 0
+  },
+  "purple_umbrella": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "紫雨伞",
+   "level": 0
+  },
+  "purple_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫披风",
+   "level": 0
+  },
+  "black_sweater_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑针织马甲",
+   "level": 0
+  },
+  "green_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿丝巾",
+   "level": 0
+  },
+  "monochrome": {
+   "slot": "texture_fx",
+   "fieldZh": "质感特效",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "单色",
+   "level": 0
+  },
+  "harem_pants": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "哈伦裤",
+   "level": 0
+  },
+  "tareme": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "下垂眼",
+   "level": 0
+  },
+  "amusement_park": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "游乐园",
+   "level": 0
+  },
+  "tsurime": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "吊眼",
+   "level": 0
+  },
+  "aqua_shorts": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水色短裤",
+   "level": 0
+  },
+  "grey_one-piece_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰连体泳衣",
+   "level": 0
+  },
+  "grey_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "灰手套",
+   "level": null
+  },
+  "tuxedo": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "燕尾服",
+   "level": 0
+  },
+  "movie_theater": {
+   "slot": "place",
+   "fieldZh": "地点",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "电影院",
+   "level": 0
+  },
+  "knees": {
+   "slot": "body_part",
+   "fieldZh": "腿部",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "膝盖",
+   "level": null
+  },
+  "white_leggings": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白紧身打底裤",
+   "level": 0
+  },
+  "orange_gloves": {
+   "slot": "handwear",
+   "fieldZh": "手部服饰",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "橙手套",
+   "level": null
+  },
+  "sparkling_eyes": {
+   "slot": "eyes_color",
+   "fieldZh": "眼色",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "水润大眼",
+   "level": 0
+  },
+  "brown_bow": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "棕蝴蝶结",
+   "level": null
+  },
+  "green_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿毛衣",
+   "level": 0
+  },
+  "green_choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿颈圈",
+   "level": 0
+  },
+  "portrait": {
+   "slot": "comp",
+   "fieldZh": "构图",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "竖构图",
+   "level": 0
+  },
+  "white_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白马甲背心",
+   "level": 0
+  },
+  "brown_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕连帽卫衣",
+   "level": 0
+  },
+  "yellow_umbrella": {
+   "slot": "prop",
+   "fieldZh": "环境元素",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "黄雨伞",
+   "level": 0
+  },
+  "greyscale": {
+   "slot": "texture_fx",
+   "fieldZh": "质感特效",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "灰阶",
+   "level": 0
+  },
+  "orange_sweater": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙毛衣",
+   "level": 0
+  },
+  "grey_sweater_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰针织马甲",
+   "level": 0
+  },
+  "looking_ahead": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "目视前方",
+   "level": 0
+  },
+  "red_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红连帽卫衣",
+   "level": 0
+  },
+  "red_sports_bra": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "红运动内衣",
+   "level": 0
+  },
+  "clear_sky": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "晴空",
+   "level": 0
+  },
+  "red_headband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "红头箍",
+   "level": 0
+  },
+  "film_grain": {
+   "slot": "device",
+   "fieldZh": "设备质感",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "胶片感",
+   "level": 0
+  },
+  "orange_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "橙缎带",
+   "level": null
+  },
+  "yellow_one-piece_swimsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄连体泳衣",
+   "level": 0
+  },
+  "yellow_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄丝巾",
+   "level": 0
+  },
+  "lowleg_pants": {
+   "slot": "nsfw:cutout",
+   "fieldZh": "裁剪/镂空",
+   "sec": "nsfw",
+   "secZh": "NSFW 分级",
+   "zh": "裁剪/镂空",
+   "level": 1
+  },
+  "sparks": {
+   "slot": "weather",
+   "fieldZh": "天气氛围",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "火星飞溅",
+   "level": 0
+  },
+  "aqua_shirt": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水色衬衫",
+   "level": 0
+  },
+  "swim_briefs": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "泳裤",
+   "level": 0
+  },
+  "orange_scarf": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙丝巾",
+   "level": 0
+  },
+  "narrow_waist": {
+   "slot": "figure",
+   "fieldZh": "身材轮廓",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "细腰",
+   "level": 0
+  },
+  "green_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿马甲背心",
+   "level": 0
+  },
+  "brown_kimono": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕和服",
+   "level": 0
+  },
+  "pink_headband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "粉头箍",
+   "level": 0
+  },
+  "yellow_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄连帽卫衣",
+   "level": 0
+  },
+  "blouse": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "女式衬衫",
+   "level": 0
+  },
+  "blue_headband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "蓝头箍",
+   "level": 0
+  },
+  "poncho": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "斗篷",
+   "level": 0
+  },
+  "bowing": {
+   "slot": "action",
+   "fieldZh": "动态动作",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "鞠躬",
+   "level": 0
+  },
+  "grey_hairband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "灰发带",
+   "level": 0
+  },
+  "confused": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "困惑",
+   "level": 0
+  },
+  "serious": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "认真",
+   "level": 0
+  },
+  "brown_choker": {
+   "slot": "accessory",
+   "fieldZh": "配饰",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕颈圈",
+   "level": 0
+  },
+  "grey_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰马甲背心",
+   "level": 0
+  },
+  "bomber_jacket": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "飞行员夹克",
+   "level": 0
+  },
+  "bubble_skirt": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "泡泡裙",
+   "level": 0
+  },
+  "orange_hoodie": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙连帽卫衣",
+   "level": 0
+  },
+  "brown_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "棕缎带",
+   "level": null
+  },
+  "hair_flip": {
+   "slot": "pose_risque",
+   "fieldZh": "暗示姿势",
+   "sec": "pose_sfw",
+   "secZh": "⑦ 姿势与动作（SFW）",
+   "zh": "甩发",
+   "level": 1
+  },
+  "pink_sweater_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉针织马甲",
+   "level": 0
+  },
+  "grey_ribbon": {
+   "slot": "accessory",
+   "fieldZh": "饰品",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "灰缎带",
+   "level": null
+  },
+  "jumpsuit": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "连体衣",
+   "level": 0
+  },
+  "brown_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "棕披风",
+   "level": 0
+  },
+  "hands": {
+   "slot": "body_part",
+   "fieldZh": "上肢",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "手",
+   "level": null
+  },
+  "orange_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙披风",
+   "level": 0
+  },
+  "orange_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "橙马甲背心",
+   "level": 0
+  },
+  "sad": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "难过",
+   "level": 0
+  },
+  "yellow_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黄披风",
+   "level": 0
+  },
+  "thick_eyelashes": {
+   "slot": "makeup",
+   "fieldZh": "妆容风格",
+   "sec": "makeup",
+   "secZh": "⑤ 妆容与细节",
+   "zh": "浓密睫毛",
+   "level": 0
+  },
+  "purple_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "紫马甲背心",
+   "level": 0
+  },
+  "capri_pants": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "七分裤",
+   "level": 0
+  },
+  "sketch": {
+   "slot": "texture_fx",
+   "fieldZh": "质感特效",
+   "sec": "scene",
+   "secZh": "⑨ 场景与环境",
+   "zh": "素描",
+   "level": 0
+  },
+  "pink_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉马甲背心",
+   "level": 0
+  },
+  "evil_smile": {
+   "slot": "emotion",
+   "fieldZh": "情绪",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "坏笑",
+   "level": 0
+  },
+  "green_sweater_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "绿针织马甲",
+   "level": 0
+  },
+  "grey_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "灰披风",
+   "level": 0
+  },
+  "tall": {
+   "slot": "figure",
+   "fieldZh": "身材轮廓",
+   "sec": "body",
+   "secZh": "④ 身材与肤质",
+   "zh": "纤细高挑",
+   "level": 0
+  },
+  "green_headband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "绿头箍",
+   "level": 0
+  },
+  "cargo_pants": {
+   "slot": "bottom",
+   "fieldZh": "下装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "工装裤",
+   "level": 0
+  },
+  "morning_light": {
+   "slot": "light_fx",
+   "fieldZh": "光效氛围",
+   "sec": "lighting",
+   "secZh": "⑩ 光影氛围",
+   "zh": "清晨光",
+   "level": 0
+  },
+  "black_boots": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "黑靴子",
+   "level": 0
+  },
+  "aqua_vest": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "水色马甲背心",
+   "level": 0
+  },
+  "head_down": {
+   "slot": "n_pos",
+   "fieldZh": "体态细节",
+   "sec": "pose_nsfw",
+   "secZh": "🔞 体位与性行为（NSFW）",
+   "zh": "低头",
+   "level": 2
+  },
+  "pov_breasts": {
+   "slot": "viewpoint",
+   "fieldZh": "视角",
+   "sec": "camera",
+   "secZh": "⑧ 镜头",
+   "zh": "第一人称胸视角",
+   "level": 1
+  },
+  "white_boots": {
+   "slot": "shoes",
+   "fieldZh": "鞋子",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "白靴子",
+   "level": 0
+  },
+  "yellow_headband": {
+   "slot": "hair_acc",
+   "fieldZh": "发饰",
+   "sec": "hair",
+   "secZh": "② 头发",
+   "zh": "黄头箍",
+   "level": 0
+  },
+  "pink_cape": {
+   "slot": "top",
+   "fieldZh": "上装与外套",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "粉披风",
+   "level": 0
+  },
+  "cheerleader_uniform": {
+   "slot": "outfit",
+   "fieldZh": "整套服装",
+   "sec": "cloth_sfw",
+   "secZh": "⑥ 服装（SFW）",
+   "zh": "啦啦队服",
+   "level": 0
+  },
+  "staring": {
+   "slot": "eye_gaze",
+   "fieldZh": "眼神",
+   "sec": "face",
+   "secZh": "③ 五官与表情",
+   "zh": "凝视",
+   "level": 0
+  }
+ }
+}

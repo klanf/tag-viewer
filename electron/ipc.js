@@ -46,6 +46,7 @@ import { scanFolder, scanCacheStats, purgeScanCachePaths, scanFolderStats } from
 import { previewTagEdit, applyTagEdit } from './core/tagedit.js'
 import { openDb } from './core/store.js'
 import { loadCats, reloadCats, catOf } from './core/tagcats.js'
+import { BUNDLED_KNOWLEDGE_DIR } from './core/paths.js'
 import { findDuplicateGroups, findIgnoredGroups } from './core/dupcheck.js'
 import {
   loadIgnorePairs, addIgnorePairs, clearIgnorePairs, removeIgnorePairsByIds,
@@ -83,6 +84,9 @@ import { dimsForPaths } from './core/dims.js'
 import { flog } from './core/filelog.js'
 
 const log = (...a) => console.log('[ipc]', ...a)
+// 细分槽位映射缓存(2026-10-27): knowledge/tag_slots.json 的 {tag: 细分中文组},
+// tags:cats 时随 cats 一起下发; 懒加载, 文件缺失静默降级为空表
+let tagSlotsCache = null
 
 /**
  * 库内路径 -> Windows 原生路径(只给 shell API 用)
@@ -742,6 +746,9 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'dup:block:clear': safe(() => ({ removed: clearBlockedPairs() })),
     // 标签分类映射(2026-10-16): 展示端分组着色用。tags 字典的 cat 列是快照,
     // 空的(新词/分类器当时不可用)现场 classify 补 —— 保证映射永远可用。
+    // 2026-10-27: 顺带返回 slots —— knowledge/tag_slots.json 的细分槽位
+    // (服饰→头饰/袖长/腿袜..., ANIMA 词典+NSFW 词表+高频手工归槽的合流产物,
+    // scripts/build-tag-slots.mjs 生成)。渲染层分组时把粗大类再切小节。
     'tags:cats': safe(() => {
       const db = openDb()
       const out = {}
@@ -757,7 +764,18 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
           db.prepare('UPDATE tags SET cat = ? WHERE name = ?').run(c, n)
         }
       }
-      return { cats: out }
+      // 细分槽位表(懒加载+缓存; 文件缺失/损坏时静默降级为空 —— 分组只是少一层小节)
+      if (!tagSlotsCache) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(path.join(BUNDLED_KNOWLEDGE_DIR, 'tag_slots.json'), 'utf8'))
+          const m = {}
+          for (const [t, v] of Object.entries(raw.tags || {})) {
+            if (v?.fieldZh) m[t] = v.fieldZh
+          }
+          tagSlotsCache = m
+        } catch { tagSlotsCache = {} }
+      }
+      return { cats: out, slots: tagSlotsCache }
     }),
     // ---------------- 标签改名 / 删除(2026-10-01) ----------------
     // 预览只读; apply 走 tagedit.js(备份 -> 事务 -> rebuildTags), 改完顺手重载数据集

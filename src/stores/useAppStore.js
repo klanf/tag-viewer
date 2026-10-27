@@ -67,10 +67,15 @@ export const useAppStore = defineStore('app', () => {
    * 字典之外的新词查不到 -> catOf 返回 'other' 兜底, 下次重载后自然补上。 */
   const tagCats = ref({})
   const catsLoaded = ref(false)
+  /* 细分槽位映射(2026-10-27): { tag: 细分中文组 }, 主进程随 tags:cats 一起下发
+   * (knowledge/tag_slots.json, ANIMA 词典+NSFW+手工归槽合流)。查不到 -> '' 兜底,
+   * 分组时粗大类不再切小节。 */
+  const tagSlots = ref({})
   async function loadTagCats() {
     try {
       const r = await api.tagsCats()
       if (r?.cats) { tagCats.value = r.cats; catsLoaded.value = true }
+      if (r?.slots) tagSlots.value = r.slots
     } catch { /* 分类映射拉不到不致命: 展示端回落 other */ }
   }
   const SEG_LABEL = {
@@ -81,6 +86,8 @@ export const useAppStore = defineStore('app', () => {
   function segOf(tag) { return (catOf(tag).split(':')[0]) || 'other' }
   function subOf(tag) { return (catOf(tag).split(':') || [])[1] || '' }
   function segLabel(seg) { return SEG_LABEL[seg] || seg }
+  /** 细分组名(2026-10-27): 有槽位记录返回中文组名(头饰/腿袜/眼色...), 无则 '' */
+  function slotOf(tag) { return tagSlots.value[tag] || '' }
 
   /* ---- settings.json 的渲染层缓存 ----
    * 前端只读展示偏好(groupedTags 等); 写仍走设置弹窗的 api.settingsSet。
@@ -480,7 +487,7 @@ export const useAppStore = defineStore('app', () => {
     ingestRun, ingestPause, taggerRun, taggerPause, taggerRefresh,
     pullAutoState, flushAutoNow, clearAutoPending,
     // 标签分类(2026-10-16): tagCats 映射 + 分段查询助手
-    tagCats, catsLoaded, loadTagCats, catOf, segOf, subOf, segLabel,
+    tagCats, catsLoaded, loadTagCats, catOf, segOf, subOf, segLabel, slotOf,
     settings, pullSettings, setSetting,
   }
 })

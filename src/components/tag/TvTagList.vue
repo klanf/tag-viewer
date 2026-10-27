@@ -102,6 +102,9 @@ const items = computed(() => {
  * 段位顺序: 人数 → 角色 → 系列 → 画师 → 通用(按韦林大类: 人物→服饰→汉服→表情动作
  * →物品→场景→环境→画面→镜头→魔法系, 未归到 sub 的排最后) → Meta → 其他。
  * grouped 开着时 charsFirst 失效(分组本身已把角色排前面了)。
+ * 2026-10-27 细分小节: app.slotOf 有槽位记录的词条, 在粗大类内部再按细分组切
+ * (服饰→头饰/袖长/腿袜..., knowledge/tag_slots.json)。标题写成「服饰·头饰」,
+ * 小节按词条数降序排, 没槽位记录的留在原大类桶里兜底。
  */
 const groups = computed(() => {
   if (!props.grouped) return null
@@ -120,19 +123,24 @@ const groups = computed(() => {
     if (seg === 'meta') return [5, 0]
     return [6, 0]
   }
-  const buckets = new Map()   // cat -> { title, items }
+  const buckets = new Map()   // key -> { title, key, subCls, items, fine }
   for (const it of items.value) {
     const cat = app.catOf(it.tag)
     const [seg, sub] = String(cat).split(':')
-    const key = cat.startsWith('general:') ? cat : seg
-    const title = seg === 'general' ? (sub || '通用') : (SEG_LABEL[seg] || seg)
-    // 通用大类标题按色相着色(与 pill 左边条同一组 --sub-hN 令牌)
+    // 细分组: 仅通用段生效(槽位词典只细化 general:*), key 带细分名与粗桶区分
+    const fine = seg === 'general' ? app.slotOf(it.tag) : ''
+    const key = seg === 'general' ? (fine ? `${cat}::${fine}` : cat) : seg
+    const title = seg === 'general'
+      ? (fine ? `${sub || '通用'}·${fine}` : (sub || '通用'))
+      : (SEG_LABEL[seg] || seg)
+    // 通用大类标题按色相着色(与 pill 左边条同一组 --sub-hN 令牌); 细分小节沿用父类色相
     const subCls = seg === 'general' && subHueNo(sub) ? `g-sub${subHueNo(sub)}` : ''
-    if (!buckets.has(key)) buckets.set(key, { title, key, subCls, items: [] })
+    if (!buckets.has(key)) buckets.set(key, { title, key, subCls, items: [], fine: !!fine })
     buckets.get(key).items.push(it)
   }
   const order = [...buckets.values()].map((b) => ({ ...b, rank: rankOf(b.key) }))
-  order.sort((a, b) => (a.rank[0] - b.rank[0]) || (a.rank[1] - b.rank[1]))
+  order.sort((a, b) => (a.rank[0] - b.rank[0]) || (a.rank[1] - b.rank[1])
+    || ((a.fine && b.fine) ? b.items.length - a.items.length : 0))
   return order
 })
 </script>
