@@ -553,11 +553,11 @@
    "level": null
   },
   "on_bed": {
-   "slot": "pose_base",
-   "fieldZh": "基础姿势",
-   "sec": "pose_sfw",
-   "secZh": "⑦ 姿势与动作（SFW）",
-   "zh": "卧于床上",
+   "slot": "furniture",
+   "fieldZh": "家具场景",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "在床上",
    "level": 0
   },
   "gloves": {
@@ -593,10 +593,10 @@
    "level": 3
   },
   "pantyhose": {
-   "slot": "socks",
-   "fieldZh": "腿上",
-   "sec": "cloth_sfw",
-   "secZh": "⑥ 服装（SFW）",
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
    "zh": "连裤袜",
    "level": 0
   },
@@ -1073,10 +1073,10 @@
    "level": 0
   },
   "black_pantyhose": {
-   "slot": "socks",
-   "fieldZh": "腿上",
-   "sec": "cloth_sfw",
-   "secZh": "⑥ 服装（SFW）",
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
    "zh": "黑色连裤袜",
    "level": 0
   },
@@ -1697,10 +1697,10 @@
    "level": null
   },
   "white_pantyhose": {
-   "slot": "socks",
-   "fieldZh": "腿上",
-   "sec": "cloth_sfw",
-   "secZh": "⑥ 服装（SFW）",
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
    "zh": "白色连裤袜",
    "level": 0
   },
@@ -2345,11 +2345,11 @@
    "level": 0
   },
   "fang": {
-   "slot": "mouth",
-   "fieldZh": "嘴部",
-   "sec": "face",
-   "secZh": "③ 五官与表情",
-   "zh": "小虎牙",
+   "slot": "feature",
+   "fieldZh": "非人特征",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "獠牙",
    "level": 0
   },
   "puffy_sleeves": {
@@ -2553,10 +2553,10 @@
    "level": 0
   },
   "kneehighs": {
-   "slot": "socks",
-   "fieldZh": "腿上",
-   "sec": "cloth_sfw",
-   "secZh": "⑥ 服装（SFW）",
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
    "zh": "及膝袜",
    "level": 0
   },
@@ -2657,11 +2657,11 @@
    "level": 0
   },
   "single_thighhigh": {
-   "slot": "socks",
-   "fieldZh": "腿上",
-   "sec": "cloth_sfw",
-   "secZh": "⑥ 服装（SFW）",
-   "zh": "单腿过膝袜",
+   "slot": "legwear",
+   "fieldZh": "腿袜",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "单边过膝袜",
    "level": 1
   },
   "pov_hands": {

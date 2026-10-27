@@ -279,6 +279,15 @@ const OVERRIDE = {
   'veil':            ['headwear', '头饰', '头纱'],
   'side-tie_panties': ['underwear', '内衣层', '侧系内裤'],
   'bow_panties':     ['underwear', '内衣层', '蝴蝶结内裤'],
+  // 腿袜类槽位统一: ANIMA「腿上」(socks) 与自建 legwear 是同一语义类,
+  // 劈成两半会让过滤组 keep-one 跨槽失效(黑连裤袜×过膝袜去不了重)
+  'pantyhose':       ['legwear', '腿袜', '连裤袜'],
+  'kneehighs':       ['legwear', '腿袜', '及膝袜'],
+  'single_thighhigh': ['legwear', '腿袜', '单边过膝袜'],
+  // fang 被 ANIMA 归「嘴部」→ 实际是非人特征, 獠牙×张嘴合法共存
+  'fang':            ['feature', '非人特征', '獠牙'],
+  // on_bed 被 ANIMA 归「基础姿势」→ 站床上×on_back 合法共存, 归家具场景
+  'on_bed':          ['furniture', '家具场景', '在床上'],
 }
 let ovN = 0
 for (const [tag, [slot, fieldZh, zh]] of Object.entries(OVERRIDE)) {

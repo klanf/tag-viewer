@@ -1,0 +1,23 @@
+{
+  "$comment": "过滤组规则包 v1。keepOne=槽内单选(仅单人图生效, 胜者按本地图片量); mutex=跨槽互斥组(组内 2+ 只留一个)。exempt=该槽内允许共存的词。清单依据 .e2e-work/probe-slot-collide.mjs 探针数据(94,008 单人图)。",
+  "$slotRef": "槽位定义见 knowledge/tag_slots.json; 有意不收录的槽: underwear(bra+panties互补)/top·bottom(叠加穿)/emotion·expression/accessory·hair_acc(多件共存)/body_part·feature/environment·prop(场景多元素)",
+  "keepOne": [
+    { "slot": "hair_len",    "$why": "long_hair×very_long_hair 冗余, 36752 图" },
+    { "slot": "pose_base",   "exempt": ["on_bed"], "$why": "standing×sitting 等基础姿势互斥; on_bed 已归家具场景(站床上×躺床上合法), 35729 图" },
+    { "slot": "hair_color",  "exempt": ["multicolored_hair", "colored_inner_hair", "two-tone_hair", "streaked_hair", "gradient_hair"], "$why": "多色发标记与实色共存合法, 只在实色间去重, 31771 图" },
+    { "slot": "headwear",    "$why": "随机组装时一顶帽子更干净(hat×hood 叠戴罕见), 28087 图" },
+    { "slot": "censorship",  "$why": "mosaic_censoring×bar_censor 单选, 25155 图" },
+    { "slot": "mouth",       "exempt": ["tongue_out"], "$why": "open_mouth×parted_lips 冗余; tongue_out×open_mouth 合法(吐舌必张嘴), 18105 图" },
+    { "slot": "legwear",     "exempt": ["garter_straps"], "$why": "thighhighs×pantyhose×kneehighs 单选; 吊袜带×过膝袜是配套共存, 30000+ 图" },
+    { "slot": "eyes_color",  "$why": "单角色单瞳色(异色症罕见), 17039 图" },
+    { "slot": "figure",      "exempt": ["thick_thighs", "wide_hips"], "$why": "罩杯档单选(medium×huge 冗余); 腿臀轮廓与罩杯合法共存, 16408 图" },
+    { "slot": "handwear",    "$why": "手套类单选, 14004 图" },
+    { "slot": "footwear",    "$why": "shoes×barefoot×high_heels 单选(含 no_shoes)" }
+  ],
+  "mutex": [
+    { "name": "pose_stance", "all": ["standing", "sitting", "lying", "kneeling", "squatting", "crouching", "all_fours", "on_back", "on_side", "on_stomach"], "$why": "基础体位互斥" },
+    { "name": "framing",     "all": ["full_body", "cowboy_shot", "upper_body", "portrait", "wide_shot", "close-up"], "$why": "景别互斥" },
+    { "name": "framing_x_foot", "all": ["foot_focus", "full_body"], "$why": "用户工作流实痛: 足部特写与全身景矛盾" },
+    { "name": "framing_x_feet_out", "all": ["foot_focus", "feet_out_of_frame", "feet_out_of_frame"], "$why": "足部特写与脚出画矛盾" }
+  ]
+}
