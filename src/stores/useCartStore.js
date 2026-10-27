@@ -12,6 +12,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { api } from '@/utils/api.js'
+import { usePrefsStore } from '@/stores/usePrefsStore.js'
 import { LS, readLS, writeLS } from '@/utils/lskey.js'
 
 function load() {
@@ -162,11 +163,14 @@ export const useCartStore = defineStore('cart', () => {
     return { added, skipped }
   }
 
-  /** 导出 wildcard; save=true 时走原生「另存为」。条目整包传(tag+extra), 附加标签跟行走 */
+  /** 导出 wildcard; save=true 时走原生「另存为」。条目整包传(tag+extra), 附加标签跟行走。
+   *  过滤组(2026-10-27): 附加标签做槽内单选+互斥消解, 主角色标签永不剔除;
+   *  开关在 prefs.cartGroups(结算弹窗可勾), 默认开。 */
   async function exportFile(save = true) {
     const entries = list.value.map((c) => ({ tag: c.tag, extra: Array.isArray(c.extra) ? c.extra : [] }))
     if (!entries.length) return { error: '购物车是空的' }
-    return api.exportCart(entries, { save })
+    const prefs = usePrefsStore()
+    return api.exportCart(entries, { save, groups: prefs.cartGroups !== false })
   }
 
   /**
@@ -184,7 +188,7 @@ export const useCartStore = defineStore('cart', () => {
     if (doExport) {
       const ex = await api.exportCart(
         list.value.map((c) => ({ tag: c.tag, extra: Array.isArray(c.extra) ? c.extra : [] })),
-        { save: true })
+        { save: true, groups: usePrefsStore().cartGroups !== false })
       if (ex?.canceled) return { canceled: true }
       if (ex?.error) return { error: ex.error }
       exported = ex?.path || ''

@@ -41,9 +41,9 @@ export function isSoloImage(tags) {
  * @returns {{ tags: string[], drops: {tag,reason,kept}[], changed: boolean }}
  */
 export function applyFilterGroups(tags, ctx = {}) {
-  const { slots = {}, counts = {}, rules = {} } = ctx
+  const { slots = {}, counts = {}, rules = {}, forceSolo = false } = ctx
   const drops = []
-  if (!isSoloImage(tags)) return { tags, drops, changed: false }
+  if (!forceSolo && !isSoloImage(tags)) return { tags, drops, changed: false }
 
   const present = new Set(tags)
   /** 胜者挑选: cnt 大者赢, 平票取数组序(=规则/词典的稳定顺序) */

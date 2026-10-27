@@ -26,10 +26,17 @@ export const usePrefsStore = defineStore('prefs', () => {
    */
   const coverSolo = ref(readLS(LS.coverSolo.key) !== '0')
 
+  /**
+   * 购物车导出「过滤组去冲突」(2026-10-27 词条管线) —— 默认**开**。
+   * 只作用附加标签(主角色标签永不剔除); 用户工作流吃的 roles_cart.txt 默认就干净。
+   */
+  const cartGroups = ref(readLS(LS.cartGroups.key) !== '0')
+
   watch(bgAuto, (v) => writeLS(LS.bgAuto.key, v ? '1' : '0'))
   watch(trashAsk, (v) => writeLS(LS.trashAsk.key, v ? '1' : '0'))
   watch(seriesShowZero, (v) => writeLS(LS.seriesShowZero.key, v ? '1' : '0'))
   watch(coverSolo, (v) => writeLS(LS.coverSolo.key, v ? '1' : '0'))
+  watch(cartGroups, (v) => writeLS(LS.cartGroups.key, v ? '1' : '0'))
 
   /**
    * 光箱「复制标签」的过滤配置(2026-10-19) —— JSON 存 localStorage, 读时过白名单。
@@ -105,7 +112,7 @@ export const usePrefsStore = defineStore('prefs', () => {
   }
 
   return {
-    bgAuto, gridPageSize, trashAsk, maybeAddBg, seriesShowZero, lbCopyFilters, coverSolo,
+    bgAuto, gridPageSize, trashAsk, maybeAddBg, seriesShowZero, lbCopyFilters, coverSolo, cartGroups,
     sortHome, sortScan, sortSeries, sortTagImgs, sortSeriesChars, seriesImgPageSize,
   }
 })

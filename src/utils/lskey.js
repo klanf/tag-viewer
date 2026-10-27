@@ -84,6 +84,8 @@ export const LS = Object.freeze({
   gridZoom: { key: 'tv_grid_zoom' },
   /** 批量拉封面「只要单人图(solo)」开关(2026-10-22) —— 默认开('1'), 用户关掉('0')才记住 */
   coverSolo: { key: 'tv_cover_solo' },
+  /** 购物车导出「过滤组去冲突」开关(2026-10-27) —— 默认开('1'), 只作用附加标签 */
+  cartGroups: { key: 'tv_cart_groups' },
   /** 标签页来源筛选(2026-10-21) —— 逗号分隔来源名, 空 = 全部。标签图片页共用同一份 */
   tagsSources: { key: 'tv_tags_sources' },
   /** 标签页扫描文件夹筛选(2026-10-21) —— 逗号分隔文件夹路径, 空 = 不按扫描夹筛。标签图片页共用 */

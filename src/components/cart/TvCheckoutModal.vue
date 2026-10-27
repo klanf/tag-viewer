@@ -15,18 +15,25 @@ import TvInput from '../base/TvInput.vue'
 import TvButton from '../base/TvButton.vue'
 import TvCheckbox from '../base/TvCheckbox.vue'
 import { useCartStore } from '@/stores/useCartStore.js'
+import { usePrefsStore } from '@/stores/usePrefsStore.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 
 const props = defineProps({ modelValue: { type: Boolean, default: false } })
 const emit = defineEmits(['update:modelValue', 'done'])
 
 const cart = useCartStore()
+const prefs = usePrefsStore()
 const ui = useUiStore()
 
 const name = ref('')
 const busy = ref(false)
 const alsoExport = ref(true)
 const clearAfter = ref(true)
+/** 过滤组开关跟 prefs 走(跨会话记忆), 勾选框只是快捷口 */
+const groupsOn = computed({
+  get: () => prefs.cartGroups !== false,
+  set: (v) => { prefs.cartGroups = v },
+})
 
 const count = computed(() => cart.count)
 
@@ -100,6 +107,11 @@ async function doSave() {
         v-model="clearAfter"
         label="保存后清空购物车"
         title="清空只是腾出购物车, 清单已经存好了; 关掉可以存完接着调"
+      />
+      <TvCheckbox
+        v-model="groupsOn"
+        label="过滤组去冲突(附加标签)"
+        title="词条管线: 同槽位只留一个(过膝袜×连裤袜等)+互斥消解(站×坐)。只动附加标签, 角色名永不剔除; 群像语义的行不处理"
       />
     </div>
 

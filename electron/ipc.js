@@ -918,10 +918,10 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       saveSettings({ lastPickDir: r.filePaths[0] })
       return { ok: true, path: r.filePaths[0] }
     }),
-    'export:cart': safe(async ({ tags, spaces = true, save = true, replace = true, replace_set = '' } = {}) => {
+    'export:cart': safe(async ({ tags, spaces = true, save = true, replace = true, replace_set = '', groups = false } = {}) => {
       // 角色表也能套替换规则组(2026-10-04): 一个角色被规则命中成多个标签时
       // buildCartExport 会摊成多行, count 随之变大
-      const r = buildCartExport(tags || [], { spaces, replace, replaceSet: replace_set })
+      const r = buildCartExport(tags || [], { spaces, replace, replaceSet: replace_set, groups })
       if (!save) return r
       const dlg = await dialog.showSaveDialog(mainWindow(), {
         title: '导出购物车角色(wildcard)',

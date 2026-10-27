@@ -39,6 +39,8 @@ function exportCore(raw = {}) {
   const stripView = raw.strip_view === '1' || raw.strip_view === true
   // 只导出安全模式的标签 —— 逐行剔除敏感tag(口径跟随 safety.json 的档位); 默认关闭
   const safeOnly = raw.safe_only === '1' || raw.safe_only === true
+  // 过滤组(2026-10-27 词条管线第二层): 槽内单选+互斥消解, 仅单人图生效; 默认关闭
+  const useGroups = raw.groups === '1' || raw.groups === true
   // 段位模式(2026-10-16): 过滤 画师/角色/系列/meta, 人数排最前, 通用按大类归堆。
   // 做在**替换/补背景/追加之后**(替换后的新词按新文本分类, 天然一致), 空格转换之前。
   const segMode = raw.seg_mode === '1' || raw.seg_mode === true
@@ -85,6 +87,7 @@ function exportCore(raw = {}) {
   let safeStripped = 0
   let appendAdded = 0
   let segStripped = 0
+  let groupsStripped = 0
 
   /** 单条记录 -> 一行文本(副作用: 顺带累加各类计数)。
    *  抽成闭包是给同步/分片异步两个包装共用同一套管线(2026-10-20) ——
@@ -117,6 +120,15 @@ function exportCore(raw = {}) {
         else kept.push(t)
       }
       tags = kept
+    }
+
+    if (useGroups) {
+      const gctx = groupsCtx()
+      if (gctx) {
+        const res = applyFilterGroups(tags, gctx)
+        groupsStripped += res.drops.length
+        tags = res.tags
+      }
     }
 
     if (bl) {
@@ -209,6 +221,7 @@ function exportCore(raw = {}) {
     safeStripped,
     appendAdded,
     segStripped,
+    groupsStripped,
     ms: Date.now() - t0,
     suggestedName: `筛选_${nameCore}.txt`,
   })
@@ -275,14 +288,23 @@ function escWildcard(t, spaces) {
  * 替换对**主标签与附加标签都生效**, 且在归一化去重**之前**做 ——
  * 这样"替换后与原标签同名"的组合不会被去重吃掉(去重按 tagKey 归一)。
  */
-export function buildCartExport(tags, { spaces = true, replace = true, replaceSet = '' } = {}) {
+export function buildCartExport(tags, { spaces = true, replace = true, replaceSet = '', groups = false } = {}) {
   const useRp = !(replace === false || replace === '0')
   const rules = useRp ? loadReplaceRulesGroup(String(replaceSet || '')) : []
+  // 过滤组(2026-10-27): 只作用于**附加标签**——主角色标签绝不能被槽位规则吃掉。
+  // 每行 = 一个角色的完整提示词, 天然单人语境 → forceSolo(行里没有 1girl 标记)。
+  const gctx = groups ? groupsCtx() : null
+  let groupsCut = 0
   let replaced = 0
   const entries = (tags || []).map((t) =>
     (t && typeof t === 'object') ? t : { tag: t, extra: [] })
   const lines = entries.map((e) => {
-    const extras = Array.isArray(e.extra) ? e.extra.filter((x) => String(x || '').trim()) : []
+    let extras = Array.isArray(e.extra) ? e.extra.filter((x) => String(x || '').trim()) : []
+    if (gctx && extras.length) {
+      const res = applyFilterGroups(extras, { ...gctx, forceSolo: true })
+      groupsCut += res.drops.length
+      extras = res.tags
+    }
     /* 规则把一个标签变成多个时, 在**同一行内逗号展开** —— wildcard 的原生语义就是
      * "一行是一个搜索式, 逗号=同时含"(1boy -> 1boy, solo 应写成 `1boy, solo`)。
      * 摊成多行会变成两个独立搜索式, 语义不同, 不能这么干。
@@ -298,6 +320,7 @@ export function buildCartExport(tags, { spaces = true, replace = true, replaceSe
     text: lines.join('\n') + (lines.length ? '\n' : ''),
     count: lines.length,
     replaced,
+    groupsCut,
     suggestedName: 'roles_cart.txt',
   }
 }
