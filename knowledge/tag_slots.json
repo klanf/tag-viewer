@@ -425,11 +425,11 @@
    "level": null
   },
   "outdoors": {
-   "slot": "nsfw:fetish",
-   "fieldZh": "暴露癖/情境",
-   "sec": "nsfw",
-   "secZh": "NSFW 分级",
-   "zh": "暴露癖/情境",
+   "slot": "location",
+   "fieldZh": "场所",
+   "sec": "extra",
+   "secZh": "高频补充",
+   "zh": "室外",
    "level": 1
   },
   "skirt": {

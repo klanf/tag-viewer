@@ -288,6 +288,9 @@ const OVERRIDE = {
   'fang':            ['feature', '非人特征', '獠牙'],
   // on_bed 被 ANIMA 归「基础姿势」→ 站床上×on_back 合法共存, 归家具场景
   'on_bed':          ['furniture', '家具场景', '在床上'],
+  // outdoors 被 ANIMA NSFW 词表归 fetish(公开暴露情境) → 对本项目就是「室外」,
+  // 纯 SFW 场景词; NSFW 合并先占坑导致手工批(skip-if-exist)永远抢不回, 只能在这覆写
+  'outdoors':        ['location', '场所', '室外'],
 }
 let ovN = 0
 for (const [tag, [slot, fieldZh, zh]] of Object.entries(OVERRIDE)) {
