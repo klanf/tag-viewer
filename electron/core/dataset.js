@@ -24,6 +24,7 @@
 import fs from 'node:fs'
 import { streamTagFile } from './tagfile.js'
 import { syncSources, readRecords, dbReady, sourceNameList, openDb, normalizeImagePath } from './store.js'
+import { flog } from './filelog.js'
 import {
   loadCharLib, libIsChar, libCharSeries, libIsCopyright, charLibDiag,
   libOverrideSeries, libIsHidden, libIsNonChar,
@@ -321,7 +322,11 @@ async function doLoadDataset(dataFiles, onProgress = () => {}) {
    * 是同样的值(池收敛), 清了只会让新旧记录的同名标签变成不同实例。 */
   const fresh = {
     records: [], byPath: new Map(), sourceNames: [...dataFiles.keys()],
-    dbSync: null, unsafeCore: 0, unsafeEdge: 0,
+    dbSync: null,
+    // 2026-10-28 修复: 等级制改造把 unsafeCore/unsafeEdge 换成了 unsafeHist 直方图,
+    // 但 fresh 初始化漏了这个字段 —— pushRecord 第一条 unsafe>0 的图就 undefined[2]++ 炸,
+    // SQLite 路线整个报废, 界面只剩误导性的"反推没落库"文案。
+    unsafeHist: [0, 0, 0, 0, 0],
     tagCounter: new Map(), seriesCounter: new Map(),
     seriesImgs: new Map(), seriesChars: new Map(),
     loaded: false, loadMs: 0, stats: null, loadSource: '',
@@ -351,6 +356,7 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
   /* ---- 路线 A: SQLite(默认) ----
      syncSources 只在 txt 指纹变了时才真的读 txt; 平时这一步是空转。
      读回后得到的记录顺序与解析 txt 完全一致(images.id 自增 = 插入顺序)。 */
+  let routeAFail = ''
   try {
     onProgress({ phase: 'db-sync', done: 0, total: totalBytes })
     fresh.dbSync = await syncSources(dataFiles, (p) => {
@@ -377,7 +383,12 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
       fresh.loadSource = 'db'
     }
   } catch (e) {
-    console.error('[dataset] SQLite 路径不可用, 回退解析 txt:', e?.message || e)
+    // 2026-10-28: 只 console.error 的话双击启动时 stdout 没人接, 回退原因会静默消失,
+    // 终态报错文案就永远只能猜("真人照片? 反推坏了?") —— 实际可能是 db 被打标进程
+    // 短暂锁住这种一重启就好的事。落到 launch.log, 并把原因捎进下面的终态文案。
+    routeAFail = e?.message || String(e)
+    flog('warn', `[dataset] SQLite 路径不可用, 回退解析 txt: ${routeAFail}\n${e?.stack || '(无堆栈)'}`)
+    console.error('[dataset] SQLite 路径不可用, 回退解析 txt:', routeAFail)
     W.records = []
     W.byPath = new Map()
     W.unsafeHist = [0, 0, 0, 0, 0]
@@ -441,8 +452,11 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
       }
       // 终态: 队列跑完了却没产出。文案刻意避开"打标队列/等待反推"字样 ——
       // 启动遮罩靠这两个词识别"暂态自动重试", 命中了就会变成无限 reload 循环。
+      // 2026-10-28: 补上 SQLite 路线挂掉的真实原因(原先只进 console, 双击启动时
+      // 静默消失, 用户拿着误导性文案排查半天真人照片/反推环境)。
+      const cause = routeAFail ? `【SQLite 路线失败原因: ${routeAFail}】` : ''
       throw new Error(
-        `反推已经跑完(出标签 ${doneN + failedN} 张, 其中失败 ${failedN} 张), 但这批图一张标签都没能落进库 —— ` +
+        `反推已经跑完(出标签 ${doneN + failedN} 张, 其中失败 ${failedN} 张), 但这批图一张标签都没能落进库。${cause} ` +
         `常见原因: 图片不是动漫风格(WD14 模型对真人照片基本没有输出)、图片损坏, 或反推环境有问题。` +
         `换一个含动漫图的文件夹试试; 若确认是动漫图, 请带着 logs/launch.log 反馈`
       )
