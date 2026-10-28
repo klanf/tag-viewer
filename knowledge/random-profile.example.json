@@ -1,0 +1,19 @@
+{
+  // random-prompt.mjs 权重配置示例(复制改名后 --profile= 使用)
+  // 三层: sections(段) / fields(槽) / options(槽内具体词), 范围 0-3, 默认 1.0, 相乘生效
+  //   0 = 永不出现; 3 = 必现(短路, 不被密度压掉); 档位判定独立于权重
+  "sections": {
+    "outfit": 1.5,
+    "nsfw": 0
+  },
+  "fields": {
+    "headwear": 0.3,
+    "swimwear": 3
+  },
+  "options": {
+    "outfit": {
+      "school uniform": 0,
+      "maid": 2
+    }
+  }
+}
