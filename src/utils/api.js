@@ -150,6 +150,8 @@ export const api = {
   // 每个扫描文件夹自己的缓存概况(2026-10-21): [{path, hit, images, withTags}]
   scanFolderStats: (paths) => call('scan:folderStats', { paths }),
   tagsCats: () => call('tags:cats'),
+  // 手动归类(2026-10-28 光箱「归类到…」): slot='' 表示取消归类回到词典默认
+  tagsSlotSet: (tag, slot, zh = '') => call('tags:slot:set', { tag, slot, zh }),
   dupScan: (opts) => call('dup:scan', opts),
   dupIgnoreAdd: (pairs) => call('dup:ignore:add', { pairs }),
   dupIgnoreClear: () => call('dup:ignore:clear'),

@@ -175,10 +175,11 @@ export function guessCategory(name) {
 export const ds = {
   records: [],          // [{ path, tags, ltags, source, px_w, px_h, unsafe }]
                         //   px_w/px_h: 像素尺寸(0=未知, 卡片回落到 9/16 默认比例)
-                        //   unsafe:    0=干净 / 1=命中敏感标签的 core 段 / 2=只命中 edge 段
-                        //              —— 读数据集时算一次, 前端切档只做比较, 不重载数据
-  unsafeCore: 0,        // 命中 core 段的条数 —— core 档开启时会隐藏这么多
-  unsafeEdge: 0,        // 只命中 edge 段的条数 —— edge 档比 core 档再多隐藏这么多
+                        //   unsafe:    0..4 = 图内标签的最高敏感档(2026-10-28 起与
+                        //              槽位词典同一把 0-4 尺) —— 读数据集时算一次,
+                        //              前端切「显示上限」只做比较, 不重载数据
+  unsafeHist: [0, 0, 0, 0, 0], // unsafe 直方图: unsafeHist[u] = 档位恰好为 u 的条数。
+                        // 「上限 N 会隐藏多少张」= sum(unsafeHist[N+1..4])
   sourceNames: [],
   byPath: new Map(),    // path -> record  (O(1) 替代原版的全表扫描)
   tagCounter: new Map(),
@@ -224,15 +225,13 @@ export function tagPoolSize() { return tagPool.size }
  */
 export function recomputeSafety() {
   const m = safetyMatcher()
-  ds.unsafeCore = 0
-  ds.unsafeEdge = 0
+  ds.unsafeHist = [0, 0, 0, 0, 0]
   for (const r of ds.records) {
     const u = unsafeLevelOf(r.ltags, m)
     r.unsafe = u
-    if (u === 1) ds.unsafeCore++
-    else if (u === 2) ds.unsafeEdge++
+    ds.unsafeHist[u]++
   }
-  return { core: ds.unsafeCore, edge: ds.unsafeEdge, total: ds.records.length }
+  return { hist: [...ds.unsafeHist], total: ds.records.length }
 }
 
 // ---------------------------------------------------------------- 解析
@@ -256,8 +255,7 @@ function pushRecord(p, rawTags, srcName, dims = null, tagsSrc = '', imgSrc = '')
    * 没有标签的图(这是"没装反推也能正常进看板"的前提), 装好反推打上标签后
    * 内容自然丰富。 */
   const unsafe = unsafeLevelOf(ltags)
-  if (unsafe === 1) W.unsafeCore++
-  else if (unsafe === 2) W.unsafeEdge++
+  W.unsafeHist[unsafe]++
   W.records.push({
     path: p,
     tags,
@@ -382,8 +380,7 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
     console.error('[dataset] SQLite 路径不可用, 回退解析 txt:', e?.message || e)
     W.records = []
     W.byPath = new Map()
-    W.unsafeCore = 0
-    W.unsafeEdge = 0
+    W.unsafeHist = [0, 0, 0, 0, 0]
     fresh.dbSync = null
   }
 

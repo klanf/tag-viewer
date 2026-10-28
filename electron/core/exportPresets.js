@@ -169,7 +169,7 @@ const PARAM_ENUMS = {
   match: ['contains', 'exact'],
   exclude_match: ['contains', 'exact'],
   // 安全剔除口径(2026-10-18): follow=跟随全局安全模式档位(老预设缺省, 行为不变)
-  safe_level: ['follow', 'core', 'edge'],
+  safe_level: ['follow', 'core', 'edge', '0', '1', '2', '3', '4'],
 }
 /** 这几个与首页/ buildExport 的默认值对齐: 缺省 = 开 */
 const PARAM_BOOL_TRUE = ['exclude_char', 'spaces', 'blacklist', 'replace', 'bg']
@@ -271,6 +271,7 @@ function toExportQuery(params) {
     strip_char: params.strip_char ? '1' : '0',
     strip_view: params.strip_view ? '1' : '0',
     safe_only: params.safe_only ? '1' : '0',
+    groups: params.groups ? '1' : '0',
     safe_level: params.safe_level || 'follow',
     seg_mode: params.seg_mode ? '1' : '0',
     exclude_char: params.exclude_char ? '1' : '0',
@@ -329,7 +330,7 @@ async function runPresetOnce(id, { trigger = 'manual' } = {}) {
     })
     return {
       ok: true, id, name: preset.name, path: full, count: r.count, bytes,
-      blocked: r.blocked, bgAdded: r.bgAdded, stripped: r.stripped, ms: r.ms, trigger,
+      blocked: r.blocked, bgAdded: r.bgAdded, stripped: r.stripped, groupsStripped: r.groupsStripped, ms: r.ms, trigger,
     }
   } catch (e) {
     patchRun(id, { lastRunAt: Date.now(), lastTrigger: trigger, lastError: e?.message || String(e) })

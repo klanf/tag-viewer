@@ -109,7 +109,7 @@ const EXTRA = {
   'short_sleeves': ['sleeves', '袖长', '短袖'], 'sleeveless': ['sleeves', '袖长', '无袖'],
   'thighhighs': ['legwear', '腿袜', '过膝袜'], 'pantyhose': ['legwear', '腿袜', '连裤袜'],
   'kneehighs': ['legwear', '腿袜', '及膝袜'], 'socks': ['legwear', '腿袜', '袜子'],
-  'underwear': ['underwear', '内衣层', '内衣'], 'panties': ['underwear', '内衣层', '内裤'],
+  'underwear': ['underwear', '内衣层', '内衣'], 'panties': ['underwear', '内衣层', '内裤', 1],
   'bra': ['underwear', '内衣层', '胸罩'], 'lingerie': ['underwear', '内衣层', '情趣内衣', 1],
   'bow': ['accessory', '饰品', '蝴蝶结'], 'ribbon': ['accessory', '饰品', '缎带'],
   'jewelry': ['accessory', '饰品', '珠宝'], 'necklace': ['accessory', '饰品', '项链'],
@@ -291,6 +291,23 @@ const OVERRIDE = {
   // outdoors 被 ANIMA NSFW 词表归 fetish(公开暴露情境) → 对本项目就是「室外」,
   // 纯 SFW 场景词; NSFW 合并先占坑导致手工批(skip-if-exist)永远抢不回, 只能在这覆写
   'outdoors':        ['location', '场所', '室外'],
+  // 尾巴系归一 tail 槽(原 tail 本体被劈在 feature, 装饰品散落 unknown → 变体端 8 个尾巴词并存)
+  'tail':            ['tail', '尾部', '尾巴'],
+  'tail_ribbon':     ['tail', '尾部', '尾饰带'],
+  'tail_bow':        ['tail', '尾部', '尾结'],
+  'tail_bell':       ['tail', '尾部', '尾铃'],
+  'tail_ornament':   ['tail', '尾部', '尾饰'],
+  'tail_ring':       ['tail', '尾部', '尾环'],
+  'multiple_tails':  ['tail', '尾部', '多条尾巴'],
+  'two_tails':       ['tail', '尾部', '双尾'],
+  'nekomata':        ['race', '种族', '猫又'],
+  // 花类归 prop(变体端 rose×3 并存)
+  'rose':            ['prop', '手持物', '玫瑰'],
+  'pink_rose':       ['prop', '手持物', '粉玫瑰'],
+  'purple_rose':     ['prop', '手持物', '紫玫瑰'],
+  'white_rose':      ['prop', '手持物', '白玫瑰'],
+  'red_rose':        ['prop', '手持物', '红玫瑰'],
+  'blue_rose':       ['prop', '手持物', '蓝玫瑰'],
 }
 let ovN = 0
 for (const [tag, [slot, fieldZh, zh]] of Object.entries(OVERRIDE)) {
@@ -561,6 +578,344 @@ const rows = db.prepare("SELECT name, cnt, cat FROM tags WHERE kind='other' ORDE
 const classified = rows.filter(r => /^general:|^count$/.test(r.cat))
 console.log(`本地词表: ${rows.length} 个 | 已粗分类: ${classified.length} | 未分类(other): ${rows.length - classified.length}`)
 
+// ---------- 2b. 词典 v4: 尾词模式批量归槽 (2026-10-28) ----------
+// 来源: 未归槽 136.6 万实例的分布统计 —— cnt>=20 的 5325 词占其中 98%+,
+// 且大头是「颜色/花色 × 基础词」「部位 × 服饰」这类机械模式, 不值得逐个手写。
+// 策略: 规则表按序首中(具体在前、泛化在后), 只碰 byTag 还没有的词 ——
+// 前面 ANIMA/NSFW/手工批先到先得, v4 纯兜底。zh 优先取 WeiLin 内置翻译库,
+// 缺了用「颜色zh + 基础词zh」拼, 再缺留空(UI 端会回落到翻译管线/英文原词)。
+// ⚠️ SFW 槽的擦边词必须给 level(wedgie/dress_pull → 1): 变体端 SFW 池对
+//    level=null 放行, 不给档位会在全年龄变体里漏出; NSFW 槽反而不用 ——
+//    档位缺失按最严(4)处理, 天然安全。
+const weiLin = (() => {
+  try {
+    const tdb = new DatabaseSync(path.join(REPO, 'assets/translations.db'), { readOnly: true })
+    const m = new Map(tdb.prepare('SELECT en, zh FROM translations').all()
+      .map((r) => [String(r.en).toLowerCase(), String(r.zh)]))
+    tdb.close()
+    return m
+  } catch { return new Map() }
+})()
+
+// NSFW/擦边显式批(先于模式规则): 模式规则兜不住语义的, 在这里点名。
+// NSFW 槽(n_bondage/n_exposure/n_touch)不给 level → 变体端按最严档, 全年龄零漏出;
+// clothing_state/body_detail 是 SFW 槽, 擦边词必须写 level。
+const V4_NSFW = {
+  'rope': ['n_bondage', '束缚', '绳'],
+  'frogtie': ['n_bondage', '束缚', '蛙式捆绑'],
+  'bound_torso': ['n_bondage', '束缚', '绑上身'],
+  'bound_legs': ['n_bondage', '束缚', '绑腿'],
+  'crotch_rope': ['n_bondage', '束缚', '股绳', 2],
+  'wiffle_gag': ['n_bondage', '束缚', '口塞球'],
+  'panty_lift': ['clothing_state', '遮露状态', '拉内裤', 1],
+  'wedgie': ['clothing_state', '遮露状态', '内裤拉扯', 1],
+  'dress_pull': ['clothing_state', '遮露状态', '拉裙摆', 1],
+  'dress_lift': ['clothing_state', '遮露状态', '撩裙', 1],
+  'kimono_lift': ['clothing_state', '遮露状态', '撩和服', 1],
+  'skirt_lift': ['clothing_state', '遮露状态', '撩裙', 1],
+  'nude_cover': ['n_exposure', '裸露', '遮羞裸露', 1],
+  'ass_visible_through_thighs': ['n_exposure', '裸露', '袜缝露臀', 1],
+  'grabbing_own_breast': ['n_touch', '性接触', '自摸胸', 1],
+  'butt_crack': ['body_detail', '身体细节', '臀缝', 1],
+  'thick_eyebrows': ['body_detail', '身体细节', '粗眉'],
+  'yokozuwari': ['pose', '姿势', '跪坐'],
+  'knee_up': ['pose', '姿势', '抬膝'],
+  'arms_behind_head': ['pose', '姿势', '双手枕后'],
+  'arm_behind_head': ['pose', '姿势', '手臂枕后'],
+  'leg_grab': ['interact', '持物动作', '抓腿'],
+  'torso_grab': ['interact', '持物动作', '抓上身'],
+  'absurdly_long_hair': ['hair_len', '发长', '极长发'],
+  'goat_horns': ['horn', '角', '羊角'],
+  'ear_piercing': ['accessory', '饰品', '耳钉'],
+  'bandaid': ['accessory', '饰品', '创可贴'],
+  'anklet': ['accessory', '饰品', '脚链'],
+  'mask': ['headwear', '头饰', '面具'],
+  'hat_flower': ['headwear', '头饰', '花帽'],
+  'mechanical_halo': ['headwear', '头饰', '机械光环'],
+  'white_wrist_cuffs': ['handwear', '手部服饰', '白腕套'],
+  'shirt_tucked_in': ['cloth_state_sfw', '穿着方式', '塞衣角'],
+  'fine_fabric_emphasis': ['cloth_mat', '材质', '布料质感强调'],
+  'multicolored_clothes': ['clothing_type', '服装类型', '多色服装'],
+  'waist_apron': ['clothing_type', '服装类型', '腰围裙'],
+  'ass_focus': ['focus', '镜头焦点', '臀部焦点'],
+  'cum_on_stomach': ['n_cum', '精液表现', '射在腹上'],
+  'petite': ['figure', '体型', '娇小'],
+  'nose_blush': ['emotion', '表情', '红鼻'],
+  'skin_fang': ['feature', '非人特征', '皮肤獠牙'],
+  ':q': ['expression', '表情', '嘟嘴'],
+  'fruit': ['prop', '食物道具', '水果'],
+  'head_on_pillow': ['furniture', '家具场景', '头枕枕头'],
+  'star_(sky)': ['environment', '环境', '星空点点'],
+  'moon': ['environment', '环境', '月亮'],
+  'pool': ['environment', '环境', '泳池'],
+  'panties_around_one_leg': ['underwear', '内衣层', '内裤褪至单腿', 1],
+  'id_card': ['prop', '道具', '证件卡'],
+  'goggles': ['eyewear', '眼镜', '护目镜'],
+  'goggles_on_head': ['eyewear', '眼镜', '护目镜(头顶)'],
+  'aviator_sunglasses': ['eyewear', '眼镜', '蛤蟆镜'],
+  'sunglasses': ['eyewear', '眼镜', '太阳镜'],
+  'sun': ['environment', '环境', '太阳'],
+  'summer': ['environment', '环境', '夏天'],
+  'round_window': ['environment', '环境', '圆窗'],
+  'window_blinds': ['environment', '环境', '百叶窗'],
+  'sliding_doors': ['environment', '环境', '拉门'],
+  'loaded_interior': ['background', '背景', '复杂室内背景'],
+  'room': ['location', '场所', '房间'],
+  'rock': ['prop', '道具', '石头'],
+  'logo': ['meta', '元信息', '标志'],
+  'pornography': ['meta', '元信息', '色情刊物'],
+  'drinking_straw': ['prop', '餐饮道具', '吸管'],
+  'drink': ['prop', '餐饮道具', '饮料'],
+  'spoon': ['prop', '餐饮道具', '勺子'],
+  'can': ['prop', '餐饮道具', '罐装饮料'],
+  'energy_drink': ['prop', '餐饮道具', '能量饮料'],
+  'monster_energy': ['prop', '餐饮道具', '魔爪饮料'],
+  'nissin_cup_noodle': ['prop', '餐饮道具', '日清杯面'],
+  'choko_(cup)': ['prop', '餐饮道具', '酒杯'],
+  'tokkuri': ['prop', '道具', '清酒壶'],
+  'shide': ['prop', '道具', '纸垂'],
+  'kadomatsu': ['prop', '道具', '门松'],
+  'kagami_mochi': ['prop', '道具', '镜饼'],
+  'teruterubouzu': ['prop', '道具', '晴天娃娃'],
+  'bamboo': ['prop', '道具', '竹子'],
+  'book_stack': ['prop', '道具', '书堆'],
+  'sword': ['prop', '武器道具', '剑'],
+  'fishing_rod': ['prop', '道具', '钓鱼竿'],
+  'shovel': ['prop', '道具', '铲子'],
+  'selfie_stick': ['prop', '道具', '自拍杆'],
+  'globe': ['prop', '道具', '地球仪'],
+  'stylus': ['prop', '道具', '触控笔'],
+  'sticky_note': ['prop', '道具', '便利贴'],
+  'fish_tank': ['prop', '道具', '鱼缸'],
+  'sand_castle': ['prop', '海滩道具', '沙堡'],
+  'sand_sculpture': ['prop', '海滩道具', '沙雕'],
+  'american_flag': ['prop', '道具', '美国国旗'],
+  'italian_flag': ['prop', '道具', '意大利国旗'],
+  'swim_ring': ['prop', '泳具道具', '游泳圈'],
+  'innertube': ['prop', '泳具道具', '泳圈'],
+  'snorkel': ['prop', '泳具道具', '呼吸管'],
+  'picnic_basket': ['prop', '道具', '野餐篮'],
+  'sunscreen': ['prop', '道具', '防晒霜'],
+  'shade': ['prop', '道具', '遮阳伞'],
+  'wet_towel': ['prop', '道具', '湿毛巾'],
+  'towel_on_head': ['headwear', '头饰', '顶毛巾'],
+  'ball': ['prop', '运动道具', '球'],
+  'food_in_mouth': ['mouth', '嘴部', '含食'],
+  ';d': ['expression', '表情', '眨眼笑'],
+  'drunk': ['emotion', '表情', '醉态'],
+  'back-to-back': ['pose', '姿势', '背靠背'],
+  'arm_across_waist': ['pose', '姿势', '手臂环腰'],
+  'hand_on_leg': ['pose', '姿势', '手放腿上'],
+  'braided_bun': ['hairstyle', '发型', '辫子盘头'],
+  'cow_ears': ['feature', '非人特征', '牛耳'],
+  'cow_horns': ['horn', '角', '牛角'],
+  'cow_tail': ['tail', '尾部', '牛尾'],
+  'cow_girl': ['race', '种族', '牛娘'],
+  'kitsune': ['race', '种族', '狐娘'],
+  'kyuubi': ['race', '种族', '九尾狐'],
+  // NSFW 露骨/擦边显式批二(unknown 启发正则会兜变体端, 但词典归槽才是正道)
+  'spreading_own_pussy': ['n_exposure', '裸露', '自掰'],
+  'half-spread_pussy': ['n_exposure', '裸露', '半张开'],
+  'spread_pussy': ['n_exposure', '裸露', '张开'],
+  'pussy_juice_trail': ['n_body', '私密细节', '爱液痕'],
+  'pussy_focus': ['n_exposure', '裸露', '私部焦点'],
+  'disembodied_penis': ['n_body', '私密细节', '悬空阴茎'],
+  'invisible_penis': ['n_body', '私密细节', '隐形阴茎'],
+  'anal_object_insertion': ['n_sex', '性行为', '物插入'],
+  'anal_tail': ['n_state', '状态', '肛塞尾'],
+  'chocolate_on_breasts': ['n_state', '状态', '巧克力涂胸', 1],
+  'chocolate_on_body': ['n_state', '状态', '巧克力涂身', 1],
+  'chocolate_on_face': ['n_state', '状态', '巧克力涂脸', 1],
+  'heart-shaped_chocolate': ['prop', '食物道具', '心形巧克力'],
+  'oppai_loli': ['n_male', '年龄体型', '巨乳萝莉'],
+  'bodypaint': ['n_body', '私密细节', '人体彩绘'],
+  // 人物/身体/发型高频
+  'eyes_visible_through_hair': ['hairstyle', '发型', '发透眼'],
+  'one_eye_covered': ['hairstyle', '发型', '单眼遮发'],
+  'hair_ears': ['hairstyle', '发型', '发做耳形'],
+  'feather_hair': ['hairstyle', '发型', '羽毛发饰'],
+  'split-color_hair': ['hair_color', '发色', '分色发'],
+  'mole_under_mouth': ['body_detail', '身体细节', '嘴下痣'],
+  'perky_breasts': ['body_detail', '身体细节', '挺乳'],
+  'flat_ass': ['body_detail', '身体细节', '平臀'],
+  'skinny': ['figure', '体型', '骨感'],
+  'tan': ['skin', '肤色', '小麦色'],
+  'dark-skinned_female': ['skin', '肤色', '深色肌肤'],
+  'teacher': ['identity', '身份', '教师'],
+  'astronaut': ['identity', '身份', '宇航员'],
+  'toe_ring': ['accessory', '饰品', '脚趾环'],
+  'button_eyes': ['eyes_color', '眼色', '扣子眼'],
+  'heart-shaped_eyes': ['emotion', '表情', '心形眼'],
+  'low_neckline': ['cloth_state_sfw', '穿着方式', '低领口'],
+  'wrong_foot': ['cloth_state_sfw', '穿着方式', '鞋穿反脚'],
+  'folded': ['cloth_state_sfw', '穿着方式', '叠放'],
+  'horn_flower': ['headwear', '头饰', '角上花'],
+  // other 类高频杂词
+  'okobo': ['footwear', '鞋袜', '厚木屐'],
+  'sakazuki': ['prop', '餐饮道具', '酒盏'],
+  'christmas_present': ['prop', '道具', '圣诞礼物'],
+  'cage': ['prop', '道具', '笼子'],
+  'rug': ['furniture', '家具场景', '地毯'],
+  'veranda': ['location', '场所', '外廊'],
+  'porch': ['location', '场所', '门廊'],
+  'stone_lantern': ['prop', '道具', '石灯笼'],
+  'multiple_torii': ['prop', '道具', '连排鸟居'],
+  'under_tree': ['location', '场所', '树下'],
+  'against_tree': ['location', '场所', '靠树'],
+  'tree_stump': ['prop', '道具', '树桩'],
+  'midair': ['location', '场所', '半空'],
+  'flight_deck': ['location', '场所', '飞行甲板'],
+  'jar': ['prop', '道具', '罐子'],
+  ':t': ['expression', '表情', '吐舌'],
+  'dated': ['meta', '元信息', '日期水印'],
+  'cable_knit': ['cloth_mat', '材质', '麻花针织'],
+  'coconut': ['prop', '食物道具', '椰子'],
+  // other 类 NSFW 收口(不给 level = 变体端按最严, 全年龄零漏出)
+  'female_masturbation': ['n_sex', '性行为', '自慰'],
+  'defloration': ['n_sex', '性行为', '破处'],
+  'sexual_coaching': ['n_sex', '性行为', '性指导'],
+  'vaginal_object_insertion': ['n_sex', '性行为', '物插入(阴)'],
+  'futa_with_female': ['n_sex', '性行为', '扶她×女'],
+  'reach-around': ['n_touch', '性接触', '手交(后)'],
+  'pee': ['n_body', '私密细节', '排尿'],
+  'ovum': ['n_body', '私密细节', '卵子'],
+  'nudist': ['n_exposure', '裸露', '裸体主义'],
+  'gagged': ['n_bondage', '束缚', '被塞口'],
+  'hogtie': ['n_bondage', '束缚', '四肢捆绑'],
+  'gag_harness': ['n_bondage', '束缚', '口枷具'],
+  'shibari_over_clothes': ['n_bondage', '束缚', '衣上紧缚'],
+  'bra_lift': ['clothing_state', '遮露状态', '撩胸罩', 1],
+  'pantyhose_pull': ['clothing_state', '遮露状态', '拉连裤袜', 1],
+  'dilation_tape': ['n_state', '状态', '扩拉胶带'],
+  'bisexual_female': ['n_state', '状态', '双性恋(女)'],
+  'breath': ['n_state', '状态', '呼气', 1],
+  'heavy_breathing': ['n_state', '状态', '喘息'],
+  // other 类 SFW 收口
+  'rabbit_girl': ['race', '种族', '兔娘'],
+  'meadow': ['environment', '环境', '草地'],
+  'wet_floor': ['environment', '环境', '湿地反光'],
+  'column': ['environment', '环境', '柱子'],
+  'reflective_floor': ['environment', '环境', '反光地板'],
+  'earth_(planet)': ['environment', '环境', '地球'],
+  'contrail': ['graphic', '画面元素', '航迹云'],
+  'spoken_question_mark': ['graphic', '画面元素', '对话问号'],
+  'graffiti': ['graphic', '画面元素', '涂鸦'],
+  'feathers': ['prop', '花羽道具', '羽毛'],
+  'white_feathers': ['prop', '花羽道具', '白羽毛'],
+  'rose_petals': ['prop', '花羽道具', '玫瑰花瓣'],
+  'plum_blossoms': ['prop', '花羽道具', '梅花'],
+  'petals_on_liquid': ['prop', '花羽道具', '水面花瓣'],
+  'yellow_flower': ['prop', '花羽道具', '黄花'],
+  'dove': ['animal', '动物', '鸽子'],
+  'white_bird': ['animal', '动物', '白鸟'],
+  'light_bulb': ['prop', '道具', '灯泡'],
+  'electrical_outlet': ['prop', '道具', '电源插座'],
+  'aircraft': ['prop', '载具道具', '飞行器'],
+  'airplane': ['prop', '载具道具', '客机'],
+  'keyhole': ['prop', '道具', '钥匙孔'],
+  'ai_ai_gasa': ['prop', '道具', '相合伞'],
+  'drink_can': ['prop', '餐饮道具', '罐装饮料'],
+  'strawberry': ['prop', '食物道具', '草莓'],
+  'one-piece_thong': ['outfit', '整套服装', '连体丁字裤'],
+  'bride': ['identity', '身份', '新娘'],
+  'material_growth': ['meta', '元信息', '材质溢出(AI瑕疵)'],
+  '3d': ['meta', '元信息', '3D'],
+  'patreon_username': ['meta', '元信息', '赞助者水印'],
+  'copyright_name': ['meta', '元信息', '版权署名'],
+  'product_placement': ['meta', '元信息', '商品植入'],
+}
+let v4NsfwN = 0
+for (const [tag, [slot, fieldZh, zh, level]] of Object.entries(V4_NSFW)) {
+  if (byTag.has(tag)) continue
+  byTag.set(tag, { slot, fieldZh, sec: 'extra', secZh: '高频补充', zh, level: level ?? null })
+  byTag.set(tag.replace(/_/g, ' '), { slot, fieldZh, sec: 'extra', secZh: '高频补充', zh, level: level ?? null })
+  v4NsfwN++
+}
+
+// 模式规则表: [整词正则, slot, fieldZh, level?] —— 按序首中, 越具体越靠前。
+// 槽位键全部复用既有命名空间(变体端 SEG 排序/过滤组 keepOne 直接认识),
+// 新开的 animal/print/electronics 只影响光箱分组小节, 变体端按 unknown 保留(安全)。
+const V4_RULES = [
+  [/^(?:[2-9]\d?|6\+)(?:girls|boys)$/, 'count', '人数'],
+  [/(?:^|_)(?:volleyball|beachball|soccer_ball|basketball|tennis_ball)$/, 'prop', '运动道具'],
+  [/^(?:cat|dog|fish|bird|seagull|chick|crab|rabbit|mouse|frog|bat|fox|wolf|bear|butterfly|animal|mushroom|horse|pig|sheep|deer|monkey|hamster|penguin)$/, 'animal', '动物'],
+  [/(?:^|_)(?:bikini|one[-_]piece_swimsuit|swimsuit|costume|uniform)$/, 'outfit', '整套服装'],
+  [/(?:^|_)(?:dress|gown|sundress|kimono)$/, 'outfit', '整套服装'],
+  [/(?:^|_)(?:cap|hat|helmet|headdress|headgear|headband|headphones|earmuffs|crown|tiara|diadem|beret|bonnet|veil|halo|beanie)$/, 'headwear', '头饰'],
+  [/^(?:cap|hat|headwear)_/, 'headwear', '头饰'],
+  [/^hair(?:_ornament|_flower|_bow|_ribbon|_clip|_pin|clip|band|_band)$/, 'headwear', '头饰'],
+  [/(?:^|_)headwear$/, 'headwear', '头饰'],
+  [/(?:^|_)eyewear$/, 'eyewear', '眼镜'],
+  [/(?:^|_)(?:footwear|boots|shoes|sandals|sneakers|pumps|loafers|slippers|tabi)$/, 'footwear', '鞋袜'],
+  [/(?:^|_)(?:gloves|mittens)$/, 'handwear', '手部服饰'],
+  [/(?:^|_)wrist_/, 'handwear', '手部服饰'],
+  [/(?:^|_)(?:thighhighs|pantyhose|kneehighs|stockings|socks|legwarmers|leggings|tights|legwear|garter)$/, 'legwear', '腿袜'],
+  [/(?:^|_)(?:pants|skirt|shorts|trousers)$/, 'bottom', '下装'],
+  [/(?:^|_)(?:shirt|blouse|jacket|coat|hoodie|sweater|cardigan|vest|leotard|bodysuit|capelet|shawl|poncho)$/, 'top', '上装外套'],
+  [/(?:^|_)sleeves$/, 'sleeves', '袖长'],
+  [/(?:^|_)(?:panties|bra|underwear|lingerie)$/, 'underwear', '内衣层', 1],
+  [/(?:^|_)(?:earrings|necklace|choker|necktie|neckerchief|bowtie|ribbon|brooch|pendant|amulet|whistle|o-ring|magatama|collar|belt|scrunchie)$/, 'accessory', '饰品'],
+  [/(?:^|_)around_neck$/, 'accessory', '饰品'],
+  [/(?:^|_)(?:cross|anchor|star)$/, 'accessory', '饰品'],
+  [/(?:^|_)(?:braid|twintails|ponytail|ahoge|sidelocks|ringlets|antenna_hair|bangs)$/, 'hairstyle', '发型'],
+  [/(?:^|_)ears$/, 'feature', '非人特征'],
+  [/(?:^|_)tail$/, 'tail', '尾部'],
+  [/(?:^|_)horns?$/, 'horn', '角'],
+  [/(?:^|_)(?:sword|katana|knife|axe|spear)$/, 'prop', '武器道具'],
+  [/(?:^|_)flag$/, 'prop', '旗帜道具'],
+  [/(?:^|_)?(?:paper|papers|pen|quill|chalk|scroll)$/, 'prop', '文具纸张'],
+  [/(?:^|_)flower$/, 'prop', '花羽道具'],
+  [/^hair_over_(?:one_)?breast[s]?$/, 'hairstyle', '发型'],
+  [/(?:^|_)(?:bun|braided_bun)$/, 'hairstyle', '发型'],
+  [/(?:^|_)nails$/, 'nails', '美甲'],
+  [/(?:^|_)pupils$/, 'eyes_color', '眼色'],
+  [/(?:^|_)background$/, 'background', '背景'],
+  [/(?:^|_)(?:censoring|censor)$/, 'censorship', '审查'],
+  [/(?:^|_)(?:chair|stool|couch|sofa|table|desk|bench|tatami|shelf)$/, 'furniture', '家具场景'],
+  [/(?:^|_)(?:lamp|light)$/, 'lighting', '光照'],
+  // 餐饮器具用「词尾」匹配(不带 ^|_ 前缀要求) —— teacup/drink 这类连写复合词才吃得到
+  [/(?:cup|bottle|teapot|mug|tray|saucer|bowl|plate|spoon|straw)$/, 'prop', '餐饮道具'],
+  [/(?:^|_)box$/, 'prop', '箱盒道具'],
+  [/^stuffed_|^plush_/, 'prop', '玩偶道具'],
+  [/^inflatable_/, 'prop', '充气道具'],
+  [/^beach_/, 'prop', '海滩道具'],
+  [/^(?:figure|figurine)$/, 'prop', '手办道具'],
+  [/(?:^|_)(?:computer|laptop|monitor|keyboard|tablet|controller|speaker|headset|clock|console|television|radio|tv|mouse)$/, 'electronics', '电子设备'],
+  [/(?:^|_)(?:sake|cola|alcohol|wine|tea|coffee|watermelon|burger|sandwich|pizza|pocky)$/, 'prop', '食物道具'],
+  [/(?:^|_)(?:valentine|easter|halloween)$/, 'weather', '节令天气'],
+  [/(?:bubbles|bubble)$/, 'graphic', '画面元素'],
+  [/^holding_|^hugging_/, 'interact', '持物动作'],
+  [/^hand_on_own_/, 'pose', '姿势'],
+  [/(?:^|_)(?:christmas|new_year|halloween|snowing|snowflakes|fireworks|hanabi)$/, 'weather', '节令天气'],
+  [/(?:^|_)print$/, 'print', '印花'],
+  [/\(symbol\)$/, 'graphic', '画面元素'],
+  [/^light_(?:particles|rays)$/, 'graphic', '画面元素'],
+  [/\(object\)$/, 'prop', '道具'],
+  [/(?:^|_)bathing$/, 'location', '场所'],
+]
+const V4_MIN_CNT = 10
+let v4New = 0, v4Skipped = 0
+for (const r of rows) {
+  if (r.cnt < V4_MIN_CNT || byTag.has(r.name)) continue
+  let hit = null
+  for (const [re, slot, fieldZh, level] of V4_RULES) {
+    if (re.test(r.name)) { hit = { slot, fieldZh, level: level ?? null }; break }
+  }
+  if (!hit) { v4Skipped++; continue }
+  // zh 三级回落: WeiLin → 颜色前缀拼词 → 空串
+  let zh = weiLin.get(r.name) || ''
+  if (!zh) {
+    const m = r.name.match(/^(black|white|red|blue|aqua|grey|gray|brown|green|orange|pink|purple|yellow)_(.+)$/)
+    const base = m && byTag.get(m[2])
+    if (base?.zh) zh = { black: '黑', white: '白', red: '红', blue: '蓝', aqua: '水色', grey: '灰', gray: '灰', brown: '棕', green: '绿', orange: '橙', pink: '粉', purple: '紫', yellow: '黄' }[m[1]] + base.zh
+  }
+  const rec = { slot: hit.slot, fieldZh: hit.fieldZh, sec: 'extra', secZh: '高频补充', zh, level: hit.level }
+  byTag.set(r.name, rec)
+  byTag.set(r.name.replace(/_/g, ' '), rec)
+  v4New++
+}
+console.log(`词典v4 模式归槽: 显式批 ${v4NsfwN} + 规则命中 ${v4New} (cnt>=${V4_MIN_CNT}, 规则未覆盖 ${v4Skipped} 个留给长尾) → 总 ${byTag.size}`)
+
 // ---------- 3. 覆盖率: ANIMA 细槽位能细化多少已分类词条 ----------
 const matched = [], unmatched = []
 for (const r of classified) {
@@ -585,8 +940,11 @@ unmatched.slice(0, 30).forEach(u => console.log(`  ${u.cat}  ${u.tag} (${u.cnt})
 // 即使手工归了槽也写不出去; cat 仍由 tags.db 管, 词典只管槽位细化
 const localNames = new Set(db.prepare('SELECT name FROM tags').all().map((r) => r.name))
 const out = {}
-for (const [tag, rec] of byTag) {
+for (const [tag, rec0] of byTag) {
   if (!localNames.has(tag)) continue
+  // socks(ANIMA「腿上」)与 legwear 是同一语义类, 落盘统一归 legwear:
+  // 否则跨槽 keep-one(white_socks×black_thighhighs)管不到, 变体端会同时抽出两槽词
+  const rec = rec0.slot === 'socks' ? { ...rec0, slot: 'legwear' } : rec0
   if (!out[tag]) out[tag] = { slot: rec.slot, fieldZh: rec.fieldZh, sec: rec.sec, secZh: rec.secZh, zh: rec.zh, level: rec.level }
 }
 mkdirSync(path.join(REPO, 'knowledge'), { recursive: true })

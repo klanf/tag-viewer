@@ -74,14 +74,19 @@ if (!FROM || !TO) {
 
 /* ------------------------------------------------------------ 安全口径(与 electron/core/safety.js 同语义) */
 
+/* 2026-10-28 安全模式改 0-4 等级制([L0]..[L4] 段, 旧 core/edge 自动迁移):
+ * 这里取「显示上限」同款口径 —— 超过上限的词算敏感。 */
 function parseSections(text) {
-  const sec = { core: [], edge: [] }
-  let cur = 'core'
+  const sec = { L0: [], L1: [], L2: [], L3: [], L4: [] }
+  let cur = 'L4'
   for (const line of text.split('\n')) {
     const s = line.trim()
     if (!s || s.startsWith('#')) continue
     if (s.startsWith('[') && s.endsWith(']')) {
-      cur = s.slice(1, -1).trim().toLowerCase() === 'edge' ? 'edge' : 'core'
+      const name = s.slice(1, -1).trim().toLowerCase()
+      if (name === 'core') cur = 'L4'
+      else if (name === 'edge') cur = 'L2'
+      else if (/^l[0-4]$/.test(name)) cur = name.toUpperCase()
       continue
     }
     sec[cur].push(s.toLowerCase())
@@ -112,16 +117,18 @@ function hitAny(tags, part) {
   return false
 }
 
-let LEVEL = 'core'
-try { LEVEL = JSON.parse(fs.readFileSync(path.join(DATA, 'safety.json'), 'utf8')).level || 'core' } catch { /* 默认 core */ }
+let MAXLEVEL = 2
+try {
+  const st = JSON.parse(fs.readFileSync(path.join(DATA, 'safety.json'), 'utf8'))
+  MAXLEVEL = st.maxLevel ?? (st.level === 'edge' ? 0 : st.level === 'core' ? 2 : 2)
+} catch { /* 默认上限 L2 */ }
 const sec = parseSections(fs.readFileSync(path.join(DATA, 'safety_tags.txt'), 'utf8'))
-const core = compile(sec.core)
-const edge = compile(sec.edge)
-/** 是否敏感: core 档只看 core 段; edge 档 core+edge 都算 */
+/** 是否敏感: 词等级 > 显示上限(只看覆盖段文件, 不吃词典兜底) */
 function isSensitive(tags) {
   if (tags == null) return null
-  if (hitAny(tags, core)) return true
-  if (LEVEL === 'edge' && hitAny(tags, edge)) return true
+  for (let lv = 4; lv > MAXLEVEL; lv--) {
+    if (hitAny(tags, compile(sec[`L${lv}`]))) return true
+  }
   return false
 }
 

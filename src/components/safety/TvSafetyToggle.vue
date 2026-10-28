@@ -22,7 +22,7 @@
  *   · "这边的数字能不能根据不同的来源显示被隐藏的数字"
  *   · "然后这个数字我不点这个按钮好像就默认是 0"
  *
- * 之前那个 `−45,603` 是**整个库**的统计(主进程读数据集时算好的 coreHit) —— 进哪个
+ * 之前那个 `−45,603` 是**整个库**的统计(主进程读数据集时算好的 hist) —— 进哪个
  * 来源、翻到哪一页都是同一个大数, 对"这个来源到底藏了多少张"没有回答能力。现在:
  *
  *   1. **谁有"当前列表"谁就把 counts 传进来**。看板 / 系列 / 标签图片 / 扫描页(图片层) /
@@ -45,9 +45,8 @@ const props = defineProps({
   /** 只显示盾牌图标(工具栏太挤时用) */
   iconOnly: { type: Boolean, default: false },
   /**
-   * **当前列表范围**下两档各会隐藏多少张: `{ core, edge }`。
-   * 口径与主进程的 `coreHit` / `edgeHit` 一致 —— `core` = 只命中 core 段的条数,
-   * `edge` = edge 档会隐藏的总数(即 core + 仅 edge)。
+   * **当前列表范围**下各档位的直方图: `{ hist:[5], total }`。
+   * 口径与主进程的 hist 一致 —— 「上限 N 会隐藏」= sum(hist[N+1..4])。
    * 不传 = 这个页面没有"当前图片列表", 回落整个库的统计。
    */
   counts: { type: Object, default: null },
@@ -58,16 +57,23 @@ const ui = useUiStore()
 const showSet = ref(false)
 const busy = ref(false)
 
-/** 有没有"当前范围"这个概念 —— 决定 title 怎么写, 也决定数字从哪来 */
-const hasScope = computed(() => !!props.counts && typeof props.counts.core === 'number')
+/** hist[N+1..4] 求和 */
+const above = (hist, n) => {
+  let s = 0
+  for (let u = n + 1; u <= 4; u++) s += hist?.[u] || 0
+  return s
+}
 
-/** 当前档位下、当前范围里**会隐藏**的张数 */
+/** 有没有"当前范围"这个概念 —— 决定 title 怎么写, 也决定数字从哪来 */
+const hasScope = computed(() => !!props.counts && Array.isArray(props.counts.hist))
+
+/** 当前上限下、当前范围里**会隐藏**的张数 */
 const isUnsafe = computed(() => safety.mode === 'unsafe')
 const modeName = computed(() => (isUnsafe.value ? '不安全模式' : '安全模式'))
-/** 当前范围里命中敏感标签的张数(两档按 level 取) */
+/** 当前范围里超过显示上限的张数 */
 const scopedSensitive = computed(() => {
   const c = props.counts
-  if (hasScope.value) return (safety.level === 'edge' ? c.edge : c.core) || 0
+  if (hasScope.value) return above(c.hist, safety.maxLevel) || 0
   return safety.sensitiveCount
 })
 const scopedTotal = computed(() => {
@@ -81,16 +87,17 @@ const shown = computed(() => {
 })
 
 const scopeTip = computed(() => (hasScope.value ? '当前列表' : '整个库'))
+const lvlName = computed(() => `≤L${safety.maxLevel}`)
 
 const cntTip = computed(() => {
   if (isUnsafe.value) {
     return safety.on
-      ? `${scopeTip.value}里已隐藏 ${nfmt(shown.value)} 张 · 只留命中「${safety.level}」档的 ${nfmt(scopedSensitive.value)} 张`
-      : `${scopeTip.value}里有 ${nfmt(scopedSensitive.value)} 张命中「${safety.level}」档 · 打开不安全模式后只显示这些, 隐藏其余 ${nfmt(shown.value)} 张`
+      ? `${scopeTip.value}里已隐藏 ${nfmt(shown.value)} 张 · 只留超过「L${safety.maxLevel}」的 ${nfmt(scopedSensitive.value)} 张`
+      : `${scopeTip.value}里有 ${nfmt(scopedSensitive.value)} 张超过「L${safety.maxLevel}」 · 打开不安全模式后只显示这些, 隐藏其余 ${nfmt(shown.value)} 张`
   }
   return safety.on
-    ? `${scopeTip.value}里已隐藏 ${nfmt(shown.value)} 张(${safety.level} 档)`
-    : `${scopeTip.value}里有 ${nfmt(shown.value)} 张命中「${safety.level}」档 · 打开后被隐藏`
+    ? `${scopeTip.value}里已隐藏 ${nfmt(shown.value)} 张(显示上限 ${lvlName.value})`
+    : `${scopeTip.value}里有 ${nfmt(shown.value)} 张超过「L${safety.maxLevel}」 · 打开后被隐藏`
 })
 
 async function toggle() {
@@ -106,7 +113,7 @@ async function toggle() {
           : `🙈 不安全模式已开(当前范围没有可显示的敏感图)`, 'ok', 2800)
       } else {
         ui.toast(n
-          ? `🛡 安全模式已开 · ${scopeTip.value}隐藏 ${nfmt(n)} 张(${safety.level} 档)`
+          ? `🛡 安全模式已开 · ${scopeTip.value}隐藏 ${nfmt(n)} 张(上限 ${lvlName.value})`
           : '🛡 安全模式已开(当前范围没命中任何图)', 'ok', 2600)
       }
     } else {
@@ -125,10 +132,10 @@ async function toggle() {
     <button
       class="st-btn"
       :title="safety.on
-        ? `${modeName}已开(${safety.level} 档) · 点一下关掉, 全部图片立刻回来`
+        ? `${modeName}已开(显示上限 ${lvlName}) · 点一下关掉, 全部图片立刻回来`
         : (isUnsafe
-          ? '不安全模式: 只显示命中敏感标签的图(安全模式的取反) —— 只影响显示, 不动库里的数据'
-          : '安全模式: 打开后按标签集合隐藏露骨内容(只影响显示, 不动库里的数据)')"
+          ? '不安全模式: 只显示超过显示上限的图(安全模式的取反) —— 只影响显示, 不动库里的数据'
+          : '安全模式: 打开后按敏感等级隐藏超过上限的内容(只影响显示, 不动库里的数据)')"
       :disabled="busy"
       @click="toggle"
     >

@@ -144,6 +144,8 @@ const exporting = ref(0)      // 0=空闲 1=纯标签 2=带路径
 const stripCharExport = ref(true)  // 导出时剔除角色/系列标签(含无括号角色, 走角色库)
 const stripViewExport = ref(false) // 导出时剔除视角/机位标签(词表 data/export_view_tags.txt, 来自随机机位交接文档)
 const safeOnlyExport = ref(false)  // 导出时剔除敏感tag(只导出安全模式的标签, 口径跟随安全模式档位)
+// 过滤组(2026-10-28 词条管线): 槽内单选+互斥消解, 仅单人图生效; 主进程 exporter 认 groups=1
+const groupsExport = ref(false)
 const replaceExport = ref(true)    // 导出时应用替换规则(默认开; 关了就导原始标签, 主进程 exporter 本来就认 replace=0)
 /* 替换规则组(2026-10-04): 选中哪一套。多套规则时导出时挑一套, 见 🔁 规则编辑器。
  * 列表与"纠正成真实 id"都由 TvReplaceSetPicker 自己干(它挂载时会 emit), 这里只留值。 */
@@ -165,6 +167,7 @@ const presetSnapshot = computed(() => ({
   strip_char: stripCharExport.value,
   strip_view: stripViewExport.value,
   safe_only: safeOnlyExport.value,
+  groups: groupsExport.value,
   with_path: false,
   replace_set: replaceSet.value,
 }))
@@ -390,6 +393,7 @@ async function doExport(withPath) {
     params.strip_char = stripCharExport.value ? '1' : '0'
     params.strip_view = stripViewExport.value ? '1' : '0'
     params.safe_only = safeOnlyExport.value ? '1' : '0'
+    params.groups = groupsExport.value ? '1' : '0'
     params.replace = replaceExport.value ? '1' : '0'
     params.replace_set = replaceSet.value
     const r = await api.exportSave(params)
@@ -398,8 +402,9 @@ async function doExport(withPath) {
     const stripNote = stripCharExport.value && r.stripped ? `(已剔 ${nfmt(r.stripped)} 个角色/系列)` : ''
     const viewNote = stripViewExport.value && r.viewStripped ? `(已剔 ${nfmt(r.viewStripped)} 个视角/机位)` : ''
     const safeNote = safeOnlyExport.value && r.safeStripped ? `(已剔 ${nfmt(r.safeStripped)} 个敏感tag)` : ''
+    const groupsNote = groupsExport.value && r.groupsStripped ? `(过滤组已剔 ${nfmt(r.groupsStripped)} 个冲突tag)` : ''
     const repNote = replaceExport.value && r.replaced ? `(已替换 ${nfmt(r.replaced)} 个)` : ''
-    ui.ok(`✅ 已导出 ${nfmt(r.count)} 行${stripNote}${viewNote}${safeNote}${repNote} → ${r.path}`, 3200)
+    ui.ok(`✅ 已导出 ${nfmt(r.count)} 行${stripNote}${viewNote}${safeNote}${groupsNote}${repNote} → ${r.path}`, 3200)
   } catch (e) {
     ui.err('导出失败: ' + e.message)
   } finally {
@@ -635,7 +640,14 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
                 <TvCheckbox
                   v-model="safeOnlyExport"
                   label="只导出安全模式的标签(剔除敏感tag)"
-                  title="导出结果的每个标签串里去掉敏感标签(nude/sex 等), 行数不变; 敏感口径跟随安全模式的档位(core/edge), 词表即 data/safety_tags.txt"
+                  title="导出结果的每个标签串里去掉敏感标签(nude/sex 等), 行数不变; 敏感口径跟随安全模式的「显示上限」(0-4 级), 词表即 data/safety_tags.txt"
+                />
+              </div>
+              <div class="mopt">
+                <TvCheckbox
+                  v-model="groupsExport"
+                  label="过滤组去冲突(槽内单选+互斥)"
+                  title="导出前按槽位词典做消解: 同槽位只留本地图片量最多的一个(景别/腿袜/表情/家具等), 并消解裸足×无鞋这类互斥对; 仅对单人图生效, 群像原样保留"
                 />
               </div>
               <div class="mopt">

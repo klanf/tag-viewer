@@ -65,10 +65,14 @@ export function ratioOf(w, h) {
  * (见 dataset.js 的 pushRecord), 于是切开关/切档位只是换个 0/1/2 的比较,
  * 八万行数据一行都不用重载。
  */
-export function hiddenBySafety(unsafe, level) {
-  const u = Number(unsafe) || 0
-  if (u <= 0) return false
-  return u === 1 || level === 'edge'
+/**
+ * 数值标记 -> 在「显示上限 maxLevel」下是否该隐藏(0-4 同一把尺):
+ *   unsafe > maxLevel 的图藏; maxLevel=4 全显示。
+ * 前端有一份等价实现(electron/core/safety.js 的 hiddenAt) —— 前端不能 import
+ * 主进程模块。改这里的判定规则时两边要一起改。
+ */
+export function hiddenBySafety(unsafe, maxLevel) {
+  return (Number(unsafe) || 0) > (Number(maxLevel) || 0)
 }
 
 export function shortPath(p) {

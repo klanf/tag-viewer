@@ -61,6 +61,11 @@ const props = defineProps({
    */
   favable: { type: Boolean, default: false },
   inFav: { type: Boolean, default: false },
+  /**
+   * 显示「归类」按钮(2026-10-28 光箱手动归类): 点了往上传 classify 事件,
+   * 由调用方弹槽位选择器。任意 pill 都可挂, 调用方自己决定开在哪些列表上。
+   */
+  classable: { type: Boolean, default: false },
   size: { type: String, default: 'md' },        // sm | md
   active: { type: Boolean, default: false },
   /** 灰化(2026-10-21 光箱 meta 模式): 库内无此标签, 不可跳转 —— 点击退回复制 */
@@ -99,7 +104,8 @@ const hasHoverActs = computed(() =>
   props.copyable ||
   props.favable ||
   (props.cartable && kind.value === 'char') ||
-  props.showBan
+  props.showBan ||
+  props.classable
 )
 
 /** 右上角常驻角标(2026-10-17): 已收藏/已入车都是金色★圆徽, 绝对定位不占布局 */
@@ -151,6 +157,10 @@ function onCart(e) {
 function onFav(e) {
   e.stopPropagation()
   emit('fav', props.tag)
+}
+function onClassify(e) {
+  e.stopPropagation()
+  emit('classify', props.tag)
 }
 /** 右键 = 加进替换规则(2026-10-18): 看图时发现错 tag, 右键直接进构建器预填 */
 function onCtxMenu(e) {
@@ -313,8 +323,8 @@ function onCtxMenu(e) {
 .st { cursor: pointer; }
 
 /* 图标配色: 中性动作半透明, 状态点亮用颜色说话 */
-.cp, .ban { color: var(--muted); opacity: .65; transition: opacity var(--t-fast); }
-.cp:hover, .ban:hover { opacity: 1 !important; }
+.cp, .ban, .cls { color: var(--muted); opacity: .65; transition: opacity var(--t-fast); }
+.cp:hover, .ban:hover, .cls:hover { opacity: 1 !important; }
 
 .ct { color: var(--muted); opacity: .55; cursor: pointer; transition: opacity var(--t-fast), color var(--t-fast); }
 .ct.on { color: var(--accent2, #2f9e63); opacity: 1; }

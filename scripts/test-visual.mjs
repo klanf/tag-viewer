@@ -164,60 +164,74 @@ const m0 = safety.safetyMatcher()
 const tagFile = dataFile('safety_tags.txt')
 eq('首次使用会写出集合文件(用户有个能改的起点)', fs.existsSync(tagFile), true)
 const raw = fs.readFileSync(tagFile, 'utf8')
-eq('文件里有 [core] 段', raw.includes('[core]'), true)
-eq('文件里有 [edge] 段', raw.includes('[edge]'), true)
-eq('core 段条数 = 内置默认', m0.coreCount, safety.DEFAULT_CORE.length)
-eq('edge 段条数 = 内置默认', m0.edgeCount, safety.DEFAULT_EDGE.length)
+eq('文件里有 [L4] 段(旧 core 迁移后的默认)', raw.includes('[L4]'), true)
+eq('文件里有 [L2] 段(旧 edge 迁移后的默认)', raw.includes('[L2]'), true)
+eq('L4 段条数 = 内置默认', m0.counts.L4, safety.DEFAULT_CORE.length)
+eq('L2 段条数 = 内置默认', m0.counts.L2, safety.DEFAULT_EDGE.length)
 
-eq('命中 core 段 -> 1', safety.unsafeLevelOf(['1girl', 'nude', 'smile']), 1)
-eq('只命中 edge 段 -> 2', safety.unsafeLevelOf(['1girl', 'underwear']), 2)
+eq('命中 L4 段 -> 4', safety.unsafeLevelOf(['1girl', 'nude', 'smile']), 4)
+eq('只命中 L2 段 -> 2', safety.unsafeLevelOf(['1girl', 'underwear']), 2)
 eq('干净标签 -> 0', safety.unsafeLevelOf(['1girl', 'looking_at_viewer']), 0)
-/* 这条是要害: breasts 命中 93% 的图, 收进集合等于把整个库藏起来 */
+/* 这条是要害: breasts 命中 93% 的图, 收进集合等于把整个库藏起来
+ * (词典里 breasts 是 body_part 无档, 不进档位表 —— 老坑不许复活) */
 eq('breasts 这种"体型"标签刻意不算敏感', safety.unsafeLevelOf(['1girl', 'breasts']), 0)
-/* core 比 edge 严: 只命中 edge 的图在 core 档不该藏 */
-eq('只命中 edge 的图在 core 档放行', safety.hiddenAt(2, 'core'), false)
-eq('只命中 edge 的图在 edge 档隐藏', safety.hiddenAt(2, 'edge'), true)
-eq('命中 core 的图两档都隐藏', safety.hiddenAt(1, 'core') && safety.hiddenAt(1, 'edge'), true)
-eq('干净的两档都不隐藏', safety.hiddenAt(0, 'core') || safety.hiddenAt(0, 'edge'), false)
+/* ANIMA tag_levels 的 count 段副产品(1girl=4)不许漏进安全等级 */
+eq('count 段的词典档位副产品(1girl=4)被过滤掉', safety.unsafeLevelOf(['1girl']), 0)
+/* 词典档位兜底: NSFW 槽词不靠覆盖段也至少 2(presenting 不在默认段, 纯词典兜底) */
+eq('NSFW 槽词典兜底(presenting>=2)', safety.unsafeLevelOf(['presenting']) >= 2, true)
+/* 上限语义: unsafe > maxLevel 才藏 */
+eq('L2 图在上限 2 放行', safety.hiddenAt(2, 2), false)
+eq('L2 图在上限 0 隐藏', safety.hiddenAt(2, 0), true)
+eq('L4 图在上限 2/0 都隐藏', safety.hiddenAt(4, 2) && safety.hiddenAt(4, 0), true)
+eq('干净图任何上限都不隐藏', safety.hiddenAt(0, 0) || safety.hiddenAt(0, 4), false)
 
 /* 单条增删: 保留文件里的注释与分组 */
-const t1 = safety.toggleSafetyTag('test_tag_xyz', 'core')
+const t1 = safety.toggleSafetyTag('test_tag_xyz', 'L4')
 eq('加入一条 -> 在集合里', t1.inSet, true)
-eq('加入后 core 条数 +1', t1.coreCount, m0.coreCount + 1)
-eq('加入的标签立刻能判命中', safety.unsafeLevelOf(['test_tag_xyz']), 1)
-const t2 = safety.toggleSafetyTag('test_tag_xyz', 'core')
+eq('加入后 L4 条数 +1', t1.counts.L4, m0.counts.L4 + 1)
+eq('加入的标签立刻能判命中', safety.unsafeLevelOf(['test_tag_xyz']), 4)
+const t2 = safety.toggleSafetyTag('test_tag_xyz', 'L4')
 eq('再 toggle -> 移出', t2.inSet, false)
-eq('移出后条数回到原值', t2.coreCount, m0.coreCount)
+eq('移出后条数回到原值', t2.counts.L4, m0.counts.L4)
 eq('移出后不再命中', safety.unsafeLevelOf(['test_tag_xyz']), 0)
 eq('反复增删后注释还在(没把用户的分组格式洗掉)',
   fs.readFileSync(tagFile, 'utf8').includes('# 安全模式'), true)
 
 /* 通配规则 */
-safety.toggleSafetyTag('*bikini_like*', 'core')
-eq('通配规则能命中', safety.unsafeLevelOf(['red_bikini_like_thing']), 1)
+safety.toggleSafetyTag('*bikini_like*', 'L4')
+eq('通配规则能命中', safety.unsafeLevelOf(['red_bikini_like_thing']), 4)
 eq('被通配命中的标签不重复写入(只回 warning)',
-  safety.toggleSafetyTag('red_bikini_like_thing', 'core').wildcard, '*bikini_like*')
-safety.toggleSafetyTag('*bikini_like*', 'core')
+  safety.toggleSafetyTag('red_bikini_like_thing', 'L4').wildcard, '*bikini_like*')
+safety.toggleSafetyTag('*bikini_like*', 'L4')
 
-/* 开关与档位 */
+/* 开关与上限 */
 eq('默认关闭', safety.loadSafetyState().on, false)
-eq('默认档位 core', safety.loadSafetyState().level, 'core')
-safety.saveSafetyState({ on: true, level: 'edge' })
+eq('默认上限 L2', safety.loadSafetyState().maxLevel, 2)
+safety.saveSafetyState({ on: true, maxLevel: 0 })
 eq('开关注入后读回', safety.loadSafetyState().on, true)
-eq('档位注入后读回', safety.loadSafetyState().level, 'edge')
-safety.saveSafetyState({ on: false, level: 'core' })
+eq('上限注入后读回', safety.loadSafetyState().maxLevel, 0)
+safety.saveSafetyState({ on: false, maxLevel: 2 })
 eq('关掉后读回', safety.loadSafetyState().on, false)
 
 /* 坏配置必须回落到"关闭" —— 不能因为一个坏文件就悄悄过滤掉一半图 */
 fs.writeFileSync(dataFile('safety.json'), '{这不是 json', 'utf8')
 safety.invalidateSafetyCache()
 eq('坏配置文件 -> 回落关闭', safety.loadSafetyState().on, false)
-eq('坏配置文件 -> 回落 core 档', safety.loadSafetyState().level, 'core')
+eq('坏配置文件 -> 回落上限 L2', safety.loadSafetyState().maxLevel, 2)
+
+/* 旧版 safety.json 的 level 字段 -> maxLevel 迁移映射 */
+fs.writeFileSync(dataFile('safety.json'), JSON.stringify({ on: false, level: 'edge' }), 'utf8')
+safety.invalidateSafetyCache()
+eq('旧 level=edge -> maxLevel 0', safety.loadSafetyState().maxLevel, 0)
+fs.writeFileSync(dataFile('safety.json'), JSON.stringify({ on: false, level: 'core' }), 'utf8')
+safety.invalidateSafetyCache()
+eq('旧 level=core -> maxLevel 2', safety.loadSafetyState().maxLevel, 2)
+safety.invalidateSafetyCache()
 
 /* 集合文件被删 -> 用内置默认, 功能不失灵(但不是偷偷改用户的东西) */
 fs.writeFileSync(dataFile('safety_tags.txt'), '', 'utf8')
 safety.invalidateSafetyCache()
-eq('集合文件空了 -> 判定仍可用(内置默认兜底)', safety.unsafeLevelOf(['nude']), 1)
+eq('集合文件空了 -> 判定仍可用(内置默认兜底)', safety.unsafeLevelOf(['nude']), 4)
 
 /* ============================================================
  *  自适应行高网格(justified rows) —— 2026-09-23
@@ -302,7 +316,12 @@ const rowW = (r) => r.cells.reduce((a, c) => a + c.w, 0) + GAP * (r.cells.length
  * 这种最难查的不一致 —— 这里用同一批标签把两边钉在一起。
  */
 const { compileRules, unsafeOfTags } = await load('src/utils/safetyMatch.js')
-const mirrorOf = (m) => ({ core: compileRules(m.core.raw), edge: compileRules(m.edge.raw) })
+/* 镜像结构(2026-10-28 等级制): { secs: {0..4: compiled}, dict } 与主进程同构 */
+const mirrorOf = (m) => {
+  const secs = {}
+  for (let lv = 0; lv <= 4; lv++) secs[lv] = compileRules(m.secs[`L${lv}`].raw)
+  return { secs, dict: m.dict }
+}
 
 {
   const m = safety.safetyMatcher()
@@ -310,6 +329,7 @@ const mirrorOf = (m) => ({ core: compileRules(m.core.raw), edge: compileRules(m.
     ['nude'], ['1girl', 'smile'], ['thighhighs'], ['breasts'],
     ['nude', '1girl'], ['censored'], ['rating_explicit'], ['Nude'], ['panties'],
     ['swimsuit'], ['completely_nude'], ['areola_slip'], ['spread_pussy'], ['下着'],
+    ['presenting'], ['gangbang'], ['1girl', 'nude', 'smile'],
   ]
   const mi = mirrorOf(m)
   let diff = 0
@@ -321,7 +341,8 @@ const mirrorOf = (m) => ({ core: compileRules(m.core.raw), edge: compileRules(m.
   }
   eq('前端镜像与主进程的判定逐条一致', diff, 0)
   if (detail.length) for (const d of detail) console.log(`      · ${d}`)
-  eq('镜像: 大小写不敏感', unsafeOfTags(['NUDE'], mi), 1)
+  eq('镜像: 大小写不敏感', unsafeOfTags(['NUDE'], mi), 4)
+  eq('镜像: count 段副产品(1girl=4)不进档位表', unsafeOfTags(['1girl'], mi), 0)
 }
 
 /* 通配规则也要一致(最容易只改一边的地方) */
@@ -330,12 +351,13 @@ const mirrorOf = (m) => ({ core: compileRules(m.core.raw), edge: compileRules(m.
   safety.invalidateSafetyCache()
   const m = safety.safetyMatcher()
   const mi = mirrorOf(m)
-  eq('通配(后缀): 主进程', safety.unsafeLevelOf(['x_penetration'], m), 1)
-  eq('通配(后缀): 前端镜像', unsafeOfTags(['x_penetration'], mi), 1)
-  eq('通配(包含): 主进程', safety.unsafeLevelOf(['white_lingerie_set'], m), 2)
+  eq('旧段名迁移: core 段通配在主进程 -> L4', safety.unsafeLevelOf(['x_penetration'], m), 4)
+  eq('旧段名迁移: edge 段通配在主进程 -> L2', safety.unsafeLevelOf(['white_lingerie_set'], m), 2)
+  eq('通配(后缀): 前端镜像', unsafeOfTags(['x_penetration'], mi), 4)
   eq('通配(包含): 前端镜像', unsafeOfTags(['white_lingerie_set'], mi), 2)
   eq('通配不误伤(前缀不同)', unsafeOfTags(['penetration_test'], mi), 0)
   eq('同一标签两侧一致(不误伤也是两边一致)', safety.unsafeLevelOf(['penetration_test'], m), unsafeOfTags(['penetration_test'], mi))
+  eq('迁移写回: 文件里段名已换成 [L4]/[L2]', fs.readFileSync(dataFile('safety_tags.txt'), 'utf8').includes('[L4]'), true)
 }
 
 /* ============================================================
@@ -347,39 +369,39 @@ const mirrorOf = (m) => ({ core: compileRules(m.core.raw), edge: compileRules(m.
  *
  * 数字算错**不会崩, 只会骗人** —— 开关上写着 −3、网格里实际少掉 5 张, 而用户没有
  * 任何办法自查。所以这里拿主进程的 hiddenAt 逐条跑一遍, 把两处口径钉死:
- *   core 档藏 unsafe=1; edge 档藏 unsafe=1 和 2(core 段在 edge 档照样藏)。
+ *   hist[u] = 档位恰好 u 的条数; 上限 N 会隐藏 = sum(hist[N+1..4])。
  */
 const { countHits } = await load('src/utils/safetyMatch.js')
 {
   const mixed = [
-    { unsafe: 0 }, { unsafe: 1 }, { unsafe: 2 }, { unsafe: 1 }, { unsafe: 0 }, { unsafe: 2 },
+    { unsafe: 0 }, { unsafe: 1 }, { unsafe: 2 }, { unsafe: 1 }, { unsafe: 0 }, { unsafe: 4 },
   ]
   const byNum = (it) => it.unsafe
   const h = countHits(mixed, byNum)
-  eq('计数: core 档 == 逐条 hiddenAt(core)',
-    h.core, mixed.filter((i) => safety.hiddenAt(i.unsafe, 'core')).length)
-  eq('计数: edge 档 == 逐条 hiddenAt(edge)',
-    h.edge, mixed.filter((i) => safety.hiddenAt(i.unsafe, 'edge')).length)
-  eq('计数: core 只数 unsafe=1', h.core, 2)
-  eq('计数: edge 是两档合并(=1 与 =2 都算)', h.edge, 4)
-  eq('计数: 干净的一批', JSON.stringify(countHits([{ unsafe: 0 }], byNum)), '{"core":0,"edge":0}')
-  eq('计数: 空列表不炸', JSON.stringify(countHits([], byNum)), '{"core":0,"edge":0}')
-  eq('计数: 非数组入参不炸', JSON.stringify(countHits(null, byNum)), '{"core":0,"edge":0}')
+  const sumAbove = (n) => h.hist.reduce((a, v, u) => a + (u > n ? v : 0), 0)
+  eq('计数: 上限 2 == 逐条 hiddenAt(2)',
+    sumAbove(2), mixed.filter((i) => safety.hiddenAt(i.unsafe, 2)).length)
+  eq('计数: 上限 0 == 逐条 hiddenAt(0)',
+    sumAbove(0), mixed.filter((i) => safety.hiddenAt(i.unsafe, 0)).length)
+  eq('计数: 直方图分档正确', JSON.stringify(h.hist), '[0,2,1,0,1]')
+  eq('计数: 干净的一批', JSON.stringify(countHits([{ unsafe: 0 }], byNum).hist), '[0,0,0,0,0]')
+  eq('计数: 空列表不炸', JSON.stringify(countHits([], byNum)), '{"hist":[0,0,0,0,0],"total":0}')
+  eq('计数: 非数组入参不炸', JSON.stringify(countHits(null, byNum)), '{"hist":[0,0,0,0,0],"total":0}')
 
   /* 库外图(扫描页 / 收藏快照)没有 unsafe 字段 —— 同一个计数函数喂"按标签现算"的
      取值函数也要出同样的数。守住"两种取值方式共用一份计数逻辑"。
-     (此时 safety_tags.txt 已被上面那段换成 [core]*_penetration / [edge]*_lingerie*) */
+     (此时 safety_tags.txt 已被上面那段迁移成 [L4]*_penetration / [L2]*_lingerie*) */
   const m2 = safety.safetyMatcher()
   const mi2 = mirrorOf(m2)
   const items = [
-    { tags: ['x_penetration', '1girl'] },   // 命中 core -> 1
+    { tags: ['x_penetration', '1girl'] },   // 命中 L4 -> 4
     { tags: ['1girl', 'smile'] },           // 干净 -> 0
-    { tags: ['white_lingerie_set'] },       // 只命中 edge -> 2
+    { tags: ['white_lingerie_set'] },       // 只命中 L2 -> 2
   ]
   const byTag = countHits(items, (it) => unsafeOfTags(it.tags, mi2))
   const byTagMain = countHits(items, (it) => safety.unsafeLevelOf(it.tags, m2))
   eq('计数(库外图): 前端镜像与主进程同数', JSON.stringify(byTag), JSON.stringify(byTagMain))
-  eq('计数(库外图): 命中 core 1 张 / edge 档共 2 张', JSON.stringify(byTag), '{"core":1,"edge":2}')
+  eq('计数(库外图): L4 一张 / L2 一张(干净图不进直方图)', JSON.stringify(byTag.hist), '[0,0,1,0,1]')
 }
 
 /* ---------------------------------------------------------- 扫描页的图片尺寸 */

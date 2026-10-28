@@ -79,7 +79,7 @@ async function applySafetyThumb() {
   cur.value = bestPortraitOf(safe, cur.value) || safe[0]?.path || ''
   //                                        ^ 一张可见的都没有 -> 空串 = 默认占位封面
 }
-watch(() => `${safety.on}|${safety.level}`, applySafetyThumb)
+watch(() => `${safety.on}|${safety.maxLevel}`, applySafetyThumb)
 
 /* ---- 中文名兜底: 入车时的 name 可能是英文短名, 显示时现查一次翻译 ---- */
 const nameZh = ref('')

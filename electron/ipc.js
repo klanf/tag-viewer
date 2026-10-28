@@ -85,8 +85,41 @@ import { flog } from './core/filelog.js'
 
 const log = (...a) => console.log('[ipc]', ...a)
 // 细分槽位映射缓存(2026-10-27): knowledge/tag_slots.json 的 {tag: 细分中文组},
-// tags:cats 时随 cats 一起下发; 懒加载, 文件缺失静默降级为空表
+// tags:cats 时随 cats 一起下发; 懒加载, 文件缺失静默降级为空表。
+// 2026-10-28: 缓存结构改为 { m: {tag: 中文组}, meta: [{slot, zh}] }, 且叠加
+// 用户手动归类(dataDir/tag_slot_overrides.json) —— 词典文件是构建产物, 手动
+// 归类必须落独立文件, 下发时覆盖合并。
 let tagSlotsCache = null
+let slotOverridesCache = null
+
+/** dataDir/tag_slot_overrides.json: { tag: { slot, zh } }, 损坏/缺失回落空表 */
+function loadSlotOverrides() {
+  if (!slotOverridesCache) {
+    try {
+      slotOverridesCache = JSON.parse(fs.readFileSync(dataFile('tag_slot_overrides.json'), 'utf8')) || {}
+    } catch { slotOverridesCache = {} }
+  }
+  return slotOverridesCache
+}
+
+/** 词典槽位表 + 用户覆盖 合流成下发结构(带缓存, tags:slot:set 时置空重建) */
+function mergeSlotMap() {
+  const m = {}
+  const metaMap = new Map()   // slot -> 中文名(保持词典顺序, 新槽位追加在后)
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(BUNDLED_KNOWLEDGE_DIR, 'tag_slots.json'), 'utf8'))
+    for (const [t, v] of Object.entries(raw.tags || {})) {
+      if (v?.fieldZh) m[t] = v.fieldZh
+      if (v?.slot && !metaMap.has(v.slot)) metaMap.set(v.slot, v.fieldZh || v.slot)
+    }
+  } catch { /* 词典缺失 -> 只剩用户覆盖 */ }
+  for (const [t, o] of Object.entries(loadSlotOverrides())) {
+    if (!o?.slot) continue
+    m[t] = o.zh || o.slot
+    if (!metaMap.has(o.slot)) metaMap.set(o.slot, o.zh || o.slot)
+  }
+  return { m, meta: [...metaMap.entries()].map(([slot, zh]) => ({ slot, zh })) }
+}
 
 /**
  * 库内路径 -> Windows 原生路径(只给 shell API 用)
@@ -764,19 +797,29 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
           db.prepare('UPDATE tags SET cat = ? WHERE name = ?').run(c, n)
         }
       }
-      // 细分槽位表(懒加载+缓存; 文件缺失/损坏时静默降级为空 —— 分组只是少一层小节)
-      if (!tagSlotsCache) {
-        try {
-          const raw = JSON.parse(fs.readFileSync(path.join(BUNDLED_KNOWLEDGE_DIR, 'tag_slots.json'), 'utf8'))
-          const m = {}
-          for (const [t, v] of Object.entries(raw.tags || {})) {
-            if (v?.fieldZh) m[t] = v.fieldZh
-          }
-          tagSlotsCache = m
-        } catch { tagSlotsCache = {} }
-      }
-      return { cats: out, slots: tagSlotsCache }
-    }),
+    // 细分槽位表(懒加载+缓存; 文件缺失/损坏时静默降级为空 —— 分组只是少一层小节)
+    // 2026-10-28: 叠加用户手动归类(dataDir/tag_slot_overrides.json), 并顺带下发
+    // slotMeta(槽位->中文名一览, 给光箱「归类到…」选择器做候选)。
+    if (!tagSlotsCache) tagSlotsCache = mergeSlotMap()
+    return { cats: out, slots: tagSlotsCache.m, slotMeta: tagSlotsCache.meta }
+  }),
+  // 手动归类(2026-10-28 光箱「归类到…」): tag 落到某个槽位小节, slot='' 取消归类
+  // 回到词典默认。写 dataDir/tag_slot_overrides.json —— 不改 knowledge/tag_slots.json
+  // (那是构建产物, 重跑 build-tag-slots.mjs 会被覆盖)。
+  'tags:slot:set': safe(({ tag, slot, zh } = {}) => {
+    const t = String(tag || '').trim()
+    if (!t) return { error: 'empty tag' }
+    const ov = loadSlotOverrides()
+    const s = String(slot || '').trim()
+    if (s) ov[t] = { slot: s, zh: String(zh || '').trim() || s }
+    else delete ov[t]
+    try {
+      fs.writeFileSync(dataFile('tag_slot_overrides.json'), JSON.stringify(ov, null, 2), 'utf8')
+    } catch (e) { return { error: e.message } }
+    slotOverridesCache = ov
+    tagSlotsCache = mergeSlotMap()
+    return { ok: true, slots: tagSlotsCache.m, slotMeta: tagSlotsCache.meta }
+  }),
     // ---------------- 标签改名 / 删除(2026-10-01) ----------------
     // 预览只读; apply 走 tagedit.js(备份 -> 事务 -> rebuildTags), 改完顺手重载数据集
     // —— 否则库是新的、内存里是旧的, 界面看不到改完的效果(与反推后的重载同一理由)。
@@ -832,9 +875,8 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
        切开关/切档位只是改一个 json, 不需要重载八万行数据。 */
     'safety:get': safe(() => ({
       ...safetySummary(),
-      // 两个档位各会隐藏多少张(core 段命中数 / 仅 edge 段命中数)
-      coreHit: ds.unsafeCore,
-      edgeHit: ds.unsafeCore + ds.unsafeEdge,
+      // unsafe 直方图(0-4 各档条数) + 总数: 前端按「显示上限」算会隐藏多少张
+      hist: [...(ds.unsafeHist || [0, 0, 0, 0, 0])],
       total: ds.records.length,
     })),
     'safety:set': safe((raw) => saveSafetyState(raw || {})),
@@ -847,8 +889,8 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       const counts = recomputeSafety()
       return { ...r, ...counts }
     }),
-    'safety:toggle': safe(({ tag, level }) => {
-      const r = toggleSafetyTag(tag, level)
+    'safety:toggle': safe(({ tag, sec }) => {
+      const r = toggleSafetyTag(tag, sec)
       const counts = recomputeSafety()
       return { ...r, ...counts }
     }),

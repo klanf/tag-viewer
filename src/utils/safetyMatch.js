@@ -2,7 +2,7 @@
  * 安全模式的**前端标签匹配镜像**
  * ==============================
  * 主进程 `electron/core/safety.js` 里有一份同样规则的实现(读 `dataDir/safety_tags.txt`
- * 算成 exact/前缀/后缀/包含四组, 再判一张图落在 core 段还是 edge 段)。
+ * 算成 exact/前缀/后缀/包含四组, 再按词典档位表给标签定 0-4 级)。
  *
  * **为什么前端还要再来一份**: 库里那些图的安全标记是读数据集时在主进程算好的
  * (`record.unsafe`), 前端只做数值比较就行 —— 但**扫描页的图是库外的**, 它们的标签是
@@ -46,26 +46,40 @@ export function hitOne(tag, part) {
 }
 
 /**
- * 给一组标签打安全标记 —— 与主进程 `unsafeLevelOf` 等价。
- * @returns {0|1|2} 0=干净 / 1=命中 core 段 / 2=只命中 edge 段
+ * 单标签的敏感等级(0-4) —— 与主进程 `levelOfTag` 等价。
+ * matcher = { secs: {0..4: compiled}, dict: {tag: level} }:
+ *   覆盖段(检查顺序 L0->L4, 先命中先算) > 词典表 > 0。
+ * dict 只收 >0 的词(主进程下发), 查不到按 0。
  */
-export function unsafeOfTags(tags, matcher) {
-  const core = matcher?.core
-  const edge = matcher?.edge
-  const arr = tags || []
-  if (!core || !edge) return 0
-  for (const t of arr) if (hitOne(String(t).toLowerCase(), core)) return 1
-  for (const t of arr) if (hitOne(String(t).toLowerCase(), edge)) return 2
-  return 0
+export function tagLevelOf(tag, matcher) {
+  const t = String(tag).toLowerCase()
+  for (let lv = 0; lv <= 4; lv++) {
+    const part = matcher?.secs?.[lv]
+    if (part && hitOne(t, part)) return lv
+  }
+  return matcher?.dict?.[t] ?? 0
 }
 
 /**
- * 一个列表里**两档各会隐藏多少张** → `{ core, edge }`。
+ * 给一组标签打安全等级 —— 与主进程 `unsafeLevelOf` 等价。
+ * @returns {0..4} 图内所有标签的**最高档**
+ */
+export function unsafeOfTags(tags, matcher) {
+  let max = 0
+  for (const t of tags || []) {
+    const lv = tagLevelOf(t, matcher)
+    if (lv > max) max = lv
+    if (max === 4) break
+  }
+  return max
+}
+
+/**
+ * 一个列表里**各档位**各有多少张 -> `{ hist:[5], total }`。
  *
- * 口径必须与主进程的 `coreHit` / `edgeHit` **逐字一致**（见 safety.js 的 hiddenAt）：
- *   · core = 只命中 core 段的条数（core 档会藏这么多）
- *   · edge = edge 档会藏的总数（= core + 仅命中 edge 的 —— core 段在 edge 档照样藏）
- * 这两个数是"安全模式开关上那个 −N"的来源，算错了不会崩，只会**骗人**：
+ * 口径必须与主进程（dataset.js 的 unsafeHist / query.js 的 unsafeCountOf）
+ * **逐字一致**：「显示上限 N 会隐藏多少张」= sum(hist[N+1..4])。
+ * 这个数是"安全模式开关上那个 −N"的来源，算错了不会崩，只会**骗人**：
  * 开关上写着 −3、实际藏掉 5 张。所以 test:visual 里拿 `hiddenBySafety` 逐条对了一遍。
  *
  * 刻意收一个 `unsafeOf` 取值函数而不是直接读 `item.unsafe`：库内记录是数值直读，
@@ -74,17 +88,15 @@ export function unsafeOfTags(tags, matcher) {
  * `total` 不是命中数, 是给「不安全模式」算补集用的: 该模式隐藏 = total - 敏感数。
  *
  * @param {Array} list
- * @param {(item:any)=>number} unsafeOf 取一张图的敏感级别 0/1/2
- * @returns {{core:number, edge:number, total:number}}
+ * @param {(item:any)=>number} unsafeOf 取一张图的敏感等级 0..4
+ * @returns {{hist:number[], total:number}}
  */
 export function countHits(list, unsafeOf) {
   const arr = Array.isArray(list) ? list : []
-  let core = 0
-  let edge = 0
+  const hist = [0, 0, 0, 0, 0]
   for (const it of arr) {
-    const u = unsafeOf(it)
-    if (u === 1) core++
-    else if (u === 2) edge++
+    const u = Number(unsafeOf(it)) || 0
+    if (u > 0 && u <= 4) hist[u]++
   }
-  return { core, edge: core + edge, total: arr.length }
+  return { hist, total: arr.length }
 }

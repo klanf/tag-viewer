@@ -197,7 +197,7 @@ function decorate(row, coverTagsOverride = null) {
     }
     if (cover && tags && tags.length) {
       const st = loadSafetyState()
-      if (st.on && hiddenAt(unsafeLevelOf(tags, safetyMatcher()), st.level)) cover = ''
+      if (st.on && hiddenAt(unsafeLevelOf(tags, safetyMatcher()), st.maxLevel)) cover = ''
     }
   } catch { /* 坏 JSON 不误伤 */ }
   return {

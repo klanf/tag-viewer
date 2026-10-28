@@ -71,11 +71,14 @@ export const useAppStore = defineStore('app', () => {
    * (knowledge/tag_slots.json, ANIMA 词典+NSFW+手工归槽合流)。查不到 -> '' 兜底,
    * 分组时粗大类不再切小节。 */
   const tagSlots = ref({})
+  /** 槽位一览 [{slot, zh}](2026-10-28): 给光箱「归类到…」选择器做候选 */
+  const slotMeta = ref([])
   async function loadTagCats() {
     try {
       const r = await api.tagsCats()
       if (r?.cats) { tagCats.value = r.cats; catsLoaded.value = true }
       if (r?.slots) tagSlots.value = r.slots
+      if (Array.isArray(r?.slotMeta)) slotMeta.value = r.slotMeta
     } catch { /* 分类映射拉不到不致命: 展示端回落 other */ }
   }
   const SEG_LABEL = {
@@ -88,6 +91,18 @@ export const useAppStore = defineStore('app', () => {
   function segLabel(seg) { return SEG_LABEL[seg] || seg }
   /** 细分组名(2026-10-27): 有槽位记录返回中文组名(头饰/腿袜/眼色...), 无则 '' */
   function slotOf(tag) { return tagSlots.value[tag] || '' }
+  /**
+   * 手动归类(2026-10-28 光箱「归类到…」): 写主进程的 tag_slot_overrides.json
+   * (词典文件是构建产物不能改), 成功后用返回的合流映射**就地更新本地缓存** ——
+   * 分组 computed 依赖 tagSlots, 更新即重排, 不用重拉 tags:cats。
+   * slot='' 表示取消归类(回到词典默认)。
+   */
+  async function setTagSlot(tag, slot, zh = '') {
+    const r = await api.tagsSlotSet(tag, slot, zh)
+    if (r?.slots) tagSlots.value = r.slots
+    if (Array.isArray(r?.slotMeta)) slotMeta.value = r.slotMeta
+    return r
+  }
 
   /* ---- settings.json 的渲染层缓存 ----
    * 前端只读展示偏好(groupedTags 等); 写仍走设置弹窗的 api.settingsSet。
@@ -488,6 +503,7 @@ export const useAppStore = defineStore('app', () => {
     pullAutoState, flushAutoNow, clearAutoPending,
     // 标签分类(2026-10-16): tagCats 映射 + 分段查询助手
     tagCats, catsLoaded, loadTagCats, catOf, segOf, subOf, segLabel, slotOf,
+    slotMeta, setTagSlot,
     settings, pullSettings, setSetting,
   }
 })

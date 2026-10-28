@@ -659,7 +659,7 @@ async function onCharEditSaved(info) {
 
 /* 封面是主进程按**当前安全档位**挑的 —— 🛡 开关/档位一变, 列表层要重拉才拿得到新封面。
    (图片层的网格走 safety.filterItems 即时过滤, 不用重查。) */
-watch(() => `${safety.on}|${safety.level}`, () => {
+watch(() => `${safety.on}|${safety.maxLevel}`, () => {
   if (view.value === 'series') loadSeries()
   else if (view.value === 'chars' && curSeries.value) loadChars(curSeries.value)
 })

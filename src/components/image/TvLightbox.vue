@@ -44,6 +44,7 @@ import { openSeriesInHost } from '@/composables/useSeriesHost.js'
 import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 import TvCopySplit from '../tag/TvCopySplit.vue'
 import TvQuickMoveBar from './TvQuickMoveBar.vue'
+import TvSlotPicker from '../tag/TvSlotPicker.vue'
 import { api, fileUrl } from '@/utils/api.js'
 
 const lb = useLightboxStore()
@@ -57,6 +58,14 @@ const tagFav = useTagFavStore()
 /* 被 ban 标签的 显示/隐藏(2026-10-16): 选择记忆到设置(showBannedTags, 默认开),
  * 与详情页共用同一个偏好。徽章上的命中数不管藏不藏都显示, 不丢信息。 */
 const showBanned = computed(() => app.settings.showBannedTags !== false)
+
+/* 手动归类(2026-10-28): 全部标签列表的 🏷 图标 -> 槽位选择器 */
+const showSlotPicker = ref(false)
+const slotTag = ref('')
+function openClassify(tag) {
+  slotTag.value = tag
+  showSlotPicker.value = true
+}
 function toggleShowBanned() { app.setSetting('showBannedTags', !showBanned.value) }
 
 /* tag 详情页(大图)同样支持右键菜单(复制/收藏/删除等);
@@ -632,6 +641,7 @@ function preheat() {
               :hide-banned="!showBanned"
               copyable
               favable
+              classable
               :fav-tags="tagFav.list"
               :grouped="app.settings.groupedTags !== false"
               chars-first
@@ -641,6 +651,7 @@ function preheat() {
               @copy="copyTag"
               @ban="lb.toggleBan"
               @fav="tagFav.toggle"
+              @classify="openClassify"
               @hover="({ zh, event }) => ui.showTip(zh, event)"
               @leave="ui.hideTip()"
               @mousemove="ui.moveTip($event)"
@@ -650,6 +661,8 @@ function preheat() {
       </div>
     </div>
   </Teleport>
+  <!-- 手动归类选择器(2026-10-28): 挂 Teleport 外层, 自带 TvModal -->
+  <TvSlotPicker v-model="showSlotPicker" :tag="slotTag" />
 </template>
 
 <style scoped>

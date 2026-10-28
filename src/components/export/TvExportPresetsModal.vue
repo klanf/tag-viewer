@@ -46,11 +46,15 @@ const editing = ref(null)     // 表单对象; null = 看列表
 const formErr = ref('')
 
 const MODE_OPTS = [{ value: 'any', label: '任一命中(any)' }, { value: 'all', label: '全部命中(all)' }]
-/* 安全剔除口径(2026-10-18): core=仅露骨段 / edge=露骨+擦边段; follow=跟随全局安全模式档位 */
+/* 安全剔除口径(2026-10-28 等级统一): 阈值 N = 剔除等级 > N 的词;
+ * follow=跟随全局安全模式「显示上限」。旧预设里的 core/edge 仍被主进程
+ * 兼容映射(core→2 / edge→0), 但 UI 不再产生。 */
 const SAFE_LEVEL_OPTS = [
-  { value: 'follow', label: '跟随全局安全模式档位' },
-  { value: 'core', label: 'core —— 只剔明确露骨段' },
-  { value: 'edge', label: 'edge —— 露骨+擦边都剔' },
+  { value: 'follow', label: '跟随全局安全模式上限' },
+  { value: '3', label: 'L3 —— 只剔极端词(L4)' },
+  { value: '2', label: 'L2 —— 剔露骨词(L3+)' },
+  { value: '1', label: 'L1 —— 剔暗示词(L2+)' },
+  { value: '0', label: 'L0 —— 擦边以上全剔(最严)' },
 ]
 const MATCH_OPTS = [{ value: 'contains', label: '包含(contains)' }, { value: 'exact', label: '完全相等(exact)' }]
 
@@ -470,6 +474,7 @@ function shortDir(d) {
           <TvCheckbox v-model="editing.params.strip_view" label="剔除视角/机位标签" title="去掉 from behind / high angle / dutch angle 等视角机位类标签, 词表 data/export_view_tags.txt 可自行增删" />
           <TvCheckbox v-model="editing.params.seg_mode" label="段位模式（只留内容 tag）" title="过滤画师/角色/系列/meta, 人数排最前, 通用按分类归堆 —— 给绘图管线随机抽注入用; 关掉则保持原始顺序" />
           <TvCheckbox v-model="editing.params.safe_only" label="只导出安全模式的标签" title="每个标签串里剔除敏感tag, 行数不变。敏感词表分 core(明确露骨)/edge(擦边)两段, 口径在下面选" />
+          <TvCheckbox v-model="editing.params.groups" label="过滤组去冲突(槽内单选+互斥)" title="导出前按槽位词典消解: 同槽位只留本地图片量最多的一个, 并消解裸足×无鞋这类互斥对; 仅对单人图生效, 群像原样保留" />
           <div v-if="editing.params.safe_only" class="half safe-level-row">
             <span class="lb">剔除口径</span>
             <TvSelect v-model="editing.params.safe_level" size="sm" :options="SAFE_LEVEL_OPTS" />

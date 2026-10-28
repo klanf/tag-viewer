@@ -30,14 +30,27 @@ const note = ref('')
 const text = ref('')
 const showText = ref(false)
 const newTag = ref('')
-const newLevel = ref('core')
+const newSec = ref('L4')
+
+/** 等级标尺(与槽位词典同一把尺): 上限选 N, unsafe > N 的图藏 */
+const LEVEL_CHIPS = [
+  { lv: 4, label: '≤L4 · 全显示' },
+  { lv: 3, label: '≤L3 · 藏极端(L4)' },
+  { lv: 2, label: '≤L2 · 藏露骨(L3+)' },
+  { lv: 1, label: '≤L1 · 藏暗示(L2+)' },
+  { lv: 0, label: '≤L0 · 只留常规' },
+]
+const SEC_LABEL = {
+  L0: '常规', L1: '擦边', L2: '明显暗示', L3: '露骨', L4: '极端',
+}
+const SEC_TONES = { L0: 'ok', L1: '', L2: 'warn', L3: 'warn', L4: 'danger' }
 
 const pct = computed(() => (
   safety.total ? `${((safety.hiddenCount / safety.total) * 100).toFixed(1)}%` : '—'
 ))
 const hintText = computed(() => (safety.mode === 'unsafe'
-  ? '开启后只保留命中下面标签的图, 其余全部不渲染 —— 这是安全模式的取反。只影响显示, 库里的数据一行不动, 关掉立刻全回来。'
-  : '开启后, 命中下面标签的图在看板里不再渲染。只影响显示 —— 库里的数据一行不动、统计数字也不重算, 关掉立刻全回来。'))
+  ? '开启后只保留超过显示上限的图, 其余全部不渲染 —— 这是安全模式的取反。只影响显示, 库里的数据一行不动, 关掉立刻全回来。'
+  : '开启后, 超过「显示上限」的图(图内任一标签的等级更高)在看板里不再渲染。等级与槽位词典同一把 0-4 的尺; 下面各段的标签会覆盖词典档位, 写 [L0] 可以把敏感词拉回常规。'))
 
 watch(() => props.modelValue, async (v) => {
   if (!v) return
@@ -59,8 +72,8 @@ async function onToggle(v) {
 }
 
 async function setLevel(lv) {
-  if (safety.level === lv) return
-  try { await safety.set({ level: lv }) } catch (e) { note.value = e.message }
+  if (safety.maxLevel === lv) return
+  try { await safety.set({ maxLevel: lv }) } catch (e) { note.value = e.message }
 }
 
 /** 切「安全 / 不安全」显示方式。
@@ -77,16 +90,16 @@ async function setMode(m) {
   }
 }
 
-async function toggleTag(tag, level) {
+async function toggleTag(tag, sec) {
   busy.value = true
   try {
-    const r = await safety.toggleTag(tag, level)
+    const r = await safety.toggleTag(tag, sec)
     if (r?.wildcard) {
       note.value = `「${tag}」是被通配规则 ${r.wildcard} 命中的 —— 要改得在下面的原始文本里改`
     } else if (r?.note) {
       note.value = r.note
     } else {
-      note.value = `已${r?.inSet ? '加入' : '移出'} ${level} 段: ${tag}`
+      note.value = `已${r?.inSet ? `加入 ${sec} 段` : '移出'}: ${tag}`
     }
     text.value = await safety.loadText()
   } catch (e) {
@@ -99,7 +112,7 @@ async function toggleTag(tag, level) {
 async function addTag() {
   const t = String(newTag.value || '').trim().toLowerCase().replace(/\s+/g, '_')
   if (!t) return
-  await toggleTag(t, newLevel.value)
+  await toggleTag(t, newSec.value)
   newTag.value = ''
 }
 
@@ -149,25 +162,22 @@ async function saveText() {
       </div>
 
       <div class="row">
-        <span class="lab">口径</span>
+        <span class="lab">显示上限</span>
         <TvChip
-          label="core · 明确裸露 / 性行为"
-          :active="safety.level === 'core'"
-          @click="setLevel('core')"
-        />
-        <TvChip
-          label="edge · 再加擦边 / 内衣 / 打码"
-          :active="safety.level === 'edge'"
-          @click="setLevel('edge')"
+          v-for="c in LEVEL_CHIPS"
+          :key="c.lv"
+          :label="c.label"
+          :active="safety.maxLevel === c.lv"
+          @click="setLevel(c.lv)"
         />
       </div>
 
       <div class="stat">
-        当前档位在<b>整个库</b>里会隐藏
+        当前上限在<b>整个库</b>里会隐藏
         <b>{{ nfmt(safety.hiddenCount) }}</b> / {{ nfmt(safety.total) }} 张
         <span class="faint">（{{ pct }}）</span>
         <span v-if="safety.mode === 'unsafe'" class="faint">
-          · 不安全模式下只保留命中该档的 {{ nfmt(safety.sensitiveCount) }} 张
+          · 不安全模式下只保留超过上限的 {{ nfmt(safety.sensitiveCount) }} 张
         </span>
       </div>
       <!-- 这里的口径刻意是"整个库"(改集合看的是全局影响); 各页面工具栏上那个
@@ -176,36 +186,19 @@ async function saveText() {
         工具栏上那个 −N 是<b>当前页面 / 当前来源</b>会隐藏的张数，跟这里的全库数字不同。
       </div>
 
-      <section>
+      <section v-for="sec in ['L4', 'L3', 'L2', 'L1', 'L0']" :key="sec">
         <h4>
-          [core] {{ safety.core.length }} 个标签
-          <span class="faint">默认档 · 点标签可移出</span>
+          [{{ sec }}] {{ (safety.secs[sec] || []).length }} 个标签
+          <span class="faint">{{ SEC_LABEL[sec] }} · 点标签可移出</span>
         </h4>
         <div class="tags">
           <TvChip
-            v-for="t in safety.core"
-            :key="`c-${t}`"
+            v-for="t in safety.secs[sec] || []"
+            :key="`${sec}-${t}`"
             :label="t"
             removable
-            tone="danger"
-            @remove="toggleTag(t, 'core')"
-          />
-        </div>
-      </section>
-
-      <section>
-        <h4>
-          [edge] {{ safety.edge.length }} 个标签
-          <span class="faint">在 core 之上追加 · 点标签可移出</span>
-        </h4>
-        <div class="tags">
-          <TvChip
-            v-for="t in safety.edge"
-            :key="`e-${t}`"
-            :label="t"
-            removable
-            tone="warn"
-            @remove="toggleTag(t, 'edge')"
+            :tone="SEC_TONES[sec]"
+            @remove="toggleTag(t, sec)"
           />
         </div>
       </section>
@@ -218,9 +211,10 @@ async function saveText() {
           :disabled="busy"
           @keyup.enter="addTag"
         >
-        <select v-model="newLevel" class="tsel" :disabled="busy">
-          <option value="core">加到 core</option>
-          <option value="edge">加到 edge</option>
+        <select v-model="newSec" class="tsel" :disabled="busy">
+          <option v-for="sec in ['L0', 'L1', 'L2', 'L3', 'L4']" :key="sec" :value="sec">
+            加到 {{ sec }}（{{ SEC_LABEL[sec] }}）
+          </option>
         </select>
         <TvButton size="sm" :disabled="busy" @click="addTag">加入</TvButton>
       </div>

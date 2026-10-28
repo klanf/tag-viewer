@@ -107,7 +107,7 @@ const reroll = () => { if (props.active) load(); else stale = true }
 watch(() => prefs.seriesShowZero, reroll)
 watch(() => src.selected.slice(), reroll)
 /* 封面是主进程按当前安全档位挑的, 档位一变卡片图要重拿 */
-watch(() => `${safety.on}|${safety.level}`, reroll)
+watch(() => `${safety.on}|${safety.maxLevel}`, reroll)
 watch(() => props.active, (v) => { if (v && stale) { stale = false; load() } })
 
 function openChar(c) {

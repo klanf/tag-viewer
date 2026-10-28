@@ -1,11 +1,16 @@
 /**
- * 安全模式 —— 按标签集合隐藏露骨内容（只做展示层过滤）
+ * 安全模式 —— 按标签**等级**(0-4)隐藏内容（只做展示层过滤）
  * ====================================================
- * 开关与档位由主进程持有（`dataDir/safety.json`），标签集合在
- * `dataDir/safety_tags.txt`（两段式，用户可直接编辑）。这里只是镜像 + 判定。
+ * 开关与显示上限由主进程持有（`dataDir/safety.json`），标签等级集合在
+ * `dataDir/safety_tags.txt`（[L0]..[L4] 分段，用户可直接编辑；词典档位作底、
+ * 这里覆盖）。这里只是镜像 + 判定。
  *
- * **为什么可以随便开关**：每张图的敏感标记（`record.unsafe` = 0/1/2）是
- * 主进程**读数据集时一次算好**的，前端只做数值比较 —— 于是切开关、切档位
+ * **等级模型(2026-10-28 统一)**：每个标签 0-4 级(与槽位词典同一把尺)，一张图的
+ * `unsafe` = 它所有标签的最高档；「显示上限」maxLevel 选 N，unsafe > N 的图藏
+ * （不安全模式取反）。
+ *
+ * **为什么可以随便开关**：每张图的敏感标记（`record.unsafe` = 0..4）是
+ * 主进程**读数据集时一次算好**的，前端只做数值比较 —— 于是切开关、切上限
  * 都不需要重载八万行数据，库里的一行也不会变。关掉立刻全回来。
  *
  * **库外图（扫描页）没有那个标记**：它们的标签是现场从 PNG 元数据解析的，库里没有
@@ -13,7 +18,7 @@
  * （见 utils/safetyMatch.js）—— 这样"能看到图片的地方"就都能过滤，不只在库内页面。
  * 逐张现算会有开销（一张图约 40 个标签），用 WeakMap 按"标签数组引用 + 规则代次"记忆。
  *
- * 默认是**关闭**：实测 core 档会藏掉 58% 的图，这种东西不能默认开。
+ * 默认是**关闭**：上限调低会藏掉大半的图，这种东西不能默认开。
  */
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
@@ -22,36 +27,56 @@ import { hiddenBySafety } from '@/utils/format.js'
 import { compileRules, unsafeOfTags, countHits as countHitsOf } from '@/utils/safetyMatch.js'
 import { useAppStore } from './useAppStore.js'
 
+const EMPTY_HIST = [0, 0, 0, 0, 0]
+
+/** hist[N+1..4] 求和 = 上限 N 会隐藏的张数 */
+function hiddenAbove(hist, maxLevel) {
+  let n = 0
+  for (let u = maxLevel + 1; u <= 4; u++) n += hist[u] || 0
+  return n
+}
+
 export const useSafetyStore = defineStore('safety', () => {
   const on = ref(false)
-  const level = ref('core')        // core | edge
+  const maxLevel = ref(2)          // 显示上限 0-4: unsafe > maxLevel 的图藏
   /** safe = 隐藏敏感; unsafe = 「不安全模式」, 只显示敏感(取反) */
   const mode = ref('safe')
-  const coreHit = ref(0)           // core 档会隐藏多少张
-  const edgeHit = ref(0)           // edge 档会隐藏多少张
+  const hist = ref([...EMPTY_HIST])// 全库 unsafe 直方图(主进程 safety:get 下发)
   const total = ref(0)             // 数据集总条数(用来算占比)
-  const core = ref([])             // core 段的标签(界面展示)
-  const edge = ref([])             // edge 段的标签
+  /** 覆盖段标签(界面展示): { L0: [], L1: [], ..., L4: [] } */
+  const secs = ref({ L0: [], L1: [], L2: [], L3: [], L4: [] })
+  /** 词典档位表(主进程下发, {tag: 1..4}) —— 覆盖段管不到的词按它兜底 */
+  const dict = ref({})
   const loaded = ref(false)
 
   /** 编译后的规则(库外图现算用) + 代次(规则一变, 记忆就作废) */
-  const matcher = computed(() => ({ core: compileRules(core.value), edge: compileRules(edge.value) }))
+  const matcher = computed(() => {
+    const secsC = {}
+    for (let lv = 0; lv <= 4; lv++) {
+      const list = secs.value[`L${lv}`] || []
+      secsC[lv] = compileRules(list)
+    }
+    return { secs: secsC, dict: dict.value }
+  })
   let gen = 0
   let tagsMemo = new WeakMap()
-  watch([core, edge], () => { gen++; tagsMemo = new WeakMap() })
+  watch([secs, dict], () => { gen++; tagsMemo = new WeakMap() })
 
   function apply(d) {
     if (!d) return
     on.value = d.on === true
-    level.value = d.level === 'edge' ? 'edge' : 'core'
-    mode.value = d.mode === 'unsafe' ? 'unsafe' : 'safe'
-    /* safety:set 只回开关/档位/模式, 不回计数 —— 这里必须"有才覆盖",
+    /* safety:set 只回开关/上限/模式, 不回计数 —— 这里必须"有才覆盖",
      * 否则每切一次模式, 上面那句「会隐藏 N / M」就被清零成 0/0(2026-10-23 探针抓到)。 */
-    if (d.coreHit !== undefined) coreHit.value = Number(d.coreHit) || 0
-    if (d.edgeHit !== undefined) edgeHit.value = Number(d.edgeHit) || 0
+    if (d.maxLevel !== undefined) maxLevel.value = Math.max(0, Math.min(4, Number(d.maxLevel) || 0))
+    mode.value = d.mode === 'unsafe' ? 'unsafe' : 'safe'
+    if (Array.isArray(d.hist)) hist.value = [...d.hist].slice(0, 5).map((n) => Number(n) || 0)
     if (d.total !== undefined) total.value = Number(d.total) || 0
-    if (Array.isArray(d.core)) core.value = d.core
-    if (Array.isArray(d.edge)) edge.value = d.edge
+    if (d.words && typeof d.words === 'object') {
+      const next = { L0: [], L1: [], L2: [], L3: [], L4: [] }
+      for (let lv = 0; lv <= 4; lv++) if (Array.isArray(d.words[`L${lv}`])) next[`L${lv}`] = d.words[`L${lv}`]
+      secs.value = next
+    }
+    if (d.dictLevels && typeof d.dictLevels === 'object') dict.value = d.dictLevels
   }
 
   async function load() {
@@ -66,12 +91,11 @@ export const useSafetyStore = defineStore('safety', () => {
   /* **规则表必须自己拉一次** —— 别把"加载"这件事交给某个弹窗。
    *
    * 2026-09-23 踩到: load() 原来只在 TvSafetyModal 打开时调用。于是**没打开过设置台**
-   * 的用户手里是 core=[] / edge=[]，`compileRules([])` 得到的是**空规则** ——
-   * 库外图（扫描页那些 / 收藏里的标签快照）的安全判定**恒为 0**：开关看着能开能关、
-   * toast 也报，实际对那批图毫无作用，且不报任何错。库内图不受影响（它们用主进程算好的
-   * `unsafe` 字段），所以问题只藏在"前端镜像判定"这条路上，特别难发现 ——
+   * 的用户手里是空规则，库外图（扫描页那些 / 收藏里的标签快照）的安全判定**恒为 0**：
+   * 开关看着能开能关、toast 也报，实际对那批图毫无作用，且不报任何错。库内图不受影响
+   * （它们用主进程算好的 `unsafe` 字段），所以问题只藏在"前端镜像判定"这条路上。
    * 是 e2e 里"关着也显示的数字应该是 1、结果读到 0"把它翻出来的。
-   * 顺带修掉另一个: 重启后 `on` / `level`（存在 safety.json 里）也读不出来。
+   * 顺带修掉另一个: 重启后 `on` / `maxLevel`（存在 safety.json 里）也读不出来。
    *
    * 并发调用只发一次请求。 */
   let pending = null
@@ -83,8 +107,8 @@ export const useSafetyStore = defineStore('safety', () => {
   // store 第一次被某个组件拿到时就发请求(不等 await —— 谁需要谁 await ensureLoaded)
   ensureLoaded()
 
-  /** 改开关 / 档位（写主进程的 safety.json，并同步本地镜像）
-   *  —— **不需要**重查列表: 记录的 unsafe 标记没变, 只是这里的 on/level 变了,
+  /** 改开关 / 上限（写主进程的 safety.json，并同步本地镜像）
+   *  —— **不需要**重查列表: 记录的 unsafe 标记没变, 只是这里的 on/maxLevel 变了,
    *  卡片上的 computed 自己会重算。 */
   async function set(patch) {
     apply(await call('safety:set', patch || {}))
@@ -95,7 +119,7 @@ export const useSafetyStore = defineStore('safety', () => {
     return r?.text || ''
   }
 
-  /* 下面两个是**改集合**（不只是切档位），所以多一步:
+  /* 下面两个是**改集合**（不只是切上限），所以多一步:
    * 主进程会重算所有记录的 unsafe 标记, 而渲染层手里是上一次查询的副本 ——
    * 得让各视图重查一次才拿得到新标记(不会重载数据集, 只是重跑当前查询)。 */
   async function saveText(text) {
@@ -106,16 +130,16 @@ export const useSafetyStore = defineStore('safety', () => {
     return r
   }
 
-  async function toggleTag(tag, level) {
-    const r = await call('safety:toggle', { tag, level })
+  async function toggleTag(tag, sec) {
+    const r = await call('safety:toggle', { tag, sec })
     await load()
     useAppStore().bumpEpoch()
     return r
   }
 
-  /** 当前档位 / 模式会隐藏的张数。
-   *  unsafe 模式是取反: 隐藏 = 总数 - 该档位的敏感数。 */
-  const sensitiveCount = computed(() => (level.value === 'edge' ? edgeHit.value : coreHit.value))
+  /** 当前上限 / 模式会隐藏的张数(整个库口径)。
+   *  unsafe 模式是取反: 隐藏 = 总数 - 敏感数。 */
+  const sensitiveCount = computed(() => hiddenAbove(hist.value, maxLevel.value))
   const hiddenCount = computed(() => (
     mode.value === 'unsafe'
       ? Math.max(0, total.value - sensitiveCount.value)
@@ -124,8 +148,8 @@ export const useSafetyStore = defineStore('safety', () => {
   const hiddenPct = computed(() => (total.value ? (hiddenCount.value / total.value) * 100 : 0))
 
   /**
-   * 一张图的敏感级别 0/1/2。
-   *  - 库内记录: 直接用主进程算好的 `unsafe`（读数据集时一次算好，切档只做数值比较）
+   * 一张图的敏感等级 0..4。
+   *  - 库内记录: 直接用主进程算好的 `unsafe`（读数据集时一次算好，切上限只做数值比较）
    *  - 库外图(扫描页): 没有这个字段 -> 用前端镜像规则按它的标签现算
    */
   function unsafeOf(item) {
@@ -144,7 +168,7 @@ export const useSafetyStore = defineStore('safety', () => {
    *  不安全模式(2026-10-23) = 把"安全模式会显示的"全藏掉, 只留敏感的。 */
   function isHidden(item) {
     if (!on.value || !item) return false
-    const sensitive = hiddenBySafety(unsafeOf(item), level.value)
+    const sensitive = hiddenBySafety(unsafeOf(item), maxLevel.value)
     return mode.value === 'unsafe' ? !sensitive : sensitive
   }
 
@@ -159,15 +183,13 @@ export const useSafetyStore = defineStore('safety', () => {
   }
 
   /**
-   * 一个列表里**两档各会隐藏多少张** → `{ core, edge }`。
+   * 一个列表里**各档位**各有多少张 -> `{ hist:[5], total }`。
    *
    * 与 `filterItems` 的关键区别：**不看 `on`**。开关关着也算 —— 这正是用户要的
-   * "我还没打开这个开关的时候，也应该看得到打开会少多少张"（以前关掉时开关上的
-   * 数字直接消失，看着就像 0）。口径与主进程的 coreHit/edgeHit 逐字一致：
-   *   · core = 只命中 core 段的条数（core 档会藏这么多）
-   *   · edge = edge 档会藏的总数（= core + 仅命中 edge 的，因为 core 段在 edge 档也藏）
+   * "我还没打开这个开关的时候，也应该看得到打开会少多少张"。口径与主进程
+   * 的 hist 逐字一致：上限 N 会隐藏 = sum(hist[N+1..4])。
    *
-   * 一次遍历同时出两个数：切档位时不用重算（视图里把它包 computed，只有列表
+   * 一次遍历直方图全出来：切上限时不用重算（视图里把它包 computed，只有列表
    * 引用变 / 规则变才重跑）。判定走 `unsafeOf` —— 库内记录是数值直读，
    * 库外图（扫描页/收藏快照）才现算标签，且有 WeakMap 记忆。
    */
@@ -176,7 +198,7 @@ export const useSafetyStore = defineStore('safety', () => {
   }
 
   return {
-    on, level, mode, coreHit, edgeHit, total, core, edge, loaded,
+    on, maxLevel, mode, hist, total, secs, dict, loaded,
     load, ensureLoaded, set, loadText, saveText, toggleTag,
     sensitiveCount, hiddenCount, hiddenPct,
     isHidden, unsafeOf, filterItems, countHits,

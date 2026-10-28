@@ -63,7 +63,7 @@ function topN(map, n) {
 // ---------------------------------------------------------------- 搜索
 
 /**
- * 当前结果集里两档各会隐藏多少张 —— 给安全模式开关上那个数字用(2026-09-23)。
+ * 当前结果集里各档位的直方图 —— 给安全模式开关上那个数字用(2026-09-23)。
  *
  * 为什么非得在后端算: 看板 / 系列 / 标签图片三页走的是**分页**的 feed
  * (useImageFeed), 前端手里只有已加载的那几十张。拿它算出来的数字会随着往下滚
@@ -74,23 +74,21 @@ function topN(map, n) {
  * `applySort` 是 in-place 的, 引用也不变。只有带文件名过滤时会 filter 出新数组
  * (少数路径), 那种情况多扫一遍也就是一次线性遍历。
  *
- * 口径与 ipc 的 `coreHit` / `edgeHit` 逐字一致(见 safety.js 的 hiddenAt):
- *   core = 只命中 core 段的条数; edge = edge 档会隐藏的总数(= core + 仅命中 edge 的)。
+ * 口径与 ipc 的 safety:get 一致(见 safety.js 的 hiddenAt):
+ *   hist[u] = unsafe 恰好为 u 的条数; 「上限 N 会隐藏多少张」= sum(hist[N+1..4])。
  */
 const unsafeMemo = new WeakMap()
 function unsafeCountOf(results) {
   let v = unsafeMemo.get(results)
   if (v) return v
-  let core = 0
-  let edge = 0
+  const hist = [0, 0, 0, 0, 0]
   for (const r of results) {
-    const u = r.unsafe
-    if (u === 1) core++
-    else if (u === 2) edge++
+    const u = Number(r.unsafe) || 0
+    if (u > 0 && u <= 4) hist[u]++
   }
   /* total 不是"会隐藏多少张", 是给「不安全模式」算**补集**用的:
      该模式隐藏 = 总数 - 敏感数。前端把 total 一起收在 counts 里。 */
-  v = { core, edge: core + edge, total: results.length }
+  v = { hist, total: results.length }
   unsafeMemo.set(results, v)
   return v
 }
@@ -184,7 +182,7 @@ function coverIdx(ids) {
   let pool = ids
   const st = loadSafetyState()
   if (st.on) {
-    const lvl = st.level === 'edge' ? 'edge' : 'core'
+    const lvl = st.maxLevel
     const safe = []
     for (const i of ids) {
       const r = ds.records[i]
@@ -770,7 +768,7 @@ export function getScanTagImages(raw = {}) {
     results: items.slice(offset, offset + limit),
     /* 安全模式在渲染层按 tags 过滤(与扫描页同款)。total 让工具栏能算
        「不安全模式」下会隐藏多少张(总数 - 敏感数); 敏感数由渲染层按 tags 现算。 */
-    unsafe: { core: 0, edge: 0, total: items.length },
+    unsafe: { hist: [0, 0, 0, 0, 0], total: items.length },
   }
 }
 
@@ -791,7 +789,7 @@ export function getCoverCandidates(raw = {}) {
   const p = parseQuery(raw)
   const srcSet = p.srcSet
   const st = loadSafetyState()
-  const lvl = st.level === 'edge' ? 'edge' : 'core'
+  const lvl = st.maxLevel
 
   let ids = []
   if (kind === 'series') {
