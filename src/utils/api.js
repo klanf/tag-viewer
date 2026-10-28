@@ -287,6 +287,14 @@ export const api = {
   // 剪贴板
   copy: (text) => call('clipboard:write', { text }),
 
+  // 随机抽签(pin + 权重窗口 + 查重降权; 引擎在 electron/core/random.js, 与 CLI 共用)
+  random: {
+    draw: (q) => call('random:draw', q),
+    meta: () => call('random:meta'),
+    ledger: () => call('random:ledger'),
+    resetCounts: () => call('random:resetCounts'),
+  },
+
   // 诊断
   diag: () => call('diag:stats'),
   clearSearchCache: () => call('diag:clearSearchCache'),

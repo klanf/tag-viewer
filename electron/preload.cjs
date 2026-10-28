@@ -84,6 +84,8 @@ const CHANNELS = new Set([
   'clipboard:write',
   // 诊断
   'diag:stats', 'diag:clearSearchCache', 'diag:clearThumbs', 'diag:fileInfo',
+  // 随机抽签(pin + 权重窗口 + 查重降权, 2026-10-28)
+  'random:draw', 'random:meta', 'random:ledger', 'random:resetCounts',
 ])
 
 /**

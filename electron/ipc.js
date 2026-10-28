@@ -71,6 +71,7 @@ import {
 // ds/tagPoolSize 供旧逻辑用; recomputeSafety 只为读数据集里那两个敏感标记计数
 // (安全模式界面要显示"开了会隐藏多少张"), 别拆成两行 import —— ESM 会因重复声明直接报错。
 import { ds, tagPoolSize, recomputeSafety, relocateRecord } from './core/dataset.js'
+import { randomDraw, randomMeta, randomResetCounts, randomLedger } from './core/random.js'
 import { searchStats, clearSearchCache } from './core/search.js'
 import { moveFile, copyFile } from './core/fileTransfer.js'
 import { spawnOpenWith, detectPhotoshop, INPAINT_EXE } from './core/externalApp.js'
@@ -894,6 +895,15 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       const counts = recomputeSafety()
       return { ...r, ...counts }
     }),
+
+    // ---------------- 随机抽签(pin + 权重窗口 + 查重降权) ----------------
+    'random:draw': safe(({ n, level, seed, pins, profile, tagsTarget, char, save } = {}) => {
+      const r = randomDraw({ n, level, seed, pins, profile, tagsTarget, char, save })
+      return r.error ? { error: r.error, warns: r.warns || [] } : r
+    }),
+    'random:meta': safe(() => randomMeta()),
+    'random:ledger': safe(() => randomLedger()),
+    'random:resetCounts': safe(() => randomResetCounts()),
 
     // ---------------- 购物车历史 ----------------
     'cart:history': safe(() => historySummary()),

@@ -30,6 +30,7 @@ import TvBatchBar from '@/components/image/TvBatchBar.vue'
 import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
 import TvRulesEditorModal from '@/components/rules/TvRulesEditorModal.vue'
 import TvExportPresetsModal from '@/components/export/TvExportPresetsModal.vue'
+import TvRandomModal from '@/components/random/TvRandomModal.vue'
 import TvDupPanel from '@/components/dup/TvDupPanel.vue'
 import TagImagesPanel from '@/components/tag/TagImagesPanel.vue'
 import TvSeriesCharsPanel from '@/components/series/TvSeriesCharsPanel.vue'
@@ -121,6 +122,7 @@ const statsLoading = ref(false)
 const showBlacklist = ref(false)
 const showReplace = ref(false)
 const showPresets = ref(false)
+const showRandom = ref(false)     // 随机抽签弹层(pin + 权重窗口 + 查重)
 const showDup = ref(false)         // 相似图查重面板(2026-10-17)
 const exportMenu = ref(false)      // 「⬇ 导出标签 ▾」下拉是否展开
 const menuUp = ref(false)          // 下方放不下时翻到按钮上方开(路径栏占了 38px 后, 竖向余量不够了)
@@ -671,6 +673,12 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
             <TvButton
               variant="ghost"
               size="sm"
+              title="随机抽签: 固定 pin + 段级权重窗口 + 查重降权(与 CLI random-prompt 共用引擎)"
+              @click="showRandom = true"
+            >🎲 随机抽签</TvButton>
+            <TvButton
+              variant="ghost"
+              size="sm"
               title="按标签相似度找疑似重复的图片组(全库扫描约 2 秒, 只展示不动文件)"
               @click="showDup = true"
             >🔎 查重</TvButton>
@@ -819,6 +827,7 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
     <MoveTargetModal v-model="moveOpen" :count="selected.size" :folders="moveFolders" :busy="moving" @pick="doMove" />
     <MoveTargetModal v-model="copyOpen" mode="copy" :count="selected.size" :folders="moveFolders" :busy="copying" @pick="doCopy" />
     <TvDupPanel v-model="showDup" />
+    <TvRandomModal v-model="showRandom" />
     <TvExportPresetsModal
       v-model="showPresets"
       :sources="src.list"
