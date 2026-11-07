@@ -170,6 +170,7 @@ export const api = {
   // 规则
   blacklistGet: () => call('blacklist:get'),
   blacklistSave: (text) => call('blacklist:save', { text }),
+  blacklistTest: (opts) => call('blacklist:test', opts),
   blacklistToggle: (tag) => call('blacklist:toggle', { tag }),
   replaceGet: () => call('replace:get'),
   replaceSave: (text) => call('replace:save', { text }),
@@ -245,6 +246,8 @@ export const api = {
   checkUpdate: () => call('app:checkUpdate'),
   appVersion: () => call('app:version'),
   setupDownload: () => call('tagger:setup-download'),
+  // 按档下载 v1.0 系列(约 1GB/档, 断点续传; 词表从同仓库 config.json 现场合成)
+  modelDownload: (preset, opts = {}) => call('tagger:model-download', { preset, ...opts }),
 
   // 图片删除(移入系统回收站)
   trashImages: (paths) => call('image:trash', { paths }),
@@ -287,12 +290,12 @@ export const api = {
   // 剪贴板
   copy: (text) => call('clipboard:write', { text }),
 
-  // 随机抽签(pin + 权重窗口 + 查重降权; 引擎在 electron/core/random.js, 与 CLI 共用)
+  // 导出端随机化(可勾选大类/槽清单; 引擎在 electron/core/export-random.js)
   random: {
-    draw: (q) => call('random:draw', q),
-    meta: () => call('random:meta'),
-    ledger: () => call('random:ledger'),
-    resetCounts: () => call('random:resetCounts'),
+    sections: () => call('random:sections'),
+    slots: () => call('random:slots'),
+    // 词归属反查: 传词数组(或单个词), 返回 [{word, slot, slotZh, sec}]
+    wordinfo: (words) => call('random:wordinfo', { words }),
   },
 
   // 诊断

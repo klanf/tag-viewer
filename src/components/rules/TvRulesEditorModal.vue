@@ -23,7 +23,7 @@ import TvInput from '../base/TvInput.vue'
 import TvTagComplete from '../base/TvTagComplete.vue'
 import { api } from '@/utils/api.js'
 import { useUiStore } from '@/stores/useUiStore.js'
-import { parseRules, serializeRules, MODE_OPTIONS, parseWeight, withWeight, matchByMode } from '@/utils/replaceGrammar.js'
+import { parseRules, serializeRules, parseBlacklist, serializeBlacklist, MODE_OPTIONS, parseWeight, withWeight, matchByMode } from '@/utils/replaceGrammar.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -58,10 +58,14 @@ const isBlack = computed(() => props.kind === 'blacklist')
 const title = computed(() => (isBlack.value ? '🚫 导出黑名单' : '🔁 导出替换规则'))
 
 const tips = computed(() => (isBlack.value
-  ? ['每行一条规则(用下划线), 导出时自动剔除命中的标签',
-     'red_hair 精确 · *_hair 后缀 · blue_* 前缀 · *color* 包含 · # 注释',
-     '@xxx@ 整段匹配: @boy@ 命中 boy / xx_boy / boy_xx, 但不命中 tomboy / boyish / xxxboy',
-     '  段里也能用 *: @boy*@ 段以 boy 开头 · @*hair@ 段以 hair 结尾']
+  ? (blBuilder.value
+    ? ['每条 ban 模式一张卡片: 选「匹配类型」填模式, 联想会列出**能命中**的词',
+       '卡片就是导出时会剔除的模式 —— 导出结果里不会出现命中的标签',
+       '想批量粘贴/写注释/改特殊规则 → 工具栏「⌨ 原文模式」; 注释在「🗒 注释」里']
+    : ['每行一条 ban 模式(用下划线), 导出时自动剔除命中的标签',
+       'red_hair 精确 · *_hair 后缀 · blue_* 前缀 · *color* 包含 · # 注释',
+       '@xxx@ 整段匹配: @boy@ 命中 boy / xx_boy / boy_xx, 但不命中 tomboy / boyish / xxxboy',
+       '  段里也能用 *: @boy*@ 段以 boy 开头 · @*hair@ 段以 hair 结尾'])
   : builderMode.value
     ? ['每条规则一张卡片: 选「匹配类型」填模式, 替换标签有联想(带中文和图片数)',
        '卡片第一行是**导出结果预览** —— 你看到的就是导出文件里会出现的文本',
@@ -79,6 +83,74 @@ const tips = computed(() => (isBlack.value
 const placeholder = computed(() => (isBlack.value
   ? 'red_hair\n*_hair\n@boy@\n# 这是注释'
   : '*_painting -> {tag}, masterpiece, best_quality\n@boy@ -> {tag}, male_focus'))
+
+/* ================= 黑名单构建器(2026-10-30, 对齐替换编辑器) =================
+ * 一行 ban 模式 = 一张卡片(类型 + 模式); 文本层一字不变, 双向序列化在
+ * replaceGrammar.parseBlacklist/serializeBlacklist —— 表达不了的行(@seg 带 * 等)按
+ * raw 保留原文, 提示去原文模式改。没有替换侧、没有多套组(黑名单全局一份)。 */
+const blBuilder = ref(true)
+const blHeadNotes = ref('')
+const blTailNotes = ref('')
+const blRows = ref([])          // {mode:'exact'|'pre'|'suf'|'con'|'seg'|'raw', core?, text?}
+const blRawCount = ref(0)
+const blHelpOpen = ref(false)
+const blNotesOpen = ref(false)
+const blHasNotes = computed(() => !!(blHeadNotes.value.trim() || blTailNotes.value.trim()))
+
+function blParseCurrent() {
+  const p = parseBlacklist(text.value)
+  blHeadNotes.value = p.headNotes.join('\n')
+  blTailNotes.value = p.tailNotes.join('\n')
+  blRows.value = p.rows
+  blRawCount.value = p.rows.filter((r) => r.mode === 'raw').length
+}
+
+/** 构建器状态写回 text(切模式/保存前调用) */
+function blCommit() {
+  text.value = serializeBlacklist({
+    headNotes: blHeadNotes.value.split('\n'),
+    rows: blRows.value,
+    tailNotes: blTailNotes.value.split('\n'),
+  })
+}
+
+function blSwitchMode() {
+  blHelpOpen.value = false
+  blNotesOpen.value = false
+  if (blBuilder.value) {
+    blCommit()
+    blBuilder.value = false
+  } else {
+    blParseCurrent()
+    blBuilder.value = true
+  }
+}
+
+function blAddRow() {
+  blRows.value.push({ mode: 'exact', core: '' })
+  nextTick(() => {
+    const el = document.querySelectorAll('.bl-card .chip-add input')
+    el[el.length - 1]?.focus()
+  })
+}
+
+function blDelRow(i) { blRows.value.splice(i, 1) }
+
+/** 卡片核心: 联想 pick/confirm 都改写 core —— 卡片就是"这个模式 ban 掉谁" */
+function blSetCore(r, t) {
+  const v = String(t || '').trim().toLowerCase().replace(/\s+/g, '_')
+  if (v) r.core = v
+}
+
+/* ---- 黑名单测试条(与导出引擎同一套口径, 走后端 testBlacklist) ---- */
+const blTestTag = ref('')
+const blTestRes = ref(null)
+watch(blTestTag, async (v) => {
+  const t = v.trim()
+  if (!t) { blTestRes.value = null; return }
+  try { blTestRes.value = await api.blacklistTest({ tag: t }) }
+  catch { blTestRes.value = null }
+})
 
 /* ================= 构建器模式(替换规则专用) ================= */
 const builderMode = ref(true)   // 仅替换规则侧有意义
@@ -274,6 +346,8 @@ async function load() {
       const r = await api.blacklistGet()
       text.value = r.text || ''
       rules.value = r.rules || []
+      blParseCurrent()
+      blBuilder.value = true
     } else {
       const r = await api.replaceSets()
       sets.value = (r.sets || []).map((s) => ({ ...s }))
@@ -309,13 +383,18 @@ watch(activeId, (nv, ov) => {
 })
 
 watch(() => props.modelValue, (v) => {
-  if (v) { load(); helpOpen.value = false; notesOpen.value = false; editing.value = null; confirmDel.value = false }
+  if (v) {
+    load(); helpOpen.value = false; notesOpen.value = false; editing.value = null; confirmDel.value = false
+    blHelpOpen.value = false; blNotesOpen.value = false
+    blTestTag.value = ''; blTestRes.value = null
+  }
 })
 
 async function save() {
   saving.value = true
   try {
     if (isBlack.value) {
+      if (blBuilder.value) blCommit()
       const r = await api.blacklistSave(text.value)
       if (r?.error) { ui.err('保存失败: ' + r.error); return }
       rules.value = r?.rules || rules.value
@@ -344,22 +423,118 @@ async function save() {
   <TvModal
     :model-value="modelValue"
     :title="title"
-    :size="isBlack ? 'lg' : 'xl'"
+    :size="'xl'"
     @update:model-value="(v) => emit('update:modelValue', v)"
   >
-    <!-- ============ 黑名单: 纯 textarea + 常驻提示(结构不变) ============ -->
+    <!-- ============ 黑名单: 构建器/原文双模式(2026-10-30 对齐替换编辑器) ============ -->
     <template v-if="isBlack">
-      <div class="tip">
-        <div v-for="(t, i) in tips" :key="i">{{ t }}</div>
+      <!-- 工具栏: 模式切换 / 统计 / 注释 / 帮助 -->
+      <div class="bar">
+        <div class="seg">
+          <button type="button" class="seg-b" :class="{ on: blBuilder }" @click="!blBuilder && blSwitchMode()">▦ 构建器</button>
+          <button type="button" class="seg-b" :class="{ on: !blBuilder }" @click="blBuilder && blSwitchMode()">⌨ 原文</button>
+        </div>
+        <span class="bar-stat">共 <b>{{ blRows.filter((r) => r.mode !== 'raw').length }}</b> 条<template v-if="blRawCount"> · <span class="warn-txt">{{ blRawCount }} 条高级</span></template></span>
+        <span v-if="!blBuilder" class="bar-stat faint">直接改文本, 支持批量粘贴</span>
+        <span
+          class="bar-btn"
+          :class="{ lit: blHasNotes, open: blNotesOpen }"
+          title="注释(# 开头, 保存时写在 ban 模式前/后)"
+          @click="blNotesOpen = !blNotesOpen; blHelpOpen = false"
+        >🗒 注释<i v-if="blHasNotes" class="dot" /></span>
+        <span
+          class="bar-btn help"
+          :class="{ open: blHelpOpen }"
+          title="语法说明"
+          @click="blHelpOpen = !blHelpOpen; blNotesOpen = false"
+        >?</span>
+
+        <!-- 浮层: 注释 -->
+        <div v-if="blNotesOpen" class="pop notes-pop">
+          <div class="pop-cap">开头注释(分组说明)</div>
+          <textarea v-model="blHeadNotes" class="notes-area" spellcheck="false" placeholder="文件开头的 # 注释/分组说明, 会写在 ban 模式前面" />
+          <div class="pop-cap">结尾注释(行间注释收纳在这)</div>
+          <textarea v-model="blTailNotes" class="notes-area" spellcheck="false" placeholder="行间注释会收纳到这里, 保存时写在 ban 模式后面" />
+        </div>
+        <!-- 浮层: 语法帮助 -->
+        <div v-if="blHelpOpen" class="pop help-pop">
+          <div class="h-sec"><b>这是干嘛的</b></div>
+          <div class="help-line">导出 txt 时自动<b>剔除</b>命中的标签 —— 只影响导出结果, 不改动库内数据。</div>
+          <div class="h-sec"><b>匹配类型(选完填模式)</b></div>
+          <div v-for="m in MODE_OPTIONS" :key="m.value" class="help-line">
+            <b>{{ m.label }}</b> · {{ m.hint }} · 例 <code>{{ m.example }}</code>
+          </div>
+          <div class="h-sec"><b>其他</b></div>
+          <div class="help-line">🧪 测试条: 输入标签实时看会不会被 ban、被哪条 ban(基于<b class="u">已保存</b>的黑名单)</div>
+          <div class="help-line">🗒 注释: <code>#</code> 开头, 只给人看</div>
+          <div class="help-line">⌨ 原文模式: 批量粘贴、改构建器表达不了的特殊规则</div>
+          <div class="help-line">黑名单是全局一份, 所有导出共用(没有多套组)</div>
+        </div>
       </div>
-      <textarea
-        v-if="!loading"
-        v-model="text"
-        class="editor tall"
-        spellcheck="false"
-        :placeholder="placeholder"
-      />
+
       <div v-if="loading" class="loading">读取中...</div>
+
+      <!-- 构建器: ban 模式卡片 -->
+      <div v-else-if="blBuilder" class="rows">
+        <div v-for="(r, i) in blRows" :key="i" class="rule-card" :class="{ raw: r.mode === 'raw' }" @click="r.mode === 'raw' && blSwitchMode()">
+          <template v-if="r.mode !== 'raw'">
+            <div class="row-top">
+              <select
+                v-model="r.mode"
+                class="mode-sel"
+                :title="MODE_OPTIONS.find((m) => m.value === r.mode)?.hint + ' · 例 ' + MODE_OPTIONS.find((m) => m.value === r.mode)?.example"
+              >
+                <option v-for="m in MODE_OPTIONS" :key="m.value" :value="m.value">{{ m.label }}</option>
+              </select>
+              <span v-if="r.core" class="chip">{{ r.core }}<b class="x" title="清空这个模式" @click="r.core = ''">×</b></span>
+              <TvTagComplete
+                class="chip-add"
+                variant="chips"
+                :placeholder="r.core ? '+ 换个模式…' : (MODE_OPTIONS.find((m) => m.value === r.mode)?.example || '模式')"
+                title="这个卡片 ban 掉的模式; 联想已按当前匹配类型过滤 —— 列出的就是会被剔除的词"
+                :filter="(tag, typed) => matchByMode(tag, r.mode, r.core || typed)"
+                @pick="(t) => blSetCore(r, t)"
+                @confirm="(t) => blSetCore(r, t)"
+              />
+              <TvButton size="xs" variant="ghost" class="row-del" title="删除这条 ban 模式" @click.stop="blDelRow(i)">🗑</TvButton>
+            </div>
+            <div class="row-sub del-sub">
+              <span class="del-mark">命中即从导出结果中<b>删除</b>该标签</span>
+            </div>
+          </template>
+          <template v-else>
+            <span class="raw-badge">高级</span>
+            <code class="raw-text">{{ r.text }}</code>
+            <span class="raw-hint">构建器表达不了 · 点击卡片切「原文模式」修改</span>
+          </template>
+        </div>
+        <div v-if="!blRows.length" class="empty">还没有 ban 模式 —— 点下面添加, 或切「原文模式」粘贴</div>
+        <TvButton size="xs" variant="ghost" class="add" @click="blAddRow">＋ 添加 ban 模式</TvButton>
+      </div>
+
+      <!-- 原文模式 -->
+      <template v-else-if="!loading">
+        <textarea
+          v-model="text"
+          class="editor tall"
+          spellcheck="false"
+          :placeholder="placeholder"
+        />
+      </template>
+
+      <!-- 底部停靠: 测试条(构建器模式才有) -->
+      <div v-if="blBuilder && !loading" class="tester">
+        <span class="lab">🧪 测试</span>
+        <TvTagComplete v-model="blTestTag" class="test-in" placeholder="输入一个标签试试, 如 blue_hair" :limit="8" />
+        <span v-if="blTestRes" class="test-out">
+          <template v-if="blTestRes.banned">
+            会命中 <b>{{ blTestRes.hits.join(' · ') }}</b> → <b class="bad">剔除该标签</b>
+          </template>
+          <template v-else>未命中任何 ban 模式 → <b class="ok">保留</b></template>
+        </span>
+        <span v-else-if="blTestTag.trim()" class="lab">测试中…</span>
+        <span class="lab faint" style="margin-left: auto;">基于<b class="u">已保存</b>的黑名单</span>
+      </div>
     </template>
 
     <!-- ============ 替换规则: 左组栏 + 右主区 ============ -->

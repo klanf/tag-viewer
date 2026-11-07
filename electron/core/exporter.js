@@ -14,6 +14,7 @@ import { blacklistMatcher, isBlockedFast, loadReplaceRules, loadReplaceRulesGrou
 import { safetyExportStripper } from './safety.js'
 import { exportSegSort, sortTags, unwrapWeight } from './tagcats.js'
 import { applyFilterGroups } from './tagfilter.mjs'
+import { makeRandomizer, filterBannedSlots } from './export-random.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BUNDLED_KNOWLEDGE_DIR } from './paths.js'
@@ -44,6 +45,70 @@ function exportCore(raw = {}) {
   // 段位模式(2026-10-16): 过滤 画师/角色/系列/meta, 人数排最前, 通用按大类归堆。
   // 做在**替换/补背景/追加之后**(替换后的新词按新文本分类, 天然一致), 空格转换之前。
   const segMode = raw.seg_mode === '1' || raw.seg_mode === true
+  // 随机替换(2026-10-28 导出端随机化): 勾选大类/槽内的词 1:1 换池子里的新词。
+  //   randomize          '1' 开
+  //   randomize_sections 大类串, 每段 "id" 或 "id:换词率" —— "hair:0.65,face"
+  //                      (2026-10-29 起支持换词率, 0~1; 老格式 "hair,face" = 全 1 必换;
+  //                      非法数字/越界一律按 1, 与引擎 rateOf 同口径)
+  //   randomize_slots    槽串, 格式同上 —— "legwear:0.65,pose"(2026-10-30 槽级粒度,
+  //                      "只抽袜子"这类需求必须到槽; 老大类串继续认, 两边可混用)
+  //   pin_slots          钉词串, 每段 "槽:词" —— "legwear:white_thighhighs";
+  //                      钉了的槽必现指定词, 优先于随机(见 export-random.js 阶段①)
+  //   pin_fill           '1'/'0' 原图缺钉词槽词条时是否补上; 缺省 = '1'(补)
+  //   ban_slots          禁用槽串, 逗号分隔槽 id —— "headwear,eyewear"(2026-10-30):
+  //                      原图词条里属于这些槽的词**整词删除**(与换词率 0% 的"保留"相反)。
+  //                      位置在黑名单之后、替换规则之前(见下方 filterBannedSlots 调用);
+  //                      只勾禁用不勾随机/钉词也生效 —— 所以它不走 rnd 变量, 独立判断。
+  //   randomize_nsfw     '1'/'0' 是否允许从成人词库(nsfwPools)抽词; 缺省 = '1'(旧行为)
+  //   randomize_seed     留空 = 每次导出都不同; 填了 = 同筛选结果可复现
+  const rndOn = raw.randomize === '1' || raw.randomize === true
+  const rndSecs = new Set()
+  const rndSlots = new Set()
+  const rndRates = new Map()
+  // 大类串和槽串同格式, 混在一张率表里没冲突(sec id 带①/空格, slot id 是纯小写)
+  const parseIdRate = (rawStr, into) => {
+    for (const part of String(rawStr || '').split(',')) {
+      const t = part.trim()
+      if (!t) continue
+      const m = t.match(/^([^:]+)(?::([\d.]+))?$/)
+      if (!m) continue
+      const id = m[1].trim()
+      if (!id) continue
+      into.add(id)
+      if (m[2] !== undefined) {
+        const v = Number(m[2])
+        if (Number.isFinite(v)) rndRates.set(id, Math.max(0, Math.min(1, v)))
+      }
+    }
+  }
+  parseIdRate(raw.randomize_sections, rndSecs)
+  parseIdRate(raw.randomize_slots, rndSlots)
+  // 钉词串: "槽:词" —— indexOf(':') 而不是正则, 词本身可以带冒号以外的任何字符
+  const rndPins = new Map()
+  for (const part of String(raw.pin_slots || '').split(',')) {
+    const t = part.trim()
+    if (!t) continue
+    const i = t.indexOf(':')
+    if (i <= 0) continue
+    const slot = t.slice(0, i).trim()
+    const w = t.slice(i + 1).trim()
+    if (slot && w) rndPins.set(slot, w)
+  }
+  const rndPinFill = !(raw.pin_fill === '0' || raw.pin_fill === false)
+  // 禁用槽串: 纯槽 id 列表, 没有率段
+  const rndBan = new Set()
+  for (const part of String(raw.ban_slots || '').split(',')) {
+    const t = part.trim()
+    if (t) rndBan.add(t)
+  }
+  const rndSeed = raw.randomize_seed != null ? String(raw.randomize_seed).trim() : ''
+  const rndNsfw = !(raw.randomize_nsfw === '0' || raw.randomize_nsfw === false)
+  const rnd = rndOn && (rndSecs.size || rndSlots.size || rndPins.size)
+    ? makeRandomizer({
+        sections: rndSecs, slots: rndSlots, pins: rndPins, pinFill: rndPinFill,
+        seed: rndSeed || null, rates: rndRates, nsfw: rndNsfw,
+      })
+    : null
   /* 追加标签 —— **UI 已于 2026-10-04 移除**(看板筛选区与预设编辑页的输入框都删了,
    * 用户判断"有替换规则就够了")。这段解析**故意留着**: 老预设文件里可能已经存过
    * append 字段, 直接删解析会让那些预设的追加行为**静默消失**、用户毫无察觉。
@@ -88,6 +153,11 @@ function exportCore(raw = {}) {
   let appendAdded = 0
   let segStripped = 0
   let groupsStripped = 0
+  let randomized = 0
+  const rndBySec = {}   // 换词/钉词计数(id -> 个数, 键=槽 id 或大类 id), 回执细分用
+  let slotBanned = 0    // 禁用槽删除的词数(2026-10-30), 回执展示用
+  const slotBannedBy = {}
+  let recIdx = 0          // 随机替换的派生种子序号(按导出行计, 与异步分片无关)
 
   /** 单条记录 -> 一行文本(副作用: 顺带累加各类计数)。
    *  抽成闭包是给同步/分片异步两个包装共用同一套管线(2026-10-20) ——
@@ -134,10 +204,27 @@ function exportCore(raw = {}) {
     if (bl) {
       const kept = []
       for (const t of tags) {
-        if (isBlockedFast(t, bl)) blockedCount++
+        // ban 的口径 = 原样串 + 剥权重壳归一键 双查:
+        //   原样串保住老口径(黑名单条目里万一有空格形态也照旧命中);
+        //   归一键补上 A1111 元数据直出的 (cat_ears:1.6) 加权形态 ——
+        //   不剥壳的话 ban 掉裸词也拦不住它(2026-10-29 e2e 实锤: probe=(cat ears:1.6))
+        const raw = String(t).toLowerCase()
+        if (isBlockedFast(raw, bl) || isBlockedFast(tagKey(unwrapWeight(t)), bl)) blockedCount++
         else kept.push(t)
       }
       tags = kept
+    }
+
+    // 禁用槽(2026-10-30): 黑名单之后、替换规则之前 —— 被禁的词不参与替换,
+    // 不会被替换规则改写成别的词留下来。钉了的槽豁免(前端保存前拦冲突, 这里只防御)。
+    // 只勾禁用、不勾随机/钉词也要生效 —— 所以判断的是 rndOn && rndBan.size, 不看 rnd。
+    if (rndOn && rndBan.size) {
+      const res = filterBannedSlots(tags, rndBan, new Set(rndPins.keys()))
+      if (res.banned) {
+        slotBanned += res.banned
+        for (const [slot, n] of Object.entries(res.bySlot || {})) slotBannedBy[slot] = (slotBannedBy[slot] || 0) + n
+        tags = res.tags
+      }
     }
 
     if (replRules.length) {
@@ -197,6 +284,16 @@ function exportCore(raw = {}) {
       if (add.length) { appendAdded += add.length; tags = [...add, ...tags] }
     }
 
+    // 随机替换(导出端随机化): 在替换规则/黑名单/补背景/追加之后 ——
+    // 随机出的新词不会再被这些过滤步误伤; 排在 segMode 之前, 产物仍能归堆排序。
+    // 1:1 语义: 原图该大类有 N 个词就换 N 个(同槽同量), prompt 结构不动。
+    if (rnd) {
+      const res = rnd.randomize(recIdx++, tags)
+      randomized += res.replaced
+      for (const [sec, n] of Object.entries(res.bySec || {})) rndBySec[sec] = (rndBySec[sec] || 0) + n
+      tags = res.tags
+    }
+
     if (segMode) {
       const before = tags.length
       tags = exportSegSort(tags)
@@ -222,6 +319,10 @@ function exportCore(raw = {}) {
     appendAdded,
     segStripped,
     groupsStripped,
+    randomized,
+    randomizedBy: rndBySec,
+    slotBanned,
+    slotBannedBy,
     ms: Date.now() - t0,
     suggestedName: `筛选_${nameCore}.txt`,
   })

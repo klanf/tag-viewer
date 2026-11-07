@@ -180,6 +180,57 @@ const expectedHint = computed(() => {
   return 'wd-pixai-tagger-v0.9.onnx + .csv'
 })
 
+/* ---------------- 按档下载 v1.0 系列（2026-11-08） ----------------
+ * v0.9 之外的三档都不进安装包（每档约 1 GB，装了却不用就是白占盘）。
+ * 用户在下拉里选了哪档、缺文件时这一行才给下载按钮；进度直接读 app.setup
+ * —— 与首启引导弹窗共用 tagger:setup-progress 一条推送，不另造一套。 */
+const dlBusy = ref(false)
+const dlError = ref('')
+const dlPct = computed(() => Number(app.setup?.pct) || 0)
+const dlStage = computed(() => String(app.setup?.stage || ''))
+
+/** 下拉里当前档登记的可下载体积（0 = 该档不走一键下载） */
+const dlMb = computed(() => {
+  const opt = modelOptions.value.find((o) => o.value === prefs.model)
+  return Number(opt?.downloadMb) || 0
+})
+const currentModelName = computed(() => {
+  const opt = modelOptions.value.find((o) => o.value === prefs.model)
+  return opt?.label || prefs.model
+})
+
+async function downloadModel() {
+  if (dlBusy.value || !dlMb.value) return
+  dlBusy.value = true
+  dlError.value = ''
+  try {
+    const r = await api.modelDownload(prefs.model)
+    if (r?.error) { dlError.value = r.error; ui.err(`下载失败: ${r.error}`, 6000); return }
+    /* 下载完**顺手把档位落盘** —— 用户按下这个按钮就是要用它。
+     * 少了这一步会出现"文件下好了、设置还是旧档、下次反推照旧用 v0.9"的错觉。 */
+    const s = await api.settingsSet({ taggerModel: prefs.model })
+    if (s?.settings) app.settings = s.settings
+    await app.taggerRefresh().catch(() => null)
+    ui.ok(`${currentModelName.value} 已就绪，下一次反推生效`, 3200)
+  } catch (e) {
+    dlError.value = e?.message || String(e)
+    ui.err(dlError.value, 6000)
+  } finally {
+    dlBusy.value = false
+  }
+}
+
+/** 换档建议：只说本机实测过的数字，不猜 */
+const modelAdvice = computed(() => {
+  if (!accel.value?.ok) return ''
+  const ps = accel.value.providers || []
+  const fast = ps.includes('DmlExecutionProvider') || ps.includes('CUDAExecutionProvider')
+  const v1 = ['v1.0', 'v1.0-336', 'v1.0-672'].includes(prefs.model)
+  if (fast && prefs.model !== 'v1.0-336') return '这台机器有 DirectML/CUDA：336-ft 批量约 0.17 s/张，值得换'
+  if (!fast && v1) return '纯 CPU 上 v1.0 系列比 v0.9 慢很多（336 约 5.8 s/张 vs v0.9 约 2.0 s/张）'
+  return ''
+})
+
 const PROVIDER_OPTIONS = [
   { value: 'auto', label: '自动（CUDA > DirectML > CPU）' },
   { value: 'cuda', label: '强制 CUDA（N 卡，需 onnxruntime-gpu）' },
@@ -391,15 +442,18 @@ const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider'
             <TvInfoTip :width="320">
               <template v-if="prefs.model === 'v1.0'">
                 <b>v1.0 是实验档</b>：词表 30,877 个（v0.9 的 2.3 倍，Nikke 等新角色覆盖更好），
-                但输入是 1008px —— CUDA 单张约 1.2s，CPU / DirectML 会慢到几十秒。模型与同名
-                <span class="mono">.csv</span> 放进 <span class="mono">&lt;数据目录&gt;/models/</span> 即可，
+                但输入是 1008px —— CUDA 单张约 1.2s，CPU / DirectML 会慢到几十秒。
+                缺文件时下面「模型文件」一行会给出<b>下载按钮</b>（约 1 GB，断点续传 + 校验）；
+                也可以手动把模型与同名 <span class="mono">.csv</span> 放进
+                <span class="mono">&lt;数据目录&gt;/models/</span>。
                 无需重装环境。词表自带逐标签推荐阈值，上面的「置信度阈值」只对没有自带阈值的标签生效。
               </template>
               <template v-else-if="prefs.model === 'v1.0-336'">
                 <b>336-ft 是批量首选</b>：同一份 30,877 标签词表，输入缩到 336px。
                 本机实测 DirectML <b>0.17 秒/张</b>、CUDA 约 0.19 秒/张、CPU 约 5.8 秒/张 ——
                 DirectML 终于能跑批量了。代价是角色召回略低于 1008（6 张 Nikke 小样本 4/8 vs 5/8），
-                细节标签也少一些。模型与同名 <span class="mono">.csv</span> 放进
+                细节标签也少一些。缺文件时下面「模型文件」一行会给出<b>下载按钮</b>
+                （约 940 MB），也可以手动把模型与同名 <span class="mono">.csv</span> 放进
                 <span class="mono">&lt;数据目录&gt;/models/</span>，词表自带推荐阈值。
               </template>
               <template v-else-if="prefs.model === 'v1.0-672'">
@@ -415,6 +469,7 @@ const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider'
           </span>
           <span class="v grow"><TvSelect v-model="prefs.model" :options="modelOptions" /></span>
         </div>
+        <div v-if="modelAdvice" class="advice">💡 {{ modelAdvice }}</div>
 
         <div class="row">
           <span class="k">模型文件</span>
@@ -424,11 +479,27 @@ const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider'
               <span class="chip on">{{ app.tagger.config.modelPresetLabel }}</span>
               <span class="dim">预处理 {{ app.tagger.config.preprocess }}</span>
             </template>
-            <span v-else class="warn">未找到 —— 需要 {{ expectedHint }}</span>
+            <template v-else>
+              <span class="warn">未找到 —— 需要 {{ expectedHint }}</span>
+              <TvButton v-if="dlMb" variant="primary" size="sm" :loading="dlBusy" @click="downloadModel">
+                {{ dlBusy ? '下载中…' : `⬇️ 下载（约 ${dlMb} MB）` }}
+              </TvButton>
+            </template>
             <span v-if="app.tagger?.config?.missing?.length" class="warn">
               （缺 {{ app.tagger.config.missing.join(' / ') }}）
             </span>
           </span>
+        </div>
+        <!-- 下载进度: 与首启引导同一条推送(app.setup); 出错时给重试(下载函数自带断点续传) -->
+        <div v-if="dlBusy || dlError" class="dl">
+          <template v-if="dlError && !dlBusy">
+            <div class="dl-err">下载失败：{{ dlError }}</div>
+            <button class="linkbtn" type="button" @click="downloadModel">重试</button>
+          </template>
+          <template v-else>
+            <div class="dl-bar"><div class="dl-fill" :style="{ width: `${dlPct}%` }" /></div>
+            <div class="dl-nums">{{ dlStage || '准备中…' }} · {{ dlPct }}%</div>
+          </template>
         </div>
 
         <div class="row">
@@ -708,4 +779,14 @@ h3 {
 .owbtn:disabled { opacity: .45; cursor: default; }
 .warn { color: var(--danger, #c0392b); font-size: 11px; }
 .oktxt { color: var(--accent); font-size: 11px; }
+/* 换档建议: 一行低调的提示, 不抢主控件注意力 */
+.advice {
+  margin: -2px 0 8px 110px; font-size: 11px; color: var(--faint);
+}
+/* 模型下载进度: 与首启引导弹窗同款细条 */
+.dl { margin: 0 0 8px 110px; }
+.dl-bar { height: 5px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
+.dl-fill { height: 100%; background: var(--accent); transition: width .25s ease; }
+.dl-nums { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.dl-err { font-size: 11px; color: var(--danger, #c0392b); word-break: break-all; margin-bottom: 2px; }
 </style>

@@ -134,7 +134,10 @@ const catNum = { general: 0, artist: 1, copyright: 3, character: 4, meta: 5, rat
 console.log(`[1/5] CSV ${path.basename(CSV_PATH)}: ${csvCat.size} 条词表, 角色 ${v1Chars.size}, 系列 ${csvCopyright.size}`)
 
 /* ---------- 2. 库内标签 ---------- */
-const db = new DatabaseSync(path.join(DATA_DIR, 'tags.db'), { readOnly: true })
+/* 2026-10-30 起库在 <dataDir>/db/ 子目录(junction 到 C 盘); 老位置留作回退 */
+const dbFile = [path.join(DATA_DIR, 'db', 'tags.db'), path.join(DATA_DIR, 'tags.db')]
+  .find((p) => fs.existsSync(p)) || path.join(DATA_DIR, 'db', 'tags.db')
+const db = new DatabaseSync(dbFile, { readOnly: true })
 const rows = db.prepare('SELECT name, cnt FROM tags').all()
 db.close()
 console.log(`[2/5] tags.db: ${rows.length} 个标签`)

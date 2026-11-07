@@ -1,7 +1,7 @@
 {
   "name": "tag-viewer-electron",
   "productName": "TagViewer",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "private": true,
   "description": "WD14 标签可视化看板 —— Electron + Vue 3 重构版",
   "type": "module",
@@ -63,7 +63,8 @@
     "test:visual": "node scripts/test-visual.mjs",
     "txt:archive": "node scripts/archive-legacy-txt.mjs",
     "txt:archive:apply": "node scripts/archive-legacy-txt.mjs --apply",
-    "txt:archive:undo": "node scripts/archive-legacy-txt.mjs --undo"
+    "txt:archive:undo": "node scripts/archive-legacy-txt.mjs --undo",
+    "test:modeldl": "node scripts/test-model-download.mjs"
   },
   "dependencies": {
     "pinia": "^3.0.3",

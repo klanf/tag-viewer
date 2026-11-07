@@ -197,10 +197,15 @@ export function applyTaggerEnv() {
  * 新位置没有、旧位置(根目录)还有时, 继续用旧的那份 —— 于是"接上路由"
  * 与"真的搬文件"可以分两步走, 中间中断也不会文件找不到。
  *
- * 未登记的名字(如 tags.db / tag_viewer_config.json)原样留在根目录。
+ * 未登记的名字(如 tag_viewer_config.json)原样留在根目录。
  */
 export function dataFile(name) {
   return resolveDataFilePath(state.dataDir, name)
+}
+
+/** 数据目录绝对路径(给需要"目录本身"的调用点, 如导出 txt 的默认落点) */
+export function dataDirPath() {
+  return state.dataDir
 }
 
 /** 数据目录此刻是否真的存在(注意 initWorkspace 会主动创建它) */

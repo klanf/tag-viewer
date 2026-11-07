@@ -14,6 +14,9 @@ import { loadUserMeta, patchUserMeta } from './meta.js'
 import { loadSafetyState, hiddenAt } from './safety.js'
 import { blacklistMatcher, isBlocked, isBlockedFast, buildBanMap, loadBgConfig, hasBgTagFast } from './rules.js'
 import { translateMap, translateMany, zhIndex } from './translate.js'
+// 联想项的「槽·大类」归属(2026-10-30): wordInfos 反查 tag_slots.json,
+// 只读词典不碰库, 和 translateMap 同级开销 —— 每条联想补 slot/slotZh/sec 三个字段
+import { wordInfos } from './export-random.js'
 import { parseQuery, scopeRecords, searchCached, applySort, frozenKey } from './search.js'
 import { extractImagePrompt } from './png.js'
 import { promptToTags, dedupeTags } from './prompt.js'
@@ -578,6 +581,14 @@ export function getSuggest(raw = {}) {
     seen.add(t)
     out.push({ tag: t, zh, count: c })
     if (out.length >= limit) break
+  }
+  // 「槽·大类」归属(2026-10-30): 批量反查词典, 词典外的词 slot/sec 为空 ——
+  // 前端拿这个拼 `中文（槽·大类）`, 空了就只显示中文, 不硬凑
+  const infos = wordInfos(out.map((o) => o.tag))
+  for (let i = 0; i < out.length; i++) {
+    out[i].slot = infos[i]?.slot || ''
+    out[i].slotZh = infos[i]?.slotZh || ''
+    out[i].sec = infos[i]?.sec || ''
   }
   return { suggestions: out }
 }

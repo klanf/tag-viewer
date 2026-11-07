@@ -220,15 +220,18 @@ export function classifyDataEntry(name) {
  *
  * 刻意留在根目录的
  * ================
- * `tags.db`(+ -wal/-shm) 与 `tag_viewer_config.json` 不登记:
- *   · tags.db 是唯一真源且体积大、每次启动都开, 留根省得嵌套;
+ * `tag_viewer_config.json` 不登记:
  *   · config 是"启动时还不知道数据目录在哪"就要读的文件, 必须能按固定名字找到。
+ * `tags.db`(+ -wal/-shm) 2026-10-30 起路由到 `db/` 子目录:
+ *   · 库 129MB 每次启动整读, db/ 整目录用 junction 指向 C 盘 SSD(冷启动 6s -> 亚秒);
+ *   · 这批文件是唯一真源、写入极小(每天 MB 级), 是最干净的"只读搬家"对象。
  */
 export const DATA_SUBDIRS = Object.freeze({
   knowledge: 'kb',
   user: 'user',
   rules: 'rules',
   derived: 'cache',
+  db: 'db',
 })
 
 /**
@@ -263,11 +266,18 @@ export const DATA_ROUTE = Object.freeze({
   'export_replace.txt': { kind: 'rules' },
   // D 派生: 删了能重建, 但内含本机路径
   'scan_cache.json': { kind: 'derived' },
+  // 库文件(2026-10-30): 挪进 db/ 子目录 —— data/db 整目录 junction 指向 C 盘 SSD,
+  // 冷启动读 129MB 库不再吃 HDD 的 6s; resolveDataFilePath 的 legacy 回退保证
+  // 老库(根目录)在搬家前/搬家失败时照样能找到。
+  'tags.db': { kind: 'db' },
+  'tags.db-wal': { kind: 'db' },
+  'tags.db-shm': { kind: 'db' },
 })
 
 /** 目录类的搬迁(阈值低、只有两个) */
 export const DATA_DIR_ROUTE = Object.freeze({
   '.thumb_cache': { kind: 'derived' },
+  db: { kind: 'db' },
 })
 
 /**

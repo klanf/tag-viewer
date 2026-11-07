@@ -186,3 +186,66 @@ export const MODE_OPTIONS = [
   { value: 'con', label: '包含', hint: '标签里任意位置出现模式就命中(容易误伤): *color* 连 colorful 也会命中', example: '*color*' },
   { value: 'seg', label: '整段', hint: '把标签按 _ 切成段, 必须有一段和模式完全一样才命中: @boy@ 命中 boy、xx_boy、boy_xx, 不会误伤 tomboy、boyish', example: '@boy@' },
 ]
+
+/* ---------------- 黑名单行 ⇄ 构建器行(2026-10-30, 黑名单编辑器升级用) ----------------
+ * 黑名单一行 = 一个 ban 模式(没有替换侧), 复用 MODE_OPTIONS 的五种类型;
+ * 表达不了的行(@seg 里带 * 等)按 raw 保留原文, 原文模式可改。
+ * 文本格式与后端 rules.js 的黑名单口径一致, 一字不变。 */
+
+/** 一行 ban 模式文本 -> {mode, core} | null(注释/空行/表达不了, 走 raw) */
+export function parseBlacklistLine(line) {
+  const s = String(line || '').trim()
+  if (!s || s.startsWith('#')) return null
+  const seg = s.match(/^@(.+)@$/)
+  if (seg) return seg[1].includes('*') ? null : { mode: 'seg', core: seg[1] }
+  const con = s.match(/^\*([^*]+)\*$/)
+  if (con) return { mode: 'con', core: con[1] }
+  const suf = s.match(/^\*([^*]+)$/)
+  if (suf) return { mode: 'suf', core: suf[1] }
+  const pre = s.match(/^([^*]+)\*$/)
+  if (pre) return { mode: 'pre', core: pre[1] }
+  if (s.includes('*')) return null
+  return { mode: 'exact', core: s }
+}
+
+/** {mode, core} -> 一行 ban 模式文本(parseBlacklistLine 的逆) */
+export function serializeBlacklistLine(r) {
+  if (!r?.core) return ''
+  if (r.mode === 'seg') return `@${r.core}@`
+  if (r.mode === 'con') return `*${r.core}*`
+  if (r.mode === 'suf') return `*${r.core}`
+  if (r.mode === 'pre') return `${r.core}*`
+  return r.core
+}
+
+/** 黑名单全文 -> { headNotes, rows, tailNotes }; rows 形如 {mode:'exact'|...|'raw', core?, text?} */
+export function parseBlacklist(text) {
+  const headNotes = []
+  const tailNotes = []
+  const rows = []
+  let inTail = false
+  for (const line of String(text || '').split('\n')) {
+    if (!line.trim()) continue
+    const p = inTail ? null : parseBlacklistLine(line)
+    if (!p) {
+      if (!inTail && !line.trim().startsWith('#')) inTail = true   // 第一条非注释不可解析行之后都算 tail
+      ;(inTail ? tailNotes : headNotes).push(line)
+      continue
+    }
+    rows.push(p)
+  }
+  return { headNotes, rows, tailNotes }
+}
+
+/** { headNotes, rows, tailNotes } -> 黑名单全文(与 parseBlacklist 语义互逆, raw 行原样) */
+export function serializeBlacklist({ headNotes = [], rows = [], tailNotes = [] } = {}) {
+  const head = headNotes.join('\n')
+  const body = rows.map((r) => (r.mode === 'raw' ? r.text : serializeBlacklistLine(r)).trim())
+    .filter(Boolean).join('\n')
+  const tail = tailNotes.join('\n')
+  const parts = []
+  if (head.trim()) parts.push(head.replace(/\n+$/, '') + '\n')
+  if (body) parts.push(body)
+  if (tail.trim()) parts.push((parts.length ? '\n' : '') + tail.replace(/^\n+/, ''))
+  return parts.join('\n') + (parts.length ? '\n' : '')
+}

@@ -21,6 +21,22 @@
 export const DEFAULT_TAGGER_MODEL = 'v0.9'
 
 /**
+ * 下载源(2026-11-08 设置弹窗「下载」按钮用) —— v1.0 系列不进安装包,
+ * 用户选哪档就拉哪档。两条线:
+ *   · v0.9: 沿用 runtime-setup 的老链路(内置 csv + hf-mirror onnx), 这里不登记。
+ *   · v1.0 三档: 同一个 HF 仓库的同 revision, 避免"v1.0 模型配 v0.9 词表"。
+ *
+ * ⚠️ 词表**没有现成的 csv 可下** —— 上游把它拆成了 config.json 里的
+ * `tags` + `tags_split`(类别分段) + `category_best_threshold`(每类推荐阈值)。
+ * 2026-11-08 实测: 按这三处现场合成, 336-ft / 672-ft 与本机现用词表**逐字节相同**
+ * (含 CRLF), 1008 档内容相同(本机那份是历史遗留的 LF)。所以拿 config.json
+ * 比拿 csv 更稳: 少 400KB 流量, 而且不可能与 onnx 版本错配。
+ *
+ * onnx 的 sha256 = 上游 LFS oid, 已与本机三个文件逐个比对一致。
+ */
+const HF_V1 = 'https://hf-mirror.com/HentaiSL/pixai-tagger-v1.0-onnx-1008-672-336-ft/resolve/main'
+
+/**
  * 文件名数组按**同名词干**对齐: models[i] 与 csvs[i] 是一对。
  * 目录搜索时成对取第一个两边都在的组合, 避免"v1.0 模型配 v0.9 词表"。
  */
@@ -62,6 +78,20 @@ export const TAGGER_MODELS = Object.freeze({
       'pixai-tagger-v1.0.csv',
       'wd-pixai-tagger-v1.0.csv',
     ],
+    download: Object.freeze({
+      onnx: Object.freeze({
+        url: `${HF_V1}/tagger_1008_fp16.onnx`,
+        file: 'pixai-tagger-v1.0-1008-fp16.onnx',
+        size: 1011470130,
+        sha256: '1d3039c46ecffe51c0c6d8faa44ffe983b92154e1bd904ec0549fc461b6324ca',
+      }),
+      tags: Object.freeze({
+        kind: 'hf-config',
+        url: `${HF_V1}/config.json`,
+        file: 'pixai-tagger-v1.0-1008-fp16.csv',
+        size: 693918,
+      }),
+    }),
   }),
   /* 2026-10-21 社区微调的小尺寸档(deepghs/HentaiSL 的 336-ft / 672-ft ONNX)。
    * 词表与 1008 完全一样, 只是输入网格小、阈值另有一套(ft 档更严)。
@@ -85,6 +115,20 @@ export const TAGGER_MODELS = Object.freeze({
       'pixai-tagger-v1.0-336-ft.csv',
       'pixai-tagger-v1.0-336.csv',
     ],
+    download: Object.freeze({
+      onnx: Object.freeze({
+        url: `${HF_V1}/336-ft/onnx/fp16.onnx`,
+        file: 'pixai-tagger-v1.0-336-ft-fp16.onnx',
+        size: 983153834,
+        sha256: '088b6b2234ee6e45615c4843afb749fc37d62f8bbcf6c5615f94ea1944a35b20',
+      }),
+      tags: Object.freeze({
+        kind: 'hf-config',
+        url: `${HF_V1}/336-ft/onnx/config.json`,
+        file: 'pixai-tagger-v1.0-336-ft.csv',
+        size: 724976,
+      }),
+    }),
   }),
   'v1.0-672': Object.freeze({
     id: 'v1.0-672',
@@ -103,6 +147,20 @@ export const TAGGER_MODELS = Object.freeze({
       'pixai-tagger-v1.0-672-ft.csv',
       'pixai-tagger-v1.0-672.csv',
     ],
+    download: Object.freeze({
+      onnx: Object.freeze({
+        url: `${HF_V1}/672-ft/onnx/fp16.onnx`,
+        file: 'pixai-tagger-v1.0-672-ft-fp16.onnx',
+        size: 997309614,
+        sha256: '6d3fbe4f6294fe206f5f5753a6f49f01cdc57113ce0344df6a814f87d29e3423',
+      }),
+      tags: Object.freeze({
+        kind: 'hf-config',
+        url: `${HF_V1}/672-ft/onnx/config.json`,
+        file: 'pixai-tagger-v1.0-672-ft.csv',
+        size: 724986,
+      }),
+    }),
   }),
 })
 
@@ -130,7 +188,18 @@ export function taggerModelOptions() {
     note: m.note,
     experimental: m.experimental,
     default: m.id === DEFAULT_TAGGER_MODEL,
+    // 可一键下载的档带体积(设置页据此显示「下载（约 N MB）」)。
+    // v0.9 走既有引导链路(内置 csv + 首次安装流程), 这里给 0 免得界面重复给按钮。
+    downloadMb: m.download
+      ? Math.round((m.download.onnx.size + m.download.tags.size) / 1048576)
+      : 0,
   }))
+}
+
+/** 取某一档的下载描述(含 onnx / 词表源), 不可下载的档返回 null */
+export function presetDownload(presetId) {
+  const m = TAGGER_MODELS[normalizeTaggerModel(presetId)]
+  return m && m.download ? m : null
 }
 
 /**

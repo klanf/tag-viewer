@@ -326,6 +326,115 @@ async function ensureModel({ destDir, existsCheck, onStage = () => {}, onProgres
     fresh: true,
   };
 }
+/* -------------------------------------------------- 按档下载(v1.0 系列, 2026-11-08) */
+
+/**
+ * 把 pixai v1.0 的 config.json 合成本地词表 csv。
+ * ==============================================
+ * 上游仓库**不提供** selected_tags.csv: 词表被拆进 config.json 的三处 ——
+ *   tags(30,877 个标签名, 顺序即 logits 下标)
+ *   tags_split([['general',15043],['character',8308],...] 类别分段)
+ *   category_best_threshold({general:0.17, character:0.27, ...})
+ * 2026-11-08 实测: 按这三处合成, 336-ft / 672-ft 与本机现用词表**逐字节相同**
+ * (含 CRLF 与含引号标签的转义), 1008 档内容相同(本机那份是 LF 的历史遗留)。
+ *
+ * 为什么不用别处现成的 selected_tags.csv: 社区导出的版本 category 是数字、
+ * 没有 threshold 列 —— 丢掉分类别推荐阈值就等于把 ft 档调好的阈值作废。
+ */
+function csvFromHfConfig(cfg) {
+  const tags = Array.isArray(cfg && cfg.tags) ? cfg.tags : [];
+  const split = Array.isArray(cfg && cfg.tags_split) ? cfg.tags_split : [];
+  const ths = (cfg && cfg.category_best_threshold) || {};
+  if (!tags.length || !split.length) throw new Error('config.json 里没有词表（缺 tags / tags_split）');
+  const cats = [];
+  for (const pair of split) {
+    const name = String(pair[0]);
+    const cnt = Number(pair[1]) || 0;
+    for (let i = 0; i < cnt; i += 1) cats.push(name);
+  }
+  if (cats.length !== tags.length) {
+    throw new Error(`词表长度对不上: tags ${tags.length} 条 / tags_split 展开 ${cats.length} 条`);
+  }
+  // 只给含分隔符/引号/换行的名字加引号 —— 与既有词表文件的写法保持一致
+  const esc = (s) => (/[",\r\n]/.test(s) ? `"${String(s).replace(/"/g, '""')}"` : s);
+  const lines = ['tag_id,name,category,count,threshold'];
+  for (let i = 0; i < tags.length; i += 1) {
+    const cat = cats[i];
+    const th = Number(ths[cat]);
+    lines.push(`${i},${esc(tags[i])},${cat},0,${Number.isFinite(th) ? th : 0}`);
+  }
+  return `${lines.join('\r\n')}\r\n`;
+}
+
+/**
+ * 下载某个预设档的模型 + 词表到 destDir（设置弹窗的「下载」按钮）。
+ * - onnx 走 downloadToFile（断点续传）+ 全量 SHA256 校验，与上游 LFS oid 对比
+ * - 词表按 presets 里登记的 kind 处理：'hf-config' 现场合成 / 'csv' 直下
+ * - 落盘文件名固定取预设的首选名，保证 tagger.js 的候选能认出来
+ * @returns {Promise<{presetId: string, modelPath: string, csvPath: string, skipped: boolean}>}
+ */
+async function ensurePresetModel({ presetId, destDir, force = false, onStage = () => {}, onProgress = () => {} }) {
+  const { presetDownload } = await import('./core/tagger-models.js');
+  const preset = presetDownload(presetId);
+  if (!preset) throw new Error(`未知模型档位: ${presetId}`);
+
+  const { onnx, tags } = preset.download;
+  await fsp.mkdir(destDir, { recursive: true });
+  const onnxDest = path.join(destDir, onnx.file);
+  const csvDest = path.join(destDir, tags.file);
+
+  let skipped = true;
+  // onnx: 体积对上就认为在（1GB 全量哈希每轮跑太贵；落盘那一刻已经校验过一次）
+  let onnxOk = false;
+  if (!force) {
+    try { onnxOk = (await fsp.stat(onnxDest)).size === onnx.size; } catch { onnxOk = false; }
+  }
+  if (onnxOk) {
+    onStage(`${onnx.file} 已在位，跳过下载`);
+  } else {
+    skipped = false;
+    onStage(`下载 ${onnx.file}（${Math.round(onnx.size / 1048576)} MB，断点续传）…`);
+    await retry3(() => downloadToFile(onnx.url, onnxDest, onnx.size, {
+      allowedUrl: allowedRuntimeUrl,
+      timeoutMs: 60_000,
+      onProgress: (bytes) => onProgress(onnx.file, bytes, onnx.size),
+    }), `下载 ${onnx.file}`);
+    const hash = await sha256File(onnxDest);
+    if (hash !== onnx.sha256) {
+      await fsp.rm(onnxDest, { force: true }).catch(() => {});
+      throw new Error(`${onnx.file} SHA256 校验失败 —— 上游文件可能已更新，请稍后重试或手动下载`);
+    }
+  }
+
+  // 词表: 只要有内容就跳过（本地合成物，不能用上游体积判断）
+  let csvOk = false;
+  try { csvOk = (await fsp.stat(csvDest)).size > 0; } catch { csvOk = false; }
+  if (csvOk && !force) {
+    onStage(`${tags.file} 已在位，跳过`);
+  } else if (tags.kind === 'hf-config') {
+    skipped = false;
+    onStage(`获取词表（${tags.file}）…`);
+    const buf = await retry3(() => requestBuffer(tags.url, {
+      allowedUrl: allowedRuntimeUrl,
+      maxBytes: 8 * 1024 * 1024,
+    }), '下载词表');
+    let cfg;
+    try { cfg = JSON.parse(buf.toString('utf8')); } catch { throw new Error('词表 config.json 不是合法 JSON（镜像站可能返回了错误页）'); }
+    const csv = csvFromHfConfig(cfg);
+    await fsp.writeFile(csvDest, csv, 'utf8');
+    onStage(`词表已生成: ${tags.file}（${cfg.tags.length} 个标签）`);
+  } else {
+    skipped = false;
+    onStage(`下载 ${tags.file}…`);
+    await retry3(() => downloadToFile(tags.url, csvDest, tags.size, {
+      allowedUrl: allowedRuntimeUrl,
+      timeoutMs: 60_000,
+    }), `下载 ${tags.file}`);
+  }
+
+  return { presetId: preset.id, modelPath: onnxDest, csvPath: csvDest, skipped };
+}
+
 /**
  * 探测某个 python 的 onnxruntime 加速能力(设置弹窗用)。
  * @returns {Promise<{ok: boolean, version?: string, providers?: string[], error?: string}>}
@@ -355,8 +464,10 @@ module.exports = {
   PY_VERSION,
   PY_ZIP_URL,
   allowedRuntimeUrl,
+  csvFromHfConfig,
   detectAccelerators,
   ensureModel,
+  ensurePresetModel,
   ensurePythonRuntime,
   modelIntegrityIssue,
   pkgsOk,

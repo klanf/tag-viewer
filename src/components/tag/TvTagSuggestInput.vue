@@ -11,13 +11,17 @@
  *   Enter 只有在「↑↓ 或悬停主动选中了补全项」时才填充(cursor 初始 -1, 光出下拉不算选中);
  *   否则直接提交搜索 —— 这样模糊搜索不会被补全"劫持"(如输入 twint 直接回车 = contains 搜 twint)。
  *
- * multi 模式(2026-10-06, 看板搜索框专用; 扫描页是空格 AND 语义、标签页是单词搜索, 都不开):
- *   已选的词渲染成胶囊(可单独 ✕ 删除), 输入框里只保留「正在打的那一段」。
- *   中英文逗号(，/,)都算分隔符: 敲下逗号 = 当前段升级成胶囊, 接着打下一个词。
- *   联想只针对当前段; 选中补全 = 追加成胶囊, 不自动搜(组词节奏由回车/搜索按钮掌控)。
+ * multi 模式(2026-10-30 二稿, 看板搜索框开宽档; 扫描页筛选框开窄档):
+ *   **纯文本, 没有胶囊** —— 输入框里就是完整字符串 "1girl, 1boy, hosh"(2026-10-30
+ *   用户定稿: 胶囊 UI 去掉, 看起来就是普通的 tag 输入, 定格词以 ", " 分隔)。
+ *   分隔符两档: 窄档(扫描页)=中英文逗号; 宽档(看板)=空格/中英文逗号/顿号/中英文分号/竖线。
+ *   敲分隔符 = 当前词定格 + **立即触发一次搜索**(搜索/清空按钮已删, 敲分隔符就是"搜索键");
+ *   连续多个分隔符只算一次(不产生空词), 重复词跳过并提示。
+ *   联想只针对**最后一个词**; 选中补全(点/Tab/Enter)= 仅把最后一个词补全成所选词,
+ *   不定格不搜索 —— 组词节奏完全由分隔符掌控。
  *   下拉里多一个「全选」: 把当前词匹配到的标签(≤200, 按图片数排序)全部加入 ——
  *   配合组合模式 any 就是「输入发 → 发色发型全都要」的用法。
- *   Backspace 在输入框为空时删除最后一个胶囊; ✕ 一键清空全部。
+ *   ✕ 一键清空全部并回到"浏览全部"; Backspace 回归原生删字符(没有胶囊可删)。
  *
  * 通用改进(所有使用处受益):
  *   - 下拉里 ↑↓ 移动高亮项时, 超出可视区自动跟随滚动(scrollTop 手工算, 不用
@@ -25,13 +29,14 @@
  *   - 中文输入法组词中(isComposing)方向键/回车不再被抢走: 以前拼音候选确认那下
  *     回车会同时误触发搜索。
  *   - 下拉里对「已经选过的词」打 ✓(选它是空操作, 只弹提示), 防重复。
+ *   - 联想项带「槽·大类」归属(2026-10-30): 后端 suggest:get 补发 slot/slotZh/sec,
+ *     下拉里显示 `中文（槽·大类）` —— 用户能看出这个词属于哪个槽(配合高级替换按槽配置)。
  */
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { api } from '@/utils/api.js'
 import { useSearchHistory } from '@/composables/useSearchHistory.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { LS } from '@/utils/lskey.js'
-import TvChip from '@/components/base/TvChip.vue'
 
 /** 输入停稳多久算"用户筛的就是这个词" —— 扫描页筛选框的即时筛选没有搜索按钮, 只能这么认 */
 const REMEMBER_MS = 1200
@@ -67,16 +72,24 @@ const props = defineProps({
   /** 参与补全的来源过滤 */
   source: { type: String, default: '' },
   /**
-   * 胶囊多词模式: 已选词变胶囊、按段联想、选中追加不搜索、下拉带「全选」。
-   * 只有看板搜索框开 —— 扫描页是空格分隔 AND(逗号只是普通字符), 标签页是单词搜索。
+   * 多词模式(纯文本, 没有胶囊): 分隔符定格 + 定格即搜索 + 联想针对最后一个词。
+   * 看板搜索框(wide-sep 宽档)和扫描页筛选框(窄档)都开。
    */
   multi: { type: Boolean, default: false },
   /**
+   * 宽分隔符(2026-10-30): 空格/顿号/分号/竖线也当"定格+搜索"键。
+   * 只给看板搜索框开 —— 扫描页筛选框的空格是 AND 分词的普通字符(词表里带空格的
+   * 查询合法), 开了宽档会把 'blue archive' 撕成两个词, 筛选语义全变。
+   */
+  wideSep: { type: Boolean, default: false },
+  /**
    * 本地标签池 —— 传了(哪怕是空数组)就**完全不查库**, 只在这个数组里补全。
-   * 元素形如 `{ tag, count, zh? }`。
+   * 元素形如 `{ tag, count?, zh?, slotZh?, sec? }`(count 缺省不显示计数)。
    *
-   * 扫描页要用它: 那里的图是**库外图片**(标签从 PNG 元数据现场解析),
-   * 拿标签名去问标签库, 扫描夹特有的标签根本不在库里, 补不出东西来。
+   * 两类使用者:
+   *   - 扫描页: 那里的图是**库外图片**(标签从 PNG 元数据现场解析),
+   *     拿标签名去问标签库, 扫描夹特有的标签根本不在库里, 补不出东西来。
+   *   - 高级替换弹窗的钉词: 只允许从所选槽的池子里挑, 池子词条带「槽·大类」标识。
    * 不传(null) = 老行为, 走 `suggest:get` 查库。
    */
   localTags: { type: Array, default: null },
@@ -110,28 +123,42 @@ let timer = null
 let rememberTimer = null
 let seq = 0
 
-/* ---------------- multi: 段与胶囊 ---------------- */
-/** 按中英文逗号切段。modelValue 的最后一段 = 输入框里正在打的内容, 前面的段 = 已选胶囊 */
-function segsOf(v) { return String(v || '').split(/[,，]/) }
-const chips = computed(() => segsOf(props.modelValue).slice(0, -1).map((s) => s.trim()).filter(Boolean))
-const activeSeg = computed(() => segsOf(props.modelValue)[segsOf(props.modelValue).length - 1] ?? '')
-const chipsSet = computed(() => new Set(chips.value))
+/* ---------------- multi: 纯文本多词 ---------------- */
+/** multi 分隔符两档:
+ *  · 窄(缺省, 扫描页筛选框): 只有中英文逗号 —— 那边的空格是 AND 分词的普通字符,
+ *    当分隔符会把它撕成两个词, 筛选结果全变(2026-10-30 e2e 实锤 13 条)
+ *  · 宽(wide-sep, 看板搜索框): 空格/中英文逗号/顿号/中英文分号/竖线都算 */
+const SEPS_NARROW = /[,，]/
+const SEPS_WIDE = /[,，、;；|\s]+/
+const seps = () => (props.wideSep ? SEPS_WIDE : SEPS_NARROW)
+/** 定格词统一以 ", " 分隔(2026-10-30 用户定稿的样例格式 "1girl, 1boy,") */
+const JOINT = ', '
+/** 归一键: 小写 + 空格/下划线归一 —— 重复词判定用它, 展示用原文 */
+const normKey = (w) => String(w || '').toLowerCase().replace(/[\s_]+/g, '_')
+/** 把完整串切成 { done: [定格词...], active: 正在打的词 } */
+function wordsOf(v) {
+  const parts = String(v || '').split(seps()).map((s) => s.trim())
+  return { done: parts.slice(0, -1).filter(Boolean), active: parts[parts.length - 1] ?? '' }
+}
+/** 拼回完整串: 定格词 join(', ') + 尾逗号 + 正在打的词 */
+function renderVal(done, active) {
+  return (done.length ? done.join(JOINT) + JOINT : '') + active
+}
+/** 正在打的词(联想关键词的原料) */
+const activeSeg = computed(() => wordsOf(props.modelValue).active)
+/** 已定格词(无尾逗号的 "blue_archive" 也算 —— 回车即搜) */
+const doneWords = computed(() => wordsOf(props.modelValue).done)
+const doneSet = computed(() => new Set(doneWords.value.map(normKey)))
 const hasAny = computed(() => Boolean(props.modelValue.trim()))
-/* 已有"定格成胶囊"的词才算有内容: 输入框里那段还没敲逗号, 清空后就该回到历史。
-   （不能看 hasAny —— 清空那一 tick props 还是旧值, 会把刚打开的历史下拉又关上。） */
-const hasChips = computed(() => chips.value.length > 0)
 
-/** 当前联想关键词: multi 只看正在打的段, 老模式整串就是词 */
+/** 当前联想关键词: multi 只看正在打的词, 老模式整串就是词 */
 function currentKw() {
   const v = props.multi ? activeSeg.value : props.modelValue
   return String(v || '').trim().toLowerCase()
 }
-/** 已选胶囊拼回 modelValue 前缀。⚠️ 结尾用**裸逗号**不要 ", " ——
- * 尾随空格会让 activeSeg 变成 " " 而不是 "", 输入框非空 → Backspace 删胶囊失灵 */
-function chipPrefix() { return chips.value.length ? chips.value.join(',') + ',' : '' }
 
 const showHistory = computed(() =>
-  props.history && mode.value === 'history' && !(props.multi && hasChips.value))
+  props.history && mode.value === 'history' && !(props.multi && doneWords.value.length))
 const histItems = computed(() => hist.list.value)
 
 function show() { open.value = true }
@@ -154,8 +181,8 @@ async function fetchSuggest() {
   const kw = currentKw()
   if (!kw || !props.suggest) {
     mode.value = 'history'
-    // multi 且已有胶囊: 空段没有可联想的东西, 收起下拉(胶囊本身已可见), 别弹历史/空态
-    if (props.multi && hasChips.value) { hide(); return }
+    // multi 且已有定格词: 空词没有可联想的东西, 收起下拉, 别弹历史/空态
+    if (props.multi && doneWords.value.length) { hide(); return }
     if (props.history) show()
     else hide()
     return
@@ -163,7 +190,7 @@ async function fetchSuggest() {
   mode.value = 'suggest'
   show()
 
-  // 本地标签池(扫描页): 同步过滤, 不往返主进程。
+  // 本地标签池(扫描页/钉词槽池): 同步过滤, 不往返主进程。
   if (props.localTags !== null) {
     const pool = props.localTags || []
     const toks = kw.split(/\s+/).filter(Boolean)
@@ -213,10 +240,10 @@ async function fetchSuggest() {
 function onFocus(e) {
   focused.value = true
   const el = e && e.target
-  const v = String(el && 'value' in el ? el.value : (props.multi ? activeSeg.value : props.modelValue) || '').trim()
+  const v = String(el && 'value' in el ? el.value : props.modelValue || '').trim()
   if (!props.multi && v && el.select) el.select()
   if (v) fetchSuggest()
-  else if (props.multi && hasChips.value) hide()
+  else if (props.multi && doneWords.value.length) hide()
   else if (props.history) { mode.value = 'history'; show() }
 }
 
@@ -226,23 +253,40 @@ function onInput(e) {
   const raw = e.target.value
   emit('input', raw)
   let mv = raw
+  let finalized = false   // 这次输入里有没有"敲了分隔符定格词"
   if (props.multi) {
-    const parts = raw.split(/[,，]/)
+    const parts = raw.split(seps())
     if (parts.length === 1) {
-      mv = chipPrefix() + raw
+      mv = renderVal(doneWords.value, raw)
     } else {
-      // 敲了逗号(中/英): 前面的段升级成胶囊, 最后一段留在输入框继续打
-      const lead = parts.slice(0, -1).map((s) => s.trim()).filter(Boolean)
-      const all = [...chips.value, ...lead]
-      mv = all.length ? all.join(',') + ',' + parts[parts.length - 1] : parts[parts.length - 1]
+      // 敲了分隔符: 定格词 = 已定格 + 新定格的段(连续多个分隔符只算一次), 归一成 ", " 分隔
+      const { done, active } = wordsOf(raw)
+      const all = [...doneWords.value]
+      for (const w of done) {
+        if (all.some((c) => normKey(c) === normKey(w))) {
+          if (done.length === 1) ui.toast(`已在筛选中: ${w}`, 'info', 1400)
+          continue
+        }
+        all.push(w)
+      }
+      mv = renderVal(all, active)
+      finalized = true
     }
   }
   emit('update:modelValue', mv)
+  // 定格即搜索(2026-10-30): 敲分隔符 = 定格 + 立即触发一次搜索 ——
+  // 搜索/清空按钮已经删了, 敲分隔符就是"搜索键"。
+  // mv 非空才发(纯清空的路径走下面 !raw 分支); 下拉收起, 别悬在搜索结果上。
+  if (props.multi && finalized) {
+    hide()
+    emit('submit', mv)
+    return
+  }
   clearTimeout(timer)
   // 判空必须看 **DOM 里的 raw**: emit 之后 props.modelValue 这一刻还没刷回来,
   // 拿它派生的 currentKw() 读到的是上一个词 —— 联想定时器就永远设不上
-  // (与 onFocus 同一个坑)。multi 下输入框只装当前段, raw 空即当前段空;
-  // "还有没有胶囊"看刚算出来的 mv, 不看旧 prop。
+  // (与 onFocus 同一个坑)。multi 下输入框装完整串, raw 空即整串空;
+  // "还有没有定格词"看刚算出来的 mv, 不看旧 prop。
   if (!raw.trim()) {
     if (props.multi && mv.trim()) { hide(); return }
     if (props.history) { mode.value = 'history'; show() }
@@ -252,20 +296,14 @@ function onInput(e) {
   timer = setTimeout(fetchSuggest, 180)      // 与旧版一致的 180ms 防抖
 }
 
-/** 删一个胶囊(multi) */
-function removeChip(c) {
-  const all = chips.value.filter((t) => t !== c)
-  emit('update:modelValue', all.length ? all.join(',') + ',' : '')
-  input.value && input.value.focus()
-}
-
 function pick(tag) {
   if (props.multi) {
-    if (chipsSet.value.has(tag)) { ui.toast(`已在筛选中: ${tag}`, 'info', 1400); return }
-    emit('update:modelValue', chipPrefix() + tag + ',')
+    // 仅补全(2026-10-30 定稿): 把正在打的词补全成所选词, 不定格、不搜索 ——
+    // 定格归分隔符管(敲空格/逗号才定格+搜索); 下拉保持开着, 连续换词不用再点输入框
+    emit('update:modelValue', renderVal(doneWords.value, tag))
     emit('pick', tag)
     cursor.value = -1                       // 不再高亮任何项, 下一次 Enter = 提交搜索
-    return                                  // 下拉保持开着 —— 连续组词不用再点输入框
+    return
   }
   emit('update:modelValue', tag)
   emit('pick', tag)
@@ -304,23 +342,20 @@ function submit() {
 function onKeydown(e) {
   // 中文输入法组词中: 方向键/回车是 IME 的候选操作, 不归下拉管
   if (e.isComposing || e.keyCode === 229) return
-  if (e.key === 'Backspace' && props.multi) {
-    const el = input.value
-    if (el && !el.value && chips.value.length) {
-      e.preventDefault()
-      const all = chips.value.slice(0, -1)
-      emit('update:modelValue', all.length ? all.join(',') + ',' : '')
-    }
-    return
-  }
   if (e.key === 'Enter') {
     const active = open.value && mode.value === 'suggest' ? items.value[cursor.value] : null
     if (active) {
       e.preventDefault()
-      pick(active.tag)
+      pick(active.tag)      // 仅补全(2026-10-30): 再按一次 Enter(无高亮项)才提交搜索
     } else {
       submit()
     }
+    return
+  }
+  if (e.key === 'Tab' && props.multi) {
+    // Tab = 补全(不打断输入节奏): 有高亮项就补全, 没有就让默认行为走
+    const active = open.value && mode.value === 'suggest' ? items.value[cursor.value] : null
+    if (active) { e.preventDefault(); pick(active.tag) }
     return
   }
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -366,41 +401,9 @@ defineExpose({ focus: () => input.value?.focus(), hide })
 
 <template>
   <div ref="root" class="sug">
-    <!-- 胶囊多词模式(multi): 已选词 = 胶囊, 输入框只装正在打的段 -->
-    <div v-if="multi" :class="['tagbox', `s-${size}`, { focused }]" @focusin="focused = true" @focusout="focused = false">
-      <TvChip
-        v-for="c in chips"
-        :key="c"
-        :label="c"
-        removable
-        readonly
-        class="chip"
-        @remove="removeChip(c)"
-      />
-      <input
-        ref="input"
-        :value="activeSeg"
-        :placeholder="chips.length ? '' : placeholder"
-        :disabled="disabled"
-        type="text"
-        autocomplete="off"
-        spellcheck="false"
-        @input="onInput"
-        @focus="onFocus"
-        @blur="onBlur"
-        @keydown="onKeydown"
-      >
-      <span
-        v-if="hasAny"
-        class="clear"
-        title="清空全部标签"
-        @mousedown.prevent="() => { emit('update:modelValue', ''); hide(); input?.focus() }"
-      >✕</span>
-    </div>
-
-    <!-- 老模式: 单输入框(扫描页筛选 / 标签页搜索) -->
+    <!-- 统一单输入框(2026-10-30 二稿): multi 也是纯文本 —— 完整字符串 "1girl, 1boy, hosh",
+         没有胶囊; ✕ 清空浮在框右侧(仅 multi) -->
     <input
-      v-else
       ref="input"
       :value="modelValue"
       :placeholder="placeholder"
@@ -414,6 +417,12 @@ defineExpose({ focus: () => input.value?.focus(), hide })
       @blur="onBlur"
       @keydown="onKeydown"
     >
+    <span
+      v-if="multi && hasAny"
+      class="clear"
+      title="清空全部标签并回到全部图片"
+      @mousedown.prevent="() => { emit('update:modelValue', ''); hide(); input?.focus(); emit('submit', '') }"
+    >✕</span>
 
     <div v-if="open" class="drop">
       <!-- 历史 -->
@@ -448,14 +457,16 @@ defineExpose({ focus: () => input.value?.focus(), hide })
           v-else
           v-for="(s, i) in items"
           :key="s.tag"
-          :class="['item', { active: i === cursor, dup: chipsSet.has(s.tag) }]"
-          :title="chipsSet.has(s.tag) ? '已在筛选中(再点是空操作)' : ''"
+          :class="['item', { active: i === cursor, dup: doneSet.has(normKey(s.tag)) }]"
+          :title="doneSet.has(normKey(s.tag)) ? '已在筛选中(再点是空操作)' : ''"
           @mouseenter="cursor = i"
           @mousedown.prevent="pick(s.tag)"
         >
-          <span class="s-en">{{ s.tag }}<span v-if="chipsSet.has(s.tag)" class="s-dup"> ✓已选</span></span>
-          <span v-if="s.zh" class="s-zh">{{ s.zh }}</span>
-          <span class="s-cnt">{{ s.count }}</span>
+          <span class="s-en">{{ s.tag }}<span v-if="doneSet.has(normKey(s.tag))" class="s-dup"> ✓已选</span></span>
+          <span v-if="s.zh || s.slotZh" class="s-zh">
+            {{ s.zh }}<template v-if="s.slotZh">（{{ s.slotZh }}<span v-if="s.sec">·{{ s.sec }}</span>）</template>
+          </span>
+          <span v-if="s.count != null" class="s-cnt">{{ s.count }}</span>
         </div>
       </template>
     </div>
@@ -465,7 +476,7 @@ defineExpose({ focus: () => input.value?.focus(), hide })
 <style scoped>
 .sug { position: relative; min-width: 0; }
 
-/* 老模式的单输入框 */
+/* 单输入框(所有模式统一 —— 2026-10-30 二稿: multi 去胶囊, 也是纯文本) */
 .sug > input {
   width: 100%;
   background: var(--panel2); color: var(--text);
@@ -478,28 +489,9 @@ defineExpose({ focus: () => input.value?.focus(), hide })
 .sug > input::placeholder { color: var(--faint); }
 .sug > input:disabled { opacity: .55; }
 
-/* multi: 胶囊容器。外观对齐老输入框, 里面是 胶囊 + 裸输入框 + ✕ */
-.tagbox {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
-  width: 100%;
-  background: var(--panel2);
-  border: 1px solid var(--border); border-radius: var(--r-sm);
-  padding: 4px 26px 4px 6px;
-  cursor: text;
-  transition: border-color var(--t-fast);
-}
-.tagbox:focus-within { border-color: var(--accent); }
-.tagbox input {
-  flex: 1 1 110px; min-width: 110px;
-  border: 0; outline: none; background: transparent;
-  color: var(--text); font-size: 13px; padding: 3px 4px;
-}
-.tagbox input::placeholder { color: var(--faint); }
-.tagbox input:disabled { opacity: .55; }
-.tagbox .chip { max-width: 100%; }
+/* ✕ 清空(仅 multi): 浮在输入框右侧 —— 红色常亮, 全选了一堆词之后找得到它(2026-10-06 反馈) */
 .clear {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
-  /* 常态就是红的 —— 灰色太不显眼, 用户在全选了一堆词之后找不到它(2026-10-06 反馈) */
   color: var(--danger, #e5484d); font-size: 12px; line-height: 1;
   padding: 3px 5px; border-radius: 3px; cursor: pointer;
 }
@@ -524,7 +516,7 @@ defineExpose({ focus: () => input.value?.focus(), hide })
 .s-dup { color: var(--accent); font-size: 11px; }
 .s-zh {
   color: var(--muted); font-size: 11px; white-space: nowrap;
-  max-width: 45%; overflow: hidden; text-overflow: ellipsis;
+  max-width: 52%; overflow: hidden; text-overflow: ellipsis;
 }
 .s-cnt { color: var(--accent); font-size: 11px; min-width: 44px; text-align: right; }
 .msg { padding: 10px 12px; font-size: 12px; color: var(--muted); }

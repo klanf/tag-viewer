@@ -27,7 +27,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'pick', 'confirm'])
 
 const text = ref(props.modelValue)
-const sug = ref([])          // [{tag, zh, count}]
+const sug = ref([])          // [{tag, zh, count, slot, slotZh, sec}] —— slot* 为「槽·大类」归属(2026-10-30)
 const active = ref(-1)       // 键盘高亮行; -1 = 没选
 const open = ref(false)
 const focused = ref(false)   // 输入框是否持有焦点 —— 联想响应回来时必须看它,
@@ -120,7 +120,10 @@ const hasSug = computed(() => open.value && sug.value.length > 0)
         @mousemove="active = i"
       >
         <span class="tag">{{ s.tag }}</span>
-        <span class="zh" :class="{ none: !s.zh }">{{ s.zh || '—' }}</span>
+        <span class="zh" :class="{ none: !s.zh && !s.slotZh }">
+          {{ s.zh }}<template v-if="s.slotZh">（{{ s.slotZh }}<span v-if="s.sec">·{{ s.sec }}</span>）</template>
+          <template v-if="!s.zh && !s.slotZh">—</template>
+        </span>
         <span class="cnt">{{ fmtCount(s.count) }}</span>
       </li>
       <li class="hint">↑↓ 选择 · 回车填入 · 直接回车 = 用输入框原文</li>

@@ -29,8 +29,8 @@ import TvImageGrid from '@/components/image/TvImageGrid.vue'
 import TvBatchBar from '@/components/image/TvBatchBar.vue'
 import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
 import TvRulesEditorModal from '@/components/rules/TvRulesEditorModal.vue'
+import TvAdvancedReplaceModal from '@/components/export/TvAdvancedReplaceModal.vue'
 import TvExportPresetsModal from '@/components/export/TvExportPresetsModal.vue'
-import TvRandomModal from '@/components/random/TvRandomModal.vue'
 import TvDupPanel from '@/components/dup/TvDupPanel.vue'
 import TagImagesPanel from '@/components/tag/TagImagesPanel.vue'
 import TvSeriesCharsPanel from '@/components/series/TvSeriesCharsPanel.vue'
@@ -54,6 +54,7 @@ import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { api } from '@/utils/api.js'
+import { advParams, advZh, adv, advPinCount } from '@/utils/advReplace.js'
 import { nfmt } from '@/utils/format.js'
 
 const src = useSourceStore()
@@ -122,7 +123,6 @@ const statsLoading = ref(false)
 const showBlacklist = ref(false)
 const showReplace = ref(false)
 const showPresets = ref(false)
-const showRandom = ref(false)     // 随机抽签弹层(pin + 权重窗口 + 查重)
 const showDup = ref(false)         // 相似图查重面板(2026-10-17)
 const exportMenu = ref(false)      // 「⬇ 导出标签 ▾」下拉是否展开
 const menuUp = ref(false)          // 下方放不下时翻到按钮上方开(路径栏占了 38px 后, 竖向余量不够了)
@@ -148,6 +148,21 @@ const stripViewExport = ref(false) // 导出时剔除视角/机位标签(词表 
 const safeOnlyExport = ref(false)  // 导出时剔除敏感tag(只导出安全模式的标签, 口径跟随安全模式档位)
 // 过滤组(2026-10-28 词条管线): 槽内单选+互斥消解, 仅单人图生效; 主进程 exporter 认 groups=1
 const groupsExport = ref(false)
+// 高级替换(2026-10-30): 独立弹窗 TvAdvancedReplaceModal, 状态在 utils/advReplace.js
+// (reactive 单例, 弹窗与本页共用) —— 槽级随机 + 钉词必现 + 禁用槽。
+// 本页只留: 弹窗开关 + 导出参数取值(advParams()) + 回执文案。
+const showAdvReplace = ref(false)
+function rndZh(id) { return advZh(id) }
+/** 导出菜单那行状态提示(高级替换已收进独立弹窗, 这里只报当前配置概要) */
+const advSummary = computed(() => {
+  if (!adv.enabled) return '未启用'
+  const parts = []
+  if (adv.picked.length) parts.push(`随机 ${adv.picked.length} 槽`)
+  if (advPinCount.value) parts.push(`钉词 ${advPinCount.value}`)
+  if (adv.banned.length) parts.push(`禁用 ${adv.banned.length} 槽`)
+  return parts.length ? `已启用: ${parts.join(' · ')}` : '已启用(未配置任何槽)'
+})
+
 const replaceExport = ref(true)    // 导出时应用替换规则(默认开; 关了就导原始标签, 主进程 exporter 本来就认 replace=0)
 /* 替换规则组(2026-10-04): 选中哪一套。多套规则时导出时挑一套, 见 🔁 规则编辑器。
  * 列表与"纠正成真实 id"都由 TvReplaceSetPicker 自己干(它挂载时会 emit), 这里只留值。 */
@@ -170,6 +185,7 @@ const presetSnapshot = computed(() => ({
   strip_view: stripViewExport.value,
   safe_only: safeOnlyExport.value,
   groups: groupsExport.value,
+  ...advParams(),
   with_path: false,
   replace_set: replaceSet.value,
 }))
@@ -284,12 +300,6 @@ async function doSearch() {
   await feed.search(buildQuery(0))
 }
 
-/** 「✕ 清空」: 搜索词整个丢掉, 回到浏览全部(全选了一大串词之后的最快退路) */
-async function clearSearch() {
-  q.value = ''
-  await doSearch()
-}
-
 /** 文件名过滤: 不进标签搜索历史, 防抖后自动生效 */
 function applyNameFilter() { feed.search(buildQuery(0)) }
 let nameTimer = null
@@ -396,6 +406,8 @@ async function doExport(withPath) {
     params.strip_view = stripViewExport.value ? '1' : '0'
     params.safe_only = safeOnlyExport.value ? '1' : '0'
     params.groups = groupsExport.value ? '1' : '0'
+    // 高级替换(2026-10-30): 参数整体从 advReplace store 取(随机/钉词/禁用槽/率/种子)
+    Object.assign(params, advParams())
     params.replace = replaceExport.value ? '1' : '0'
     params.replace_set = replaceSet.value
     const r = await api.exportSave(params)
@@ -406,7 +418,19 @@ async function doExport(withPath) {
     const safeNote = safeOnlyExport.value && r.safeStripped ? `(已剔 ${nfmt(r.safeStripped)} 个敏感tag)` : ''
     const groupsNote = groupsExport.value && r.groupsStripped ? `(过滤组已剔 ${nfmt(r.groupsStripped)} 个冲突tag)` : ''
     const repNote = replaceExport.value && r.replaced ? `(已替换 ${nfmt(r.replaced)} 个)` : ''
-    ui.ok(`✅ 已导出 ${nfmt(r.count)} 行${stripNote}${viewNote}${safeNote}${groupsNote}${repNote} → ${r.path}`, 3200)
+    // 禁用槽删除计数(2026-10-30): 与黑名单剔除分开报, 用户才知道是槽级配置干的
+    const banNote = r.slotBanned
+      ? `(禁用槽已删 ${nfmt(r.slotBanned)} 个词${Object.keys(r.slotBannedBy || {}).length ? ': ' + Object.entries(r.slotBannedBy).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([id, n]) => `${rndZh(id)} ${nfmt(n)}`).join(' · ') : ''})`
+      : ''
+    // 按槽/大类细分展示(引擎返回 randomizedBy: {id: 个数}); 类多时只列前 6 类防溢出
+    let rndNote = ''
+    if (params.randomize === '1' && r.randomized) {
+      const parts = Object.entries(r.randomizedBy || {})
+        .sort((a, b) => b[1] - a[1]).slice(0, 6)
+        .map(([id, n]) => `${rndZh(id)} ${nfmt(n)}`)
+      rndNote = `(已随机替换 ${nfmt(r.randomized)} 个词${parts.length ? ': ' + parts.join(' · ') : ''})`
+    }
+    ui.ok(`✅ 已导出 ${nfmt(r.count)} 行${stripNote}${viewNote}${safeNote}${groupsNote}${repNote}${banNote}${rndNote} → ${r.path}`, 3200)
   } catch (e) {
     ui.err('导出失败: ' + e.message)
   } finally {
@@ -508,6 +532,7 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
         <label class="lab">要搜索的标签(选词/全选加入胶囊; 敲中英文逗号继续下一个词)</label>
         <TvTagSuggestInput
           v-model="q"
+          wide-sep
           multi
           history
           :source="src.selected.join(',')"
@@ -567,23 +592,16 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 
         <!--
           动作区分三层(改之前是 6 个等宽按钮摊成两排, 主次不分):
-            1. 搜索        —— 唯一的高频动作, 独占一行
+            1. 搜索        —— 唯一的高频动作; 2026-10-30 起搜索/清空按钮删掉:
+                              敲分隔符(空格/逗号等)定格词条即触发搜索, 回车也能搜,
+                              框内 ✕ 清空并回到全部 —— 不再需要独立按钮
             2. 导出 + 黑名单 —— 导出做成分裂按钮(主键直接导出, ▾ 放"带路径"与两个导出选项);
                               黑名单是 ban 循环入口, 留在明面上
-            3. 文字链      —— 替换/预设导出这类"进去配置"的入口, 降级成 ghost 小按钮
+            3. 文字链      —— 替换/高级替换/预设导出这类"进去配置"的入口, 降级成 ghost 小按钮
           底部 tip 原本还挂着这三个入口的超链接, 与按钮完全重复, 已删;
           说明文字改挂到各按钮的 title 上(悬停可见, 不再占版面)。
         -->
         <div class="btns">
-          <div class="brow">
-            <TvButton variant="primary" @click="doSearch">🔍 搜索</TvButton>
-            <TvButton
-              variant="ghost"
-              title="清空搜索词并回到全部图片"
-              @click="clearSearch"
-            >✕ 清空</TvButton>
-          </div>
-
           <div ref="exportRow" class="brow">
             <div class="split">
               <TvButton :loading="exporting !== 0" @click="doExport(false)">⬇ 导出标签</TvButton>
@@ -652,6 +670,12 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
                   title="导出前按槽位词典做消解: 同槽位只留本地图片量最多的一个(景别/腿袜/表情/家具等), 并消解裸足×无鞋这类互斥对; 仅对单人图生效, 群像原样保留"
                 />
               </div>
+              <!-- 高级替换(2026-10-30): 整体搬去独立弹窗(动作区「🎲 高级替换」入口),
+                   导出菜单只留一行状态提示 —— 配置太多塞菜单里太挤了 -->
+              <div class="mopt adv-hint">
+                <span class="faint">🎲 高级替换: {{ advSummary }}</span>
+                <TvButton size="xs" variant="ghost" @click="showAdvReplace = true">去配置…</TvButton>
+              </div>
               <div class="mopt">
                 <TvCheckbox
                   v-model="prefs.bgAuto"
@@ -669,13 +693,15 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
               title="导出时对标签应用替换规则"
               @click="showReplace = true"
             >🔁 替换规则</TvButton>
-            <TvButton variant="ghost" size="sm" :title="presetTitle" @click="showPresets = true">📤 预设导出</TvButton>
             <TvButton
               variant="ghost"
               size="sm"
-              title="随机抽签: 固定 pin + 段级权重窗口 + 查重降权(与 CLI random-prompt 共用引擎)"
-              @click="showRandom = true"
-            >🎲 随机抽签</TvButton>
+              :title="advSummary === '未启用'
+                ? '高级替换: 按槽随机换词 + 钉词必现 + 禁用槽删词, 独立弹窗配置, 导出时生效'
+                : `高级替换(${advSummary.replace('已启用: ', '').replace('已启用', '未配置')}) — 点击调整`"
+              @click="showAdvReplace = true"
+            >🎲 高级替换<span v-if="adv.enabled" class="lnk-dot" /></TvButton>
+            <TvButton variant="ghost" size="sm" :title="presetTitle" @click="showPresets = true">📤 预设导出</TvButton>
             <TvButton
               variant="ghost"
               size="sm"
@@ -824,10 +850,10 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 
     <TvRulesEditorModal v-model="showBlacklist" kind="blacklist" @saved="doSearch" />
     <TvRulesEditorModal v-model="showReplace" kind="replace" @saved="doSearch" />
+    <TvAdvancedReplaceModal v-model="showAdvReplace" />
     <MoveTargetModal v-model="moveOpen" :count="selected.size" :folders="moveFolders" :busy="moving" @pick="doMove" />
     <MoveTargetModal v-model="copyOpen" mode="copy" :count="selected.size" :folders="moveFolders" :busy="copying" @pick="doCopy" />
     <TvDupPanel v-model="showDup" />
-    <TvRandomModal v-model="showRandom" />
     <TvExportPresetsModal
       v-model="showPresets"
       :sources="src.list"
@@ -923,9 +949,18 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 .msep { height: 1px; margin: 4px 0; background: var(--border); }
 .mopt { padding: 4px 8px; }
 
+/* 导出菜单 · 高级替换状态行(2026-10-30: 配置搬进独立弹窗, 菜单里只剩概要 + 入口) */
+.adv-hint { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.adv-hint .faint { font-size: 11px; color: var(--faint); }
+
 /* 第三层: 配置入口的文字链 */
 .lnk { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px; }
 .lnk :deep(.tv-btn) { flex: 0 0 auto; }
+/* 高级替换已启用的小圆点(不点开弹窗也能一眼看出它在生效) */
+.lnk-dot {
+  display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent, #534ab7); margin-left: 3px; vertical-align: 1px;
+}
 .badge {
   padding: 1px 7px; border-radius: var(--r-pill);
   background: var(--accent-soft); color: var(--accent);

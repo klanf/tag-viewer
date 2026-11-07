@@ -35,7 +35,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { openDb, rebuildTags } from './store.js'
 import { sortTagString, reloadCats, isCharOrSeries, unwrapWeight } from './tagcats.js'
-import { dataFile, getSettings, getWorkspace } from './workspace.js'
+import { dataFile, dataDirPath, getSettings, getWorkspace } from './workspace.js'
 import { PROJECT_ROOT } from './paths.js'
 import {
   TAGGER_MODELS, DEFAULT_TAGGER_MODEL, normalizeTaggerModel,
@@ -205,8 +205,10 @@ function modelDirs() {
   }
   if (process.env.TV_OLD_ROOT) push(path.join(process.env.TV_OLD_ROOT, 'model'))
   push(path.join(PROJECT_ROOT, 'models'))
-  if (dataFile) {
-    try { push(path.join(path.dirname(dataFile('tags.db')), 'models')) } catch { /* 忽略 */ }
+  if (dataDirPath) {
+    /* 锚定**数据目录根**, 不能锚 db 文件所在目录 —— 2026-10-30 库挪进 db/ 子目录后
+       dirname(dbPath()) 变成 data/db, 模型就"找不到"了(实锤: 336-ft 报缺)。 */
+    try { push(path.join(dataDirPath(), 'models')) } catch { /* 忽略 */ }
   }
   return out
 }

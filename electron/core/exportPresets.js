@@ -163,7 +163,14 @@ export function setAutoDelayMs(ms) {
 // replace_set = 用哪一套替换规则(2026-10-04 规则组); 空串 = 默认组。
 // append 已于 10-04 移除 UI(用户改用替换规则), 但**留在白名单里**:
 // 老预设文件里可能存过这个键, 归一化时丢掉它等于静默改掉老预设的行为。
-const PARAM_STRS = ['q', 'exclude', 'sort', 'append', 'replace_set']
+const PARAM_STRS = ['q', 'exclude', 'sort', 'append', 'replace_set',
+  // 随机替换(2026-10-29): 大类串 "hair:0.65,face" + 种子 —— 不进白名单会被
+  // normParams 剥掉, 存出来的预设静默丢失随机配置(实锤过的坑)
+  // 2026-10-30 槽级粒度: randomize_slots 格式同 randomize_sections;
+  // pin_slots = 钉词串 "legwear:white_thighhighs"。
+  // randomize_sections 留在白名单里 = 老预设兼容, 解析端两边都认。
+  // ban_slots = 禁用槽串 "headwear,eyewear"(整词删除)。
+  'randomize_sections', 'randomize_slots', 'pin_slots', 'ban_slots', 'randomize_seed']
 const PARAM_ENUMS = {
   mode: ['any', 'all'],
   match: ['contains', 'exact'],
@@ -172,8 +179,12 @@ const PARAM_ENUMS = {
   safe_level: ['follow', 'core', 'edge', '0', '1', '2', '3', '4'],
 }
 /** 这几个与首页/ buildExport 的默认值对齐: 缺省 = 开 */
-const PARAM_BOOL_TRUE = ['exclude_char', 'spaces', 'blacklist', 'replace', 'bg']
-const PARAM_BOOL_FALSE = ['with_path', 'strip_char', 'strip_view', 'safe_only', 'seg_mode']
+const PARAM_BOOL_TRUE = ['exclude_char', 'spaces', 'blacklist', 'replace', 'bg',
+  'randomize_nsfw',    // 成人词库闸门缺省 = 允许(与旧行为一致)
+  'pin_fill']          // 钉词缺词补上(2026-10-30): 缺省 = 补("必现"语义)
+const PARAM_BOOL_FALSE = ['with_path', 'strip_char', 'strip_view', 'safe_only', 'seg_mode',
+  'groups',           // 过滤组去冲突: 之前不在白名单里, 编辑预设一存就静默丢(实锤)
+  'randomize']        // 随机替换总开关: 缺省 = 关
 
 /** 导出参数(等价于首页筛选条件)白名单归一化 —— 只留认识的键, 防脏数据进文件 */
 export function normParams(raw = {}) {
@@ -272,6 +283,9 @@ function toExportQuery(params) {
     strip_view: params.strip_view ? '1' : '0',
     safe_only: params.safe_only ? '1' : '0',
     groups: params.groups ? '1' : '0',
+    randomize: params.randomize ? '1' : '0',
+    randomize_nsfw: params.randomize_nsfw ? '1' : '0',
+    pin_fill: params.pin_fill ? '1' : '0',
     safe_level: params.safe_level || 'follow',
     seg_mode: params.seg_mode ? '1' : '0',
     exclude_char: params.exclude_char ? '1' : '0',
@@ -330,7 +344,9 @@ async function runPresetOnce(id, { trigger = 'manual' } = {}) {
     })
     return {
       ok: true, id, name: preset.name, path: full, count: r.count, bytes,
-      blocked: r.blocked, bgAdded: r.bgAdded, stripped: r.stripped, groupsStripped: r.groupsStripped, ms: r.ms, trigger,
+      blocked: r.blocked, bgAdded: r.bgAdded, stripped: r.stripped, groupsStripped: r.groupsStripped,
+      randomized: r.randomized, randomizedBy: r.randomizedBy,
+      slotBanned: r.slotBanned || 0, slotBannedBy: r.slotBannedBy || {}, ms: r.ms, trigger,
     }
   } catch (e) {
     patchRun(id, { lastRunAt: Date.now(), lastTrigger: trigger, lastError: e?.message || String(e) })

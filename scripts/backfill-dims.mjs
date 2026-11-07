@@ -33,7 +33,9 @@ const argOf = (name) => {
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const dataDir = path.resolve(argOf('--data-dir') || path.join(ROOT, 'data'))
-const dbFile = path.join(dataDir, 'tags.db')
+/* 2026-10-30 起库在 <dataDir>/db/ 子目录(junction 到 C 盘); 老位置留作回退 */
+const dbFile = [path.join(dataDir, 'db', 'tags.db'), path.join(dataDir, 'tags.db')]
+  .find((p) => fs.existsSync(p)) || path.join(dataDir, 'db', 'tags.db')
 
 /** 一次 UPDATE 多少行就提交 —— 太大时中断会白跑一批, 太小又慢 */
 const BATCH = 2000

@@ -40,7 +40,7 @@ const CHANNELS = new Set([
   'dup:ignore:add', 'dup:ignore:clear', 'dup:ignore:list', 'dup:ignore:remove',
   'dup:ignore:block', 'dup:block:clear',
   // 规则
-  'blacklist:get', 'blacklist:save', 'blacklist:toggle',
+  'blacklist:get', 'blacklist:save', 'blacklist:toggle', 'blacklist:test',
   'replace:get', 'replace:save', 'bg:get', 'rules:reload', 'rules:test',
   // 替换规则组(2026-10-04): 多套规则手动命名、导出时选
   'replace:sets', 'replace:sets:save',
@@ -70,7 +70,7 @@ const CHANNELS = new Set([
   'tagger:orphans', 'tagger:requeue-orphans',
   // 设置弹窗(2026-10-15): 加速探测 / 偏好写入 / 检查更新 / 版本号
   'tagger:accel', 'app:settings:set', 'app:checkUpdate', 'app:version',
-  'tagger:setup-download',
+  'tagger:setup-download', 'tagger:model-download',
   // 图片删除(移入回收站) / 批量移动(扫描页选择模式)
   'image:trash', 'image:moveMany', 'image:copyMany',
   // 收藏找回(按文件名搜已知目录)
@@ -84,8 +84,8 @@ const CHANNELS = new Set([
   'clipboard:write',
   // 诊断
   'diag:stats', 'diag:clearSearchCache', 'diag:clearThumbs', 'diag:fileInfo',
-  // 随机抽签(pin + 权重窗口 + 查重降权, 2026-10-28)
-  'random:draw', 'random:meta', 'random:ledger', 'random:resetCounts',
+  // 导出端随机化(大类/槽勾选清单, 2026-10-28 / 2026-10-30 槽粒度)
+  'random:sections', 'random:slots', 'random:wordinfo',
 ])
 
 /**

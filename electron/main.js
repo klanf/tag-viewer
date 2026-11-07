@@ -361,7 +361,7 @@ function closeSplash() {
   splash = null
 }
 
-function showSplash() {
+function showSplash(e2eNoFocus = false) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     body{margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
          height:140px;background:#f4f6fa;font-family:"Segoe UI","Microsoft YaHei",sans-serif;
@@ -378,7 +378,8 @@ function showSplash() {
   splash = new BrowserWindow({
     width: 360, height: 140, frame: false, resizable: false,
     minimizable: false, maximizable: false,
-    alwaysOnTop: true, skipTaskbar: true, center: true, show: true,
+    alwaysOnTop: true, skipTaskbar: true, center: true,
+    show: !e2eNoFocus,   // 静默模式: 不显示启动画面(它 alwaysOnTop, 一出来必抢焦点)
     backgroundColor: '#f4f6fa',
     webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true },
   })
@@ -389,7 +390,12 @@ function showSplash() {
 }
 
 function createWindow() {
-  showSplash()
+  /* e2e 静默模式(TV_E2E_NOFOCUS=1, 2026-10-30): 用户可能在打游戏, 测试窗口
+   * 不许抢焦点 —— 启动画面整个不显示, 主窗口离屏 showInactive(照常渲染,
+   * CDP/IntersectionObserver/过渡动画全正常, 但不激活、不占屏幕)。
+   * 配套: e2e 侧跳过 Page.bringToFront(在 Electron 里会激活窗口)。 */
+  const e2eNoFocus = process.env.TV_E2E_NOFOCUS === '1'
+  showSplash(e2eNoFocus)
   log('ok', 'createWindow')
   win = new BrowserWindow({
     width: 1560,
@@ -414,7 +420,14 @@ function createWindow() {
   win.once('ready-to-show', () => {
     clearTimeout(forceShowTimer)
     closeSplash()
-    win.show()
+    if (e2eNoFocus) {
+      // 静默模式: 离屏显示 —— 渲染/CDP/IO 全正常, 但不激活、不占任何屏幕
+      try { win.setPosition(-32000, 0) } catch { /* 坐标被系统夹住也无所谓, showInactive 不抢焦点 */ }
+      win.showInactive()
+      log('ok', 'BOOT OK — e2e 静默模式: 窗口离屏显示, 不抢焦点')
+    } else {
+      win.show()
+    }
     log('ok', 'BOOT OK — 窗口已显示')
     markReady('window-shown')
   })
@@ -425,7 +438,12 @@ function createWindow() {
   const forceShowTimer = setTimeout(() => {
     if (win && !win.isDestroyed() && !win.isVisible()) {
       closeSplash()
-      win.show()
+      if (e2eNoFocus) {
+        try { win.setPosition(-32000, 0) } catch { /* 同上 */ }
+        win.showInactive()
+      } else {
+        win.show()
+      }
       log('warn', 'ready-to-show 超 30s, 强制显示主窗口(可能空白)')
       markReady('fallback-shown')
     }
@@ -501,7 +519,49 @@ function scheduleIngest() {
     return
   }
   ingestStarted = true
-  setTimeout(() => { runIngestOnce() }, 3000)
+  /* 2026-10-30: 3s -> 默认 300s。同步要全量枚举库目录(HDD), 3s 起跑正好撞上
+   * 用户启动后的第一批操作(开扫描夹/出缩略图), 抢磁盘 —— 01:18 冷启动
+   * did-finish-load 138s 里有它的份。预热扫描(见 schedulePrewarm)在 90s,
+   * 两者天然错峰。TV_INGEST_DELAY_MS 可调, 0 = 恢复旧行为。 */
+  const rawDelay = parseInt(process.env.TV_INGEST_DELAY_MS, 10)
+  const delayMs = Number.isFinite(rawDelay) ? rawDelay : 300000
+  log('ok', `后台增量同步定于 ${Math.round(delayMs / 1000)}s 后开始(TV_INGEST_DELAY_MS 可调)`)
+  setTimeout(() => { runIngestOnce() }, delayMs)
+}
+
+/* ---- 扫描缓存预热(2026-10-30) ----
+ * 重启后 SCAN_CACHE 内存缓存是空的, 用户点开第一个文件夹要走全量对账
+ * (846 张实测 12.5s)。启动 90s 后把「最近打开的 3 个夹子」静默各跑一遍
+ * scanFolder —— 只填 scan.js 的内存/持久缓存, **不写 folders 表**(不动
+ * last_scan, 免得「最近扫的在前」的列表排序被预热搅乱)。
+ * 只挑 stats.total <= CACHE_MAX_ITEMS/3 的中小夹 —— 万级大夹的全量对账
+ * 本身就是一场磁盘风暴, 不适合拿来预热。TV_PREWARM=0 / TV_INGEST=0 关
+ * (e2e 沙箱随 TV_INGEST=0 一起关, 免得预热去碰用户真实盘符)。 */
+let prewarmStarted = false
+function schedulePrewarm() {
+  if (prewarmStarted) return                     // startLoad 会被 quiet 重载多次调, 预热只此一次
+  prewarmStarted = true
+  if (process.env.TV_PREWARM === '0' || process.env.TV_INGEST === '0') return
+  setTimeout(async () => {
+    try {
+      const { listFolders } = await import('./core/folders.js')
+      const { scanFolder, CACHE_MAX_ITEMS } = await import('./core/scan.js')
+      const cap = Math.floor(CACHE_MAX_ITEMS / 3)
+      const rows = (listFolders({})?.folders || [])
+        .filter((f) => f.path && f.exists !== false)
+        .filter((f) => !(f.stats && Number(f.stats.total) > cap))
+        .sort((a, b) => (Number(b.last_scan) || 0) - (Number(a.last_scan) || 0))
+        .slice(0, 3)
+      if (!rows.length) return
+      log('ok', `扫描缓存预热开始: ${rows.map((f) => f.name || f.path).join(' / ')}`)
+      for (const f of rows) {
+        try {
+          await scanFolder({ path: f.path, recursive: !!f.recursive }, null, {})
+          log('ok', `预热完成: ${f.name || f.path}`)
+        } catch (e) { log('warn', `预热失败 ${f.path}: ${e?.message || e}`) }
+      }
+    } catch (e) { log('warn', `预热调度失败: ${e?.stack || e}`) }
+  }, 90000)
 }
 
 async function runIngestOnce() {
@@ -641,6 +701,7 @@ async function startLoad(opts = {}) {
     // 同步只是"磁盘 <-> tags.db 对齐", 不依赖数据集就绪; 就算库真坏了,
     // runIngestOnce 自己有 try/catch, 最多 warn 一行。
     scheduleIngest()
+    schedulePrewarm()
   } catch (e) {
     log('fatal', `数据集加载失败: ${e?.stack || e}`)
     if (win && !win.isDestroyed()) {

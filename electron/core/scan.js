@@ -43,6 +43,22 @@ const SCAN_CACHE = new Map()          // key -> { at, result }
 const CACHE_TTL = 5 * 60 * 1000
 const CACHE_MAX_ITEMS = 30000
 
+/* ---- 夹级指纹快捷通道(2026-10-30) ----
+ * 对账的真正瓶颈是逐文件 stat(846 张实测 12.5s, 全耗在 HDD 随机 stat 上)。
+ * 「目录 mtime 集合 + 文件数」都没变 => 文件集合必然没变(NTFS 下条目增/删/改名
+ * 一定 bump 所在目录的 mtime), 于是 statMap 可以整个从持久缓存合成, 零文件 I/O。
+ * 已知盲区: 同名原地覆盖不动目录 mtime, 指纹看不见 —— 靠 该夹下次结构变化 /
+ * 手动重扫(force 走全量对账) 兜底; Syncthing 同步新文件必 bump 本地目录 mtime
+ * (那是本地 FS 的事实, 与文件自带的旧 mtime 无关), 不会漏新图。
+ * 指纹只提供"变快"的方向, 任何不一致都退回 statAll 全量 —— 失配永远安全。 */
+const FP_VERSION = 1
+function dirsHash(dirs) {
+  const s = dirs.map((d) => `${d.p}|${d.m}`).sort().join('\u0001')
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0
+  return h.toString(36)
+}
+
 /**
  * 缓存键里的路径必须**规范化** —— 同一个目录可能被写成 path-check-ignore
  * `X:/a/b`、`X:\a\b`、`X:\a\b\` 三种样子(X 代表盘符), 不归一化就会各存一份,
@@ -121,6 +137,8 @@ function persistSaveNow() {
   // data/cache 这类子目录可能整个不存在(全新数据目录/被清理过) —— ENOENT 只会让
   // 缓存永远写不出去, 且是静默的(只在主进程 console 里刷屏)。写前建一次目录。
   try { fs.mkdirSync(path.dirname(p), { recursive: true }) } catch { /* 已存在 */ }
+  if (process.env.TV_SCAN_DEBUG) console.log('[scan][save] 桶数=', Object.keys(PERSIST.folders).length,
+    '含测试桶:', Object.keys(PERSIST.folders).some((k) => k.includes('fp-test-folder')))
   const tmp = `${p}.tmp`
   fs.promises.writeFile(tmp, JSON.stringify(PERSIST), 'utf8')
     .then(() => fs.promises.rename(tmp, p))
@@ -289,7 +307,7 @@ export function collectScanFolderImages(paths, qTags) {
   return out
 }
 
-export async function listImages(folder, recursive) {
+export async function listImages(folder, recursive, dirsOut = null) {
   const files = []
   if (recursive) {
     const stack = [folder]
@@ -297,6 +315,10 @@ export async function listImages(folder, recursive) {
       const dir = stack.pop()
       let ents
       try { ents = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { continue }
+      if (dirsOut) {
+        /* 目录自身 mtime 是夹级指纹的原料(1 次 stat/目录, 与文件数无关) */
+        try { const dst = await fs.promises.stat(dir); dirsOut.push({ p: dir, m: dst.mtimeMs }) } catch { /* 读不到就不进指纹 -> 指纹失配退全量, 方向安全 */ }
+      }
       for (const e of ents) {
         if (e.isDirectory()) {
           if (!e.name.startsWith('.')) stack.push(path.join(dir, e.name))
@@ -310,6 +332,9 @@ export async function listImages(folder, recursive) {
   } else {
     let ents = []
     try { ents = await fs.promises.readdir(folder, { withFileTypes: true }) } catch { return files }
+    if (dirsOut) {
+      try { const dst = await fs.promises.stat(folder); dirsOut.push({ p: folder, m: dst.mtimeMs }) } catch { /* 同上 */ }
+    }
     ents.sort((a, b) => a.name.localeCompare(b.name))
     for (const e of ents) {
       if (!e.isFile()) continue
@@ -345,6 +370,7 @@ export async function statAll(files) {
    留在这里会形成 scan -> dims -> scan 的循环引用。这里原样再导出, 于是
    ingest.js 的 `import { parseInWorker, sizeInWorker } from './scan.js'` 一行都不用改。 */
 export { parseInWorker, sizeInWorker } from './imgWorker.js'
+export { CACHE_MAX_ITEMS }   // main.js 预热筛夹子用(只预热能进内存缓存的中小夹)
 
 /* ---------------------------------------------------------------- 主流程 */
 /**
@@ -377,8 +403,8 @@ export async function scanFolder(raw = {}, onProgress = null, opts = {}) {
     if (hit && Date.now() - hit.at < CACHE_TTL) return { ...hit.result, cached: true }
   }
 
-  const files = await listImages(folder, recursive)
-  const statMap = await statAll(files)
+  const dirs = []
+  const files = await listImages(folder, recursive, dirs)
 
   // ---- 增量对账: mtime+size 都没变的文件直接复用上次解析结果 ----
   const P = loadPersist()
@@ -387,6 +413,33 @@ export async function scanFolder(raw = {}, onProgress = null, opts = {}) {
   const keep = new Set()          // 本次枚举到的文件键(用于剔除已删除的)
   const reuse = new Map()         // fp -> { tags, source }(命中缓存)
   const fresh = []                // 需要(重新)解析的文件
+
+  // 夹级指纹快捷通道: 目录 mtime 集合 + 文件数都没变 => 文件集合没变,
+  // statMap 直接从持久缓存合成, 跳过逐文件 stat(846 张 12.5s -> <1s 的那一步)。
+  // 正确性边界见文件头「夹级指纹快捷通道」注释; force(手动重扫)故意不走它。
+  let statMap = null
+  if (!rebuild && !raw.force && bucket.fp && bucket.fp.v === FP_VERSION
+    && bucket.fp.n === files.length && bucket.fp.d === dirsHash(dirs)) {
+    if (process.env.TV_SCAN_DEBUG) {
+      const probeK = Object.keys(entries).find((k) => k.endsWith('img0.png'))
+      console.log('[scan][fp] 命中, 合成 statMap | img0 in entries:', !!probeK,
+        '| img0 t:', probeK ? JSON.stringify(entries[probeK].t).slice(0, 60) : '-',
+        '| 桶entries数:', Object.keys(entries).length)
+    }
+    statMap = new Map()
+    for (const fp of files) {
+      const c = entries[normFilePath(fp)]
+      if (!c || !Array.isArray(c.t)) { statMap = null; break }   // 集合意外不一致 -> 退全量
+      statMap.set(fp, { m: c.m, s: c.s })
+    }
+  } else if (process.env.TV_SCAN_DEBUG) {
+    console.log('[scan][fp] 未命中:',
+      'rebuild=' + rebuild, 'force=' + !!raw.force,
+      'fp=' + JSON.stringify(bucket.fp || null),
+      'n=' + files.length, 'dh=' + dirsHash(dirs))
+  }
+  if (!statMap) statMap = await statAll(files)
+
   for (const fp of files) {
     const s = statMap.get(fp)
     if (!s) continue
@@ -451,6 +504,13 @@ export async function scanFolder(raw = {}, onProgress = null, opts = {}) {
   const finalizeAll = async () => {
     // ---- 写回持久缓存(剔除已删除的文件) ----
     let changed = rebuild
+    // 刷新夹级指纹(全量对账后集合/目录 mtime 都是新的; 指纹变化本身也算 changed,
+    // 保证首次会落盘 —— 下一轮启动才有快捷通道可用)
+    const fpNew = { v: FP_VERSION, n: files.length, d: dirsHash(dirs) }
+    if (!bucket.fp || bucket.fp.v !== fpNew.v || bucket.fp.n !== fpNew.n || bucket.fp.d !== fpNew.d) {
+      bucket.fp = fpNew
+      changed = true
+    }
     for (const fp of files) {
       const s = statMap.get(fp)
       if (!s) continue
@@ -463,9 +523,12 @@ export async function scanFolder(raw = {}, onProgress = null, opts = {}) {
         changed = true
       }
     }
+    let pruned = 0
     for (const k of Object.keys(entries)) {
-      if (!keep.has(k)) { delete entries[k]; changed = true }
+      if (!keep.has(k)) { delete entries[k]; changed = true; pruned++ }
     }
+    if (process.env.TV_SCAN_DEBUG) console.log('[scan][finalize] keep=', keep.size,
+      'reuse=', reuse.size, 'fresh=', fresh.length, 'parsed=', parsed.size, 'pruned=', pruned)
     bucket.at = Date.now()
     if (changed) schedulePersistSave()
 

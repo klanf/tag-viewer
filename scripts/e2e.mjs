@@ -13,6 +13,7 @@
  *   node scripts/e2e.mjs --keep     # 跑完不关窗口(方便手动看)
  */
 import { spawn, spawnSync } from 'node:child_process'
+import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -67,7 +68,10 @@ function isStaleRecord(p) {
   try { if (fs.existsSync(p)) return false } catch { return false }
   try {
     if (!probeDb) {
-      const f = path.join(DATA_DIR, 'tags.db')
+      /* 库可能在 db/ 子目录(2026-10-30 路由后的新布局)也可能还在根(持久沙箱靠
+         legacy 回退一直用老位置) —— 双位置探测, 别赌。 */
+      const f = [path.join(DATA_DIR, 'db', 'tags.db'), path.join(DATA_DIR, 'tags.db')]
+        .find((x) => fs.existsSync(x)) || path.join(DATA_DIR, 'db', 'tags.db')
       /* 优先只读打开; 万一 WAL 下 readOnly 打不开(库正被跑着的应用占着),
          退回普通打开 —— 这个句柄只用来跑 SELECT, 不写任何东西。 */
       try { probeDb = new DatabaseSync(f, { readOnly: true }) }
@@ -91,6 +95,14 @@ function isStaleRecord(p) {
  * (真正的修法是超时后重连 CDP, 那是另一件事, 先不在这里做。)
  */
 const NO_SHOT = process.argv.includes('--no-shot') || process.env.TV_NO_SHOT === '1'
+
+/* TV_E2E_NOFOCUS=1(2026-10-30): e2e 静默模式 —— 用户可能在打游戏, 测试窗口
+ * 不许抢焦点。三件事联动:
+ *   1) 这里把它传给主进程 —— main.js 据此让窗口离屏 showInactive(渲染照常, 不激活不占屏);
+ *   2) 跳过本文件两处 Page.bringToFront —— 在 Electron 里它会激活整个窗口, 是 --no-shot
+ *      模式下最大的抢焦点源(截图路径本来就不走, 那处只剩断言前的显式调用);
+ *   3) 后台节流三连旗标(--disable-background-timer-throttling 等)已有, 离屏窗口照常产帧。 */
+const NOFOCUS = process.env.TV_E2E_NOFOCUS === '1'
 
 /**
  * 调试端口**每次随机取一个空闲的**, 不用固定值。原因(踩过一次, 很难查):
@@ -198,7 +210,7 @@ class Cdp {
     if (NO_SHOT) return          // 见文件上方 NO_SHOT: 截图会堵死 CDP 连接
     const t0 = Date.now()
     try {
-      try { await this.send('Page.bringToFront', {}, 3000) } catch { /* 不支持就算了 */ }
+      try { if (!NOFOCUS) await this.send('Page.bringToFront', {}, 3000) } catch { /* 不支持就算了 */ }
       const r = await this.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
       fs.mkdirSync(SHOTS, { recursive: true })
       fs.writeFileSync(path.join(SHOTS, `${name}.png`), Buffer.from(r.data, 'base64'))
@@ -373,9 +385,18 @@ async function main() {
       TV_DATA_DIR: DATA_DIR,
       TV_E2E_CTX_MOVE: MOVED_DIR,
       TV_OLD_ROOT: path.join(ROOT, '.e2e-work', 'no-such-old-root'),
+      TV_E2E_NOFOCUS: '1',   // 静默模式: 窗口离屏 showInactive, 不抢用户焦点(打游戏时也能跑)
     }),
   })
   let childExited = null
+  /* 静默模式(TV_E2E_NOFOCUS=1)的配套(2026-10-30): 窗口不再有前台焦点后,
+   * Windows 会把整个进程组往后台调度优先级压 —— Chromium 的节流旗标管不到
+   * OS 这一层, 实测渲染线程能被饿到 Runtime.evaluate 卡满 60s(打游戏时更狠)。
+   * 这里把主进程提到 ABOVE_NORMAL(渲染进程随后生成时继承) —— 只是回到
+   * "不被饿死"的水平, 不是 HIGH/REALTIME, 不会明显抢游戏的 CPU。 */
+  try {
+    if (NOFOCUS) os.setPriority(child.pid, os.constants.priority.PRIORITY_ABOVE_NORMAL)
+  } catch { /* 设不上就按原样跑, 大不了慢 */ }
   /* 主进程 stdout 里混着**渲染进程转发**的 console —— `electron/main.js` 的
      console-message 通道, 形如 `<ts> [render] <url>:<line> [error] <msg>`。
      这条通道和 CDP 的收集路径**不是同一条**: 浏览器自己产生的消息(ResizeObserver、
@@ -720,13 +741,15 @@ async function main() {
     check('首页: 取消「只看 ComfyUI」后图片回来',
       (await cdp.eval(`return __t.count('.grid .card')`)) > 0)
 
-    /* ---------------- 4b. 搜索框胶囊化 + 多词联想 + 全选(2026-10-06) ----------------
-     * multi 模式契约(只有看板搜索框开 multi; 扫描页空格 AND / 标签页单词搜索不受影响):
-     *   · 敲中/英文逗号 = 当前段升级成胶囊, 输入框只留正在打的段
-     *   · 联想只针对当前段; 选中 = 追加成胶囊, **不自动搜**(结果数原地不变)
+    /* ---------------- 4b. 搜索框多词联想(纯文本) + 全选(2026-10-30 二稿: 去胶囊) ----------------
+     * multi 模式契约(2026-10-30 用户定稿: 纯文本, 没有胶囊 —— 输入框就是完整字符串
+     * "blue_archive, hosh" 这样的普通 tag 输入):
+     *   · 分隔符(看板宽档: 空格/中英文逗号/顿号/分号/竖线) = 当前词定格 + **立即自动搜索**
+     *   · 定格词以 ", " 连接(用户给的样例格式 "1girl, 1boy,")
+     *   · 联想只针对最后一个词; 选中(点/Tab/Enter)= 仅补全, 不定格不搜索
+     *   · 重复词定格时跳过(提示"已在筛选中")
      *   · 「全选」= 当前词匹配到的标签(≤200, 按图片数排序)全部加入; all→any 自动切
-     *     (多标签在 all 下没有交集, 不切必空集)
-     *   · ↑↓ 高亮超出下拉可视区自动跟随滚动; 空输入框 Backspace 删最后一颗胶囊
+     *   · ✕ 清空 = 清空 + 立即搜回全量; Backspace 回归原生删字符
      *   · IME 组词中(isComposing)回车不 pick 不 submit
      * 沙箱库种子 = 真实库副本(harness VACUUM INTO), 「发」在中文翻译索引里命中一堆
      * 发色/发型, hoshino_(blue_archive) 也真实在库 —— 两组词都有确定答案。
@@ -736,17 +759,16 @@ async function main() {
       const beforeIme = await cdp.eval(`return __t.text('.result-head b')`)
       await cdp.eval(`__t.setInput('.sug input', '发'); return true`)
       await waitFor(cdp, `__t.count('.sug .drop .item') > 0`, { label: '「发」出联想', timeout: 15000 })
-      const chips0 = await cdp.eval(`return __t.count('.sug .tagbox .tv-chip')`)
       await cdp.eval(`
         document.querySelector('.sug input')
           .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }))
         return true
       `)
       await sleep(600)
-      const afterIme = await cdp.eval(`return { chips: __t.count('.sug .tagbox .tv-chip'), total: __t.text('.result-head b') }`)
+      const afterIme = await cdp.eval(`return { total: __t.text('.result-head b'), val: document.querySelector('.sug input').value }`)
       check('multi: IME 组词中的回车既不选词也不搜索',
-        afterIme.chips === chips0 && afterIme.total === beforeIme,
-        `胶囊 ${chips0}->${afterIme.chips}, 总数 ${beforeIme}->${afterIme.total}`)
+        afterIme.total === beforeIme && afterIme.val === '发',
+        `总数 ${beforeIme}->${afterIme.total} 输入框="${afterIme.val}"`)
       await cdp.eval(`
         document.querySelector('.sug .clear')
           .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
@@ -754,17 +776,24 @@ async function main() {
       `)
       await sleep(200)
 
-      // (2) 多词联想: 逗号升级胶囊 → 第二段联想 → 选中追加不搜 → 回车才搜组合
-      const base = await cdp.eval(`return __t.text('.result-head b')`)
+      // (2) 多词: 逗号定格+自动搜 → 第二段联想 → 选中=仅补全(文本进框, 不搜索)
+      //     → 敲分隔符定格第二段+自动搜索(2026-10-30 定稿)
+      const baseAll = await cdp.eval(`return __t.text('.result-head b')`)
       await cdp.eval(`
         __t.setInput('.sug input', 'blue_archive,')
-        await new Promise(r => setTimeout(r, 150))
+        return true
+      `)
+      await waitFor(cdp, `__t.text('.result-head b') !== ${JSON.stringify(baseAll)}`,
+        { label: '第一段自动搜索', timeout: 30000 })
+      const v1 = await cdp.eval(`return document.querySelector('.sug input').value`)
+      check('multi: 敲逗号后第一词定格, 输入框是纯文本 "blue_archive, "(无胶囊)',
+        v1 === 'blue_archive, ', `输入框="${v1}"`)
+      const base = await cdp.eval(`return __t.text('.result-head b')`)
+      await cdp.eval(`
         __t.setInput('.sug input', 'hosh')
         return true
       `)
       await waitFor(cdp, `__t.count('.sug .drop .item') > 0`, { label: '第二段联想', timeout: 15000 })
-      const chip1 = await cdp.eval(`return __t.count('.sug .tagbox .tv-chip')`)
-      check('multi: 敲英文逗号后第一段升级为胶囊', chip1 === 1, `胶囊数 ${chip1}`)
       const picked = await cdp.eval(`
         const el = [...document.querySelectorAll('.sug .drop .item')]
           .find((e) => e.textContent.includes('hoshino_(blue_archive)'))
@@ -774,16 +803,18 @@ async function main() {
       `)
       await sleep(400)
       const st = await cdp.eval(`return {
-        chips: __t.count('.sug .tagbox .tv-chip'),
         total: __t.text('.result-head b'),
         val: document.querySelector('.sug input').value }`)
-      check('multi: 选中第二段词追加成胶囊且不自动搜',
-        !!picked && st.chips === 2 && st.total === base && st.val === '',
-        `选中=${!!picked} 胶囊=${st.chips} 总数 ${base}->${st.total} 输入框="${st.val}"`)
-      await cdp.eval(`__t.pressEnter('.sug input'); return true`)
-      await waitFor(cdp, `__t.text('.result-head b') !== ${JSON.stringify(base)}`, { label: '组合搜索结果变化', timeout: 30000 })
+      check('multi: 选中联想=仅补全当前词(文本接在逗号后, 不定格不搜索)',
+        !!picked && st.total === base && st.val === 'blue_archive, hoshino_(blue_archive)',
+        `选中=${!!picked} 总数=${st.total} 输入框="${st.val}"`)
+      // 敲分隔符 = 定格第二词 + 立即自动搜索(不需要回车/搜索按钮)
+      await cdp.eval(`__t.setInput('.sug input', 'hoshino_(blue_archive),'); return true`)
+      await waitFor(cdp, `__t.text('.result-head b') !== ${JSON.stringify(base)}`, { label: '分隔符触发组合搜索', timeout: 30000 })
       const combo = await cdp.eval(`return __t.text('.result-head b')`)
-      check('multi: 回车后按组合搜索(结果变化)', combo !== base, `${base} -> ${combo}`)
+      const v2 = await cdp.eval(`return document.querySelector('.sug input').value`)
+      check('multi: 敲分隔符定格并立即自动搜索(结果变化, 两词以 ", " 连接)',
+        combo !== base && v2 === 'blue_archive, hoshino_(blue_archive), ', `${base} -> ${combo} · 输入框="${v2}"`)
       await cdp.eval(`
         document.querySelector('.sug .clear')
           .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
@@ -793,7 +824,7 @@ async function main() {
       await cdp.eval(`__t.pressEnter('.sug input'); return true`)
       await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '清空后回全量', timeout: 30000 })
 
-      // (3) 全选: 「发」→ 匹配标签全部加入(≥3 颗胶囊) + 组合模式自动 all→any
+      // (3) 全选: 「发」→ 匹配标签全部加入(≥3 个词, ", " 连接) + 组合模式自动 all→any
       await cdp.eval(`__t.setInput('.sug input', '发'); return true`)
       await waitFor(cdp, `__t.count('.sug .drop .item') > 0`, { label: '「发」出联想(全选)', timeout: 15000 })
       await cdp.eval(`
@@ -801,12 +832,14 @@ async function main() {
           .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
         return true
       `)
-      await waitFor(cdp, `__t.count('.sug .tagbox .tv-chip') >= 3`, { label: '全选加入胶囊', timeout: 20000 })
+      await waitFor(cdp, `(document.querySelector('.sug input').value.match(/,/g) || []).length >= 2`,
+        { label: '全选写入输入框', timeout: 20000 })
       const stAll = await cdp.eval(`return {
-        chips: __t.count('.sug .tagbox .tv-chip'),
+        val: document.querySelector('.sug input').value,
         mode: document.querySelector('.home select') ? document.querySelector('.home select').value : '' }`)
-      check('multi: 全选把匹配标签全部加入(≥3) 并自动切到 any',
-        stAll.chips >= 3 && stAll.mode === 'any', `胶囊=${stAll.chips} 模式=${stAll.mode}`)
+      check('multi: 全选把匹配标签全部写进输入框(≥3 个词) 并自动切到 any',
+        (stAll.val.match(/,/g) || []).length >= 2 && stAll.mode === 'any',
+        `输入框="${stAll.val.slice(0, 60)}…" 模式=${stAll.mode}`)
       await cdp.eval(`__t.pressEnter('.sug input'); return true`)
       await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: 'any 组合出结果', timeout: 30000 })
       // 还原: 组合模式回 all, 清空筛选回全量
@@ -836,7 +869,7 @@ async function main() {
       await sleep(300)
       const sc1 = await cdp.eval(`return document.querySelector('.sug .drop').scrollTop`)
       check('multi: ↑↓ 高亮超出下拉可视区自动跟随滚动', sc1 > sc0, `scrollTop ${sc0} -> ${sc1}`)
-      // 收尾: Esc 收下拉 + 清空, 不触发搜索(后面的换一批测试以当前网格为基准)
+      // 收尾: Esc 收下拉 + ✕ 清空(清空即自动搜回全量)
       await cdp.eval(`
         document.querySelector('.sug input')
           .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
@@ -844,41 +877,45 @@ async function main() {
           .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
         return true
       `)
-      await sleep(200)
+      await sleep(400)
 
-      // (5) 空输入框 Backspace = 删最后一颗胶囊
+      // (5) 重复词定格时跳过(纯文本契约: 没有胶囊可删, Backspace 回归原生删字符)
       await cdp.eval(`
-        __t.setInput('.sug input', 'blue_archive,')
-        await new Promise(r => setTimeout(r, 150))
+        __t.setInput('.sug input', 'blue_archive, blue_archive,')
         return true
       `)
-      const c1 = await cdp.eval(`return __t.count('.sug .tagbox .tv-chip')`)
+      await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '重复词自动搜索出结果', timeout: 30000 })
+      const stDup = await cdp.eval(`return document.querySelector('.sug input').value`)
+      check('multi: 重复词定格时跳过, 输入框里不重复',
+        stDup === 'blue_archive, ', `输入框="${stDup}"`)
+      // 收尾: 清空再回车 —— 框里还留着 'blue_archive, ', 直接回车只会再搜一次同词,
+      // 回不到全量; ✕ 清空(自动搜回全量)后 4d 才有确定的"全量"基线
       await cdp.eval(`
-        document.querySelector('.sug input')
-          .dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }))
+        document.querySelector('.sug .clear')
+          .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
         return true
       `)
-      await sleep(200)
-      const stBs = await cdp.eval(`return { chips: __t.count('.sug .tagbox .tv-chip'), val: document.querySelector('.sug input').value }`)
-      check('multi: 空输入框按 Backspace 删掉最后一颗胶囊',
-        c1 === 1 && stBs.chips === 0 && stBs.val === '',
-        `胶囊 ${c1}->${stBs.chips} 输入框="${stBs.val}"`)
+      await sleep(300)
+      await cdp.eval(`__t.pressEnter('.sug input'); return true`)
+      await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '重复词测试后回全量', timeout: 30000 })
     }
 
-    /* ---------------- 4c. 预设弹窗的搜索标签输入框(2026-10-06 换看板同款胶囊联想) ---------------- */
+    /* ---------------- 4c. 预设弹窗的搜索标签输入框(2026-10-06 换看板同款联想; 2026-10-30 同步去胶囊) ---------------- */
     {
       await cdp.eval(`__t.clickText('.lnk .tv-btn', '预设导出'); return true`)
       await waitFor(cdp, `!!document.querySelector('.mask .box')`, { label: '预设弹窗打开', timeout: 15000 })
       await cdp.eval(`__t.clickText('.mask .tv-btn', '新建预设'); return true`)
-      await waitFor(cdp, `!!document.querySelector('.mask .tagbox input')`, { label: '预设表单胶囊输入框', timeout: 15000 })
+      await waitFor(cdp, `!!document.querySelector('.mask .sug input')`, { label: '预设表单联想输入框', timeout: 15000 })
       await cdp.eval(`
-        __t.setInput('.mask .tagbox input', 'blue_archive,')
+        __t.setInput('.mask .sug input', 'blue_archive,')
         await new Promise(r => setTimeout(r, 150))
-        __t.setInput('.mask .tagbox input', 'hosh')
+        __t.setInput('.mask .sug input', 'hosh')
         return true
       `)
-      await waitFor(cdp, `__t.count('.mask .tagbox .tv-chip') === 1`, { label: '预设表单敲逗号成胶囊', timeout: 15000 })
-      check('预设弹窗: 搜索标签输入框已是胶囊多词联想(与看板同款)', true, '敲逗号成胶囊 ✓')
+      await sleep(300)
+      const pv = await cdp.eval(`return document.querySelector('.mask .sug input').value`)
+      check('预设弹窗: 搜索标签输入框已是纯文本多词联想(与看板同款, 无胶囊)',
+        pv === 'blue_archive, hosh', `输入框="${pv}"`)
       // 不保存, 原路退出, 别给后面的节留下表单状态
       await cdp.eval(`__t.clickText('.mask .foot .tv-btn', '返回'); return true`)
       await sleep(300)
@@ -886,17 +923,23 @@ async function main() {
       await sleep(400)
     }
 
-    /* ---------------- 4d. 搜索按钮旁的「✕ 清空」(2026-10-06) ---------------- */
+    /* ---------------- 4d. 搜索框内的「✕」= 清空并自动回全量(2026-10-30) ----------------
+     * 独立的「✕ 清空」按钮已删: 框内 ✕ 清空后自动触发一次搜索, 不用再按回车/搜索键。 */
     {
       const allTotal = await cdp.eval(`return __t.text('.result-head b')`)
       await cdp.eval(`__t.setInput('.sug input', 'blue_archive'); __t.pressEnter('.sug input'); return true`)
       await waitFor(cdp, `__t.text('.result-head b') !== ${JSON.stringify(allTotal)}`,
         { label: '先搜一个词', timeout: 30000 })
-      await cdp.eval(`__t.clickText('.btns .tv-btn', '清空'); return true`)
+      await cdp.eval(`
+        document.querySelector('.sug .clear')
+          .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        return true
+      `)
       await waitFor(cdp, `__t.text('.result-head b') === ${JSON.stringify(allTotal)}`,
-        { label: '清空后回全量', timeout: 30000 })
+        { label: '✕ 清空后自动回全量', timeout: 30000 })
       const q = await cdp.eval(`return document.querySelector('.sug input').value`)
-      check('看板: 「✕ 清空」按钮清空搜索词并回到全部图片', q === '', `q="${q}" · 总数=${allTotal}`)
+      check('看板: 搜索框内「✕」清空搜索词并自动回到全部图片(无需再点搜索)',
+        q === '', `q="${q}" · 总数=${allTotal}`)
     }
 
     const p1 = await cdp.eval(`return __t.text('.grid .card .foot')`)
@@ -957,14 +1000,26 @@ async function main() {
       return true
     `)
 
-    /* ---------------- 5. 规则编辑器 ---------------- */
+    /* ---------------- 5. 规则编辑器(2026-10-30 黑名单对齐替换样式: 构建器/原文双模式) ---------------- */
     const rules = await cdp.eval(`
       __t.clickText('.btns .tv-btn', '黑名单')
       await new Promise(r => setTimeout(r, 900))
-      const ta = document.querySelector('.mask textarea')
-      return ta ? { len: ta.value.length, stat: __t.text('.mask .stat'), lines: ta.value.split('\\n').filter(l=>l.trim() && !l.trim().startsWith('#')).length } : null
+      const mask = document.querySelector('.mask')
+      if (!mask) return null
+      const segBs = [...mask.querySelectorAll('.seg-b')].map(e => e.textContent.trim())
+      const cards = mask.querySelectorAll('.rule-card').length
+      const tester = !!mask.querySelector('.tester')
+      // 切原文模式, textarea 应能读到规则全文
+      const rawSeg = [...mask.querySelectorAll('.seg-b')].find(e => e.textContent.includes('原文'))
+      if (rawSeg) rawSeg.click()
+      await new Promise(r => setTimeout(r, 400))
+      const ta = mask.querySelector('textarea.editor')
+      return { segBs, cards, tester, taLen: ta ? ta.value.length : 0,
+               lines: ta ? ta.value.split('\\n').filter(l=>l.trim() && !l.trim().startsWith('#')).length : 0 }
     `)
-    check('黑名单编辑器: 能读到规则', rules && rules.len > 100, rules ? `${rules.lines} 条规则 / ${rules.len} 字符 · ${rules.stat}` : '没打开')
+    check('黑名单编辑器: 构建器/原文双模式, 卡片+测试条齐全, 原文能读到规则',
+      rules && rules.segBs.length === 2 && rules.cards > 0 && rules.tester === true && rules.taLen > 100,
+      rules ? `卡片=${rules.cards} 测试条=${rules.tester} 原文 ${rules.lines} 条 / ${rules.taLen} 字符` : '没打开')
     await cdp.shot('03-rules')
     await cdp.eval(`document.querySelector('.mask .x').click(); return true`)
 
@@ -1164,8 +1219,10 @@ async function main() {
      * 这里改成轮询: 反复滚到底, 直到卡片数增长或超时。
      * 再补一刀: 窗口被别的应用盖住时 Chromium 可能不出帧, IO 回调也跟着不派发
      * (2026-10-23 实测 60 -> 60 卡满 15s, 同一份代码上一轮 404ms 就过了)。
-     * --no-shot 下没人调 bringToFront, 这里显式拉一次, 保证在渲染生命周期里。 */
-    try { await cdp.send('Page.bringToFront', {}, 3000) } catch { /* 不支持就算了 */ }
+     * --no-shot 下没人调 bringToFront, 这里显式拉一次, 保证在渲染生命周期里。
+     * 静默模式(TV_E2E_NOFOCUS=1)跳过: bringToFront 在 Electron 里会激活窗口抢焦点,
+     * 离屏窗口靠后台节流三连旗标照常产帧, 不需要拉前台。 */
+    try { if (!NOFOCUS) await cdp.send('Page.bringToFront', {}, 3000) } catch { /* 不支持就算了 */ }
     const scrollRes = await cdp.eval(`
       const el = document.querySelector('.series-view .scroll')
       const start = __t.count('.grid .card')
@@ -1501,8 +1558,15 @@ async function main() {
      *   scheduled=true、自动导出照跑, 但导出内容**逐字节不变**;
      *   断言看到的就是"自动导出没被触发"(其实触发了: 手动导出/落盘/回执全都正常)。
      * 所以凡是拿导出 token 去操作**数据侧**(黑名单)的地方, 必须先转回下划线形态。
+     * 2026-10-29 补: 再剥一层权重壳 —— 库里的头部高频词已经是 (cat ears:1.6) 这种
+     * 加权形态, ban 的语义是 ban 裸词(cat_ears); 导出端 isBlockedFast 现在按剥壳
+     * 口径匹配, 两边就对上了。
      */
-    const asDatasetTag = (t) => String(t).replace(/ /g, '_')
+    const unwrapWeightE = (t) => {
+      const m = /^\((.+):[\d.]+\)$/.exec(String(t || '').trim())
+      return m ? m[1] : String(t || '').trim()
+    }
+    const asDatasetTag = (t) => unwrapWeightE(String(t).replace(/ /g, '_'))
 
     /*
      * 幂等: 先清掉上一轮可能残留的预设, 免得断言认错对象。
@@ -2037,7 +2101,8 @@ async function main() {
       out.emptyMenuBtn = [...menu.querySelectorAll('.mi .mh')].every(e => e.textContent.trim().length > 0)
 
       const box = menu.getBoundingClientRect()
-      const row = document.querySelectorAll('.btns .brow')[1].getBoundingClientRect()
+      // 2026-10-30 搜索/清空按钮删掉后, .btns .brow 只剩导出这一排(index 0)
+      const row = document.querySelectorAll('.btns .brow')[0].getBoundingClientRect()
       const lr = left.getBoundingClientRect()
       out.sameWidthAsRow = Math.abs(box.width - row.width) < 1.5
       out.insidePanel = box.top >= lr.top - 0.5 && box.bottom <= lr.bottom + 0.5
@@ -2057,27 +2122,84 @@ async function main() {
     `)
     check('首页动作区: 「导出(带路径)」不再占独立按钮, 已并入下拉',
       homeBtns.pathBtnGone === true, `文字链 = ${(homeBtns.lnk || []).join('、')}`)
-    check('首页动作区: 分裂按钮下拉含两条导出方式 + 五个导出选项',
+    check('首页动作区: 分裂按钮下拉含两条导出方式 + 六个导出选项',
       homeBtns.caret === true && homeBtns.menuOpen === true
       && (homeBtns.items || []).length === 2
       && (homeBtns.items || []).join('').includes('带图片路径')
-      && (homeBtns.checks || []).length === 5 && homeBtns.emptyMenuBtn === true,
+      && (homeBtns.checks || []).length === 6 && homeBtns.emptyMenuBtn === true,
       `项 = ${(homeBtns.items || []).join(' / ')} · 选项 = ${(homeBtns.checks || []).join(' / ')}`)
     check('首页动作区: 下拉与整排同宽且不被侧栏裁切',
       homeBtns.sameWidthAsRow === true && homeBtns.insidePanel === true && homeBtns.inViewport === true,
       `同宽=${homeBtns.sameWidthAsRow} 在侧栏内=${homeBtns.insidePanel} 在视口内=${homeBtns.inViewport}`)
     check('首页动作区: 箭头随展开态翻转(菜单是向下开的)',
       homeBtns.caretRotated === true, `chev.up = ${homeBtns.caretRotated}`)
-    check('首页动作区: 五个导出开关挪进下拉后仍能切换',
-      (homeBtns.cbAfter || []).length === 5
+    check('首页动作区: 六个导出开关挪进下拉后仍能切换',
+      (homeBtns.cbAfter || []).length === 6
       && (homeBtns.cbAfter || []).every((v, i) => v !== (homeBtns.cbBefore || [])[i]),
       `${JSON.stringify(homeBtns.cbBefore)} → ${JSON.stringify(homeBtns.cbAfter)}`)
     check('首页动作区: 替换/预设导出/查重降级为文字链, 且关下拉后不留遮罩',
-      (homeBtns.lnk || []).length === 3 && homeBtns.lnk.some((t) => t.includes('替换'))
+      (homeBtns.lnk || []).length === 4 && homeBtns.lnk.some((t) => t.includes('替换'))
+      && homeBtns.lnk.some((t) => t.includes('高级替换'))
       && homeBtns.lnk.some((t) => t.includes('预设导出'))
       && homeBtns.lnk.some((t) => t.includes('查重'))
       && homeBtns.menuClosed === true && homeBtns.tipLinks === 0,
       `${(homeBtns.lnk || []).join('、')} · menuClosed=${homeBtns.menuClosed} · tip 里的链接数=${homeBtns.tipLinks}`)
+
+    /* 高级替换弹窗(2026-10-30): 独立入口(动作区「🎲 高级替换」), 三区 = 随机槽/钉词/禁用槽。
+     * 只验证入口与三区结构 + 槽勾选→滑杆, 不碰状态收尾 —— 弹窗取消即关, 状态默认全关。 */
+    const advModal = await cdp.eval(`
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      const out = {}
+      const btn = [...document.querySelectorAll('.btns .lnk .tv-btn')].find(b => b.textContent.includes('高级替换'))
+      if (!btn) return { opened: false, why: 'no entry btn' }
+      btn.click(); await sleep(600)
+      const mask = document.querySelector('.mask')
+      out.opened = !!mask
+      if (!mask) return out
+      const zones = [...mask.querySelectorAll('.zone')]
+      out.zones = zones.length
+      // ① 随机槽 chips(第一区) + 点选出滑杆
+      const chips = [...zones[0].querySelectorAll('.chip')]
+      out.chips = chips.length
+      if (chips[0]) {
+        chips[0].click(); await sleep(250)
+        out.rateRows = zones[0].querySelectorAll('.rate').length
+        const slider = zones[0].querySelector('.rate input[type="range"]')
+        out.rateVal = slider ? slider.value : null
+        chips[0].click(); await sleep(150)      // 还原: 取消勾选, 不留状态
+      }
+      // ② 钉词行
+      const addBtn = [...mask.querySelectorAll('.pin-zone .tv-btn')].find(b => b.textContent.includes('添加钉词'))
+      if (addBtn) {
+        addBtn.click(); await sleep(250)
+        const row = mask.querySelector('.pin-zone .pin')
+        out.pinRow = { shown: !!row, hasSlot: !!row?.querySelector('.pin-slot'), hasWord: !!row?.querySelector('.pin-word-box input') }
+        row?.querySelector('.pin-del')?.click(); await sleep(150)   // 还原
+      }
+      // ③ 禁用槽 chips
+      out.banChips = mask.querySelectorAll('.ban-zone .chip').length
+      out.enabledBox = [...mask.querySelectorAll('.tv-check')].some(e => e.textContent.includes('启用高级替换'))
+      out.nsfwBox = [...mask.querySelectorAll('.tv-check')].some(e => e.textContent.includes('成人词库'))
+      out.seed = !!mask.querySelector('.seed')
+      // 取消关窗
+      const cancel = [...mask.querySelectorAll('.tv-btn')].find(b => b.textContent.includes('取消'))
+      cancel?.click(); await sleep(350)
+      out.closed = !document.querySelector('.mask')
+      return out
+    `)
+    check('高级替换弹窗: 独立入口能打开, 三区(随机槽/钉词/禁用槽)齐全',
+      advModal.opened === true && advModal.zones >= 3 && (advModal.chips || 0) > 0 && (advModal.banChips || 0) > 0,
+      `zones=${advModal.zones} 槽chips=${advModal.chips} 禁用chips=${advModal.banChips} ${advModal.why || ''}`)
+    check('高级替换弹窗: 点槽 chip 立即出现换词率滑杆, 默认 100%(必换)',
+      advModal.rateRows === 1 && advModal.rateVal === '100',
+      `滑杆=${advModal.rateRows} · 值=${advModal.rateVal}`)
+    check('高级替换弹窗: 「添加钉词」出现 槽下拉 + 词条输入, 总开关/成人词库/种子齐全',
+      advModal.pinRow && advModal.pinRow.shown === true && advModal.pinRow.hasSlot === true && advModal.pinRow.hasWord === true
+      && advModal.enabledBox === true && advModal.nsfwBox === true && advModal.seed === true,
+      `钉词行=${JSON.stringify(advModal.pinRow)} 启用=${advModal.enabledBox} 成人词库=${advModal.nsfwBox} 种子=${advModal.seed}`)
+    check('高级替换弹窗: 取消后关窗且状态未启用(后续步骤无随机化副作用)',
+      advModal.closed === true,
+      `已关=${advModal.closed}`)
 
     /* ---------------- 8. 购物车 ---------------- */
     await cdp.eval(`__t.clickText('.hdr .nv', '购物车'); return true`)
@@ -2109,21 +2231,34 @@ async function main() {
       coverBtn.click()
       for (let i = 0; i < 60 && !document.querySelector('.cand'); i++) await new Promise(r => setTimeout(r, 250))
       const cands = document.querySelectorAll('.cand')
-      const target = document.querySelector('.cand[data-cur="0"]')
-      if (!target) return { ok: false, why: 'no pickable candidate', n: cands.length }
+      /* 2026-10-30: 不再依赖 data-cur 标记 —— 购物车 thumb 与候选 path 有形态差异时
+       * (自动封面来源不同), 「当前」高亮会失灵, 挑中当前封面 = 假失败(02:04 实锤:
+       * toast 成功但 thumb 前后相同)。直接按 data-path 排除当前, 对形态差异免疫。 */
+      const target = [...document.querySelectorAll('.cand')]
+        .find((el) => el.dataset.path && el.dataset.path !== thumbBefore) || null
+      if (!target) return { ok: false, why: 'no pickable candidate (候选全是当前封面?)', n: cands.length }
       const wantPath = target.dataset.path
       target.click()
-      for (let i = 0; i < 60 && document.querySelector('.cand'); i++) await new Promise(r => setTimeout(r, 250))
+      let modalOpen = true
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 250))
+        if (!document.querySelector('.cand')) { modalOpen = false; break }
+      }
+      /* 诊断(2026-10-29): 这条断言出现过"写入后跨运行持久, 下一轮就再也写不进"的
+       * 状态——模态没关(coverSet 失败)还是写了没生效, 靠 mod Open/toast 区分 */
+      const toast = (document.querySelector('.tv-toast, .toast, [class*="toast"]') || {}).textContent || ''
       const after = JSON.parse(localStorage.getItem('tv_cart') || '{}')
       return {
-        ok: true, n: cands.length, tag, wantPath, thumbBefore,
+        ok: true, n: cands.length, tag, wantPath, thumbBefore, modalOpen,
+        toast: toast.trim().slice(0, 80),
         thumbAfter: after[tag] && after[tag].thumb,
         changed: (after[tag] && after[tag].thumb) === wantPath && wantPath !== thumbBefore,
       }
     `)
     check('购物车: 条目 🖼 打开挑选窗, 点候选即设为封面并写回 thumb',
       coverPick.ok && coverPick.n > 0 && coverPick.changed,
-      coverPick.ok ? `候选 ${coverPick.n} 张 · thumb ${String(coverPick.thumbBefore).slice(-18)} -> ${String(coverPick.thumbAfter).slice(-18)}` : coverPick.why)
+      coverPick.ok ? `候选 ${coverPick.n} 张 · 模态未关=${coverPick.modalOpen} · toast="${coverPick.toast}"`
+        + ` · thumb ${String(coverPick.thumbBefore).slice(-18)} -> ${String(coverPick.thumbAfter).slice(-18)}` : coverPick.why)
     await cdp.shot('11b-cart-cover')
 
     const checkout = await cdp.eval(`
@@ -2325,9 +2460,11 @@ async function main() {
     check('购物车预设: **标签详情页**角色 pill 的 🛒 同样触发自动导出(2026-09-29 用户点名)',
       /* 同一个角色在详情页再点一次 = 与光箱那次**方向相反**, 所以同样只判 |Δ|=1。
          只判 pending 不判 synced —— 点击后 400ms 里延迟导出开火会把 synced 翻回 true,
-         这条竞态是 2026-10-06 实测抓到的(前面多等了一会儿, 导出正好落在窗口里) */
+         这条竞态是 2026-10-06 实测抓到的(前面多等了一会儿, 导出正好落在窗口里)。
+         2026-10-29 再放宽: 购物车文件只有百来行, 导出快到能在 400ms 窗口里**跑完**
+         —— pending=false 但 synced=true 说明"触发了且已导完", 是更强的证据, 同样算过 */
       detailCartClick.clicked && Math.abs(detailCartClick.after - detailCartClick.before) === 1
-      && detailCartClick.pending === true,
+      && (detailCartClick.pending === true || detailCartClick.synced === true),
       detailCartClick.clicked
         ? `主进程记 ${detailCartClick.before} -> ${detailCartClick.after} · 待导=${detailCartClick.pending}`
         : `详情页没有角色 pill: ${JSON.stringify(detailCartClick)}`)
@@ -2418,8 +2555,9 @@ async function main() {
     {
       const sTagsPath = path.join(DATA_DIR, 'safety_tags.txt')
       const sTxt0 = fs.readFileSync(sTagsPath, 'utf8')
-      // ⚠️ 文件头注释里也写着「# [core]」, 必须按整行锚定真实段标记(和解析器同款坑)
-      fs.writeFileSync(sTagsPath, sTxt0.replace(/^\[core\]$/im, '[core]\n1girl'), 'utf8')
+      // ⚠️ 等级制改造后段标记是 [L4](旧格式 [core]); 两种都认, 按命中的原样锚定。
+      // 文件头注释里也写着「# [core]」, 必须按整行锚定真实段标记(和解析器同款坑)
+      fs.writeFileSync(sTagsPath, sTxt0.replace(/^(\[(?:core|l4)\])$/im, '$1\n1girl'), 'utf8')
       const scanProbe = await cdp.eval(`
         const inv = (ch, p) => window.tv.invoke(ch, p)
         await inv('safety:set', { on: true })
@@ -2444,7 +2582,9 @@ async function main() {
          (判定只吃 images.tags, 图内容无关), 测完即删。 */
       let oldSim = null
       try {
-        const sdb = new DatabaseSync(path.join(DATA_DIR, 'tags.db'))
+        const sdb = new DatabaseSync(
+          [path.join(DATA_DIR, 'db', 'tags.db'), path.join(DATA_DIR, 'tags.db')]
+            .find((x) => fs.existsSync(x)) || path.join(DATA_DIR, 'db', 'tags.db'))
         const png = fs.readdirSync(SCAN_DIR).find((f) => f.toLowerCase().endsWith('.png'))
         if (png) {
           const cov = path.join(SCAN_DIR, png).replace(/\\/g, '/').toLowerCase()
@@ -4707,16 +4847,19 @@ async function main() {
      * 逐个试搜直到搜得到 —— 硬编码会撞上"真实黑名单拷进沙箱"的不确定性。 */
     {
       const sTxt = fs.readFileSync(path.join(DATA_DIR, 'safety_tags.txt'), 'utf8')
-      /* ⚠️ 先滤注释行再找段标记 —— 文件头的注释里就写着「# [core] 明确的裸露…」,
-       * 直接 split([core]) 会把注释尾巴当词表(实测抓过) */
+      /* ⚠️ 等级制改造(2026-10)后段落是 [L0]..[L4], L4=明确裸露(旧 core 段);
+       * 样本词从 L4 段挑: 读到下一个段标记为止。先滤注释行再找段标记 ——
+       * 文件头注释里就有「# [L4]」字样, 直接 split 会把注释尾巴当词表(实测抓过) */
       const lines = sTxt.split('\n').map((s) => s.trim()).filter((s) => s && !s.startsWith('#'))
-      const iCore = lines.findIndex((s) => /^\[core\]$/i.test(s))
-      const iEdge = lines.findIndex((s) => /^\[edge\]$/i.test(s))
+      const iL4 = lines.findIndex((s) => /^\[l4\]$/i.test(s))
+      const iNext = iL4 >= 0
+        ? lines.findIndex((s, i) => i > iL4 && /^\[l\d\]$/i.test(s))
+        : -1
       const blTxt = fs.existsSync(path.join(DATA_DIR, 'export_blacklist.txt'))
         ? fs.readFileSync(path.join(DATA_DIR, 'export_blacklist.txt'), 'utf8').toLowerCase() : ''
-      const coreWords = (iCore >= 0 ? lines.slice(iCore + 1, iEdge > iCore ? iEdge : undefined) : [])
+      const coreWords = (iL4 >= 0 ? lines.slice(iL4 + 1, iNext > iL4 ? iNext : undefined) : [])
         .map((s) => s.toLowerCase())
-        .filter((s) => s && !s.includes('*') && !blTxt.includes(s))
+        .filter((s) => s && !s.includes('*') && !s.startsWith('[') && !blTxt.includes(s))
       const probe = await cdp.eval(`
         const words = ${JSON.stringify(coreWords.slice(0, 6))}
         let hit = null, n = 0
@@ -4729,7 +4872,7 @@ async function main() {
         }
         return { hit, n }
       `)
-      check('安全模式: 从 core 段挑出可用的敏感词样本', !!probe.hit && probe.n > 0,
+      check('安全模式: 从 L4(明确)段挑出可用的敏感词样本', !!probe.hit && probe.n > 0,
         `样本=${probe.hit || '(无)'} · ${probe.n} 个胶囊 · 候选=[${coreWords.slice(0, 6).join(',')}]`)
       // 开 🛡 -> 样本词消失(客户端过滤, 即时生效); 关 -> 回来
       /* ⚠️ 判据认的是**那颗胶囊本身消失**（pill 上的 data-tag 是精确 tag），
@@ -5238,11 +5381,14 @@ async function main() {
         const inv = (ch, p) => window.tv.invoke(ch, p)
         const r = await inv('search:do', { q: '1girl', match: 'contains', limit: 300, exists: 1 })
         const rs = r.results || []
-        const hit = rs.find((x) => Number(x.unsafe) === 1 && Number(x.px_h) > Number(x.px_w))
-          || rs.find((x) => Number(x.unsafe) === 1)
+        /* ⚠️ 等级制统一(2026-10-28)后判定是 unsafe > maxLevel(默认 2) 才藏 ——
+         * 旧注释"u===1 任何档位都藏"是两档制的口径, 夹具必须挑 unsafe>=3
+         * (默认上限下必被藏), 否则开 🛡 也不会换图, (b)(c) 必红 */
+        const hit = rs.find((x) => Number(x.unsafe) >= 3 && Number(x.px_h) > Number(x.px_w))
+          || rs.find((x) => Number(x.unsafe) >= 3)
         return hit ? { path: hit.path, w: hit.px_w, h: hit.px_h, u: hit.unsafe } : null
       `)
-      check('购物车×安全: 从主索引挑到 unsafe=1 的夹具图', !!probe,
+      check('购物车×安全: 从主索引挑到 unsafe≥3(默认上限必藏)的夹具图', !!probe,
         probe ? `${probe.path} (${probe.w}x${probe.h} · unsafe=${probe.u})` : '前 300 张里没有 unsafe=1')
       const probeName = probe ? probe.path.split(/[\\/]/).pop() : ''
       /** 页面侧判定: 该条目当前显示的是不是夹具图(按 img src 里的文件名判,
@@ -5251,7 +5397,12 @@ async function main() {
       const HSHOWN = `
         window.__hShown = () => {
           const im = document.querySelector('.cart-view .ci[title="1girl"] img')
-          return im ? im.src.includes(${JSON.stringify(probeName)}) : false
+          if (!im) return false
+          /* thumb 走 tv://thumb/?p=<URL编码路径>&w=200 —— 中文文件名必须先解码再比,
+             否则 CJK 名的夹具图明明显示着却判成没显示(2026-10-29 实锤) */
+          let s = im.currentSrc || im.src || ''
+          try { s = decodeURIComponent(s) } catch { /* 解不动就按原样比 */ }
+          return s.includes(${JSON.stringify(probeName)})
         }
         return true
       `
@@ -5953,6 +6104,9 @@ async function main() {
           down: r.querySelectorAll('.owbtn')[1],
           del: r.querySelector('.owbtn.del'),
         }))
+        // 行列表是 Vue 渲染出来的, 抽屉一开 h3 就在但 .owrow 可能晚一拍
+        // (系统高负载时 400ms 不够, 2026-10-30 实锤 before=[] 竞态) —— 轮询等它到位
+        for (let i = 0; i < 60 && rows().length < 2; i++) await sleep(100)
         const before = rows().map(r => ({ name: r.name, missing: r.missing }))
         const hasAdd = /添加程序/.test(s.textContent)
         // 提示条只活 1.6s: 先起一个"盯 .toast 直到出现新文案"的轮询, 再去点按钮。

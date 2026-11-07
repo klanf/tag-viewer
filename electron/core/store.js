@@ -19,7 +19,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { dataFile } from './workspace.js'
+import { dataFile, dataDirPath } from './workspace.js'
 import { streamTagFile } from './tagfile.js'
 import { loadCats, catOf } from './tagcats.js'
 
@@ -30,7 +30,13 @@ const READ_CHUNK = 4000
 
 let dbHandle = null
 
-export function dbPath() { return dataFile(DB_NAME) }
+export function dbPath() {
+  const p = dataFile(DB_NAME)
+  /* db/ 子目录(生产环境是 junction 到 C 盘)在全新沙箱/新装环境还不存在 ——
+     首次建库前补建, 不然 DatabaseSync 直接 ENOENT */
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }) } catch { /* 忽略 */ }
+  return p
+}
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -1018,7 +1024,7 @@ export function dbInfo() {
 /** 把库里的数据写回 tags_<来源名>.txt —— 保留"数据不被锁进 DB"的退路 */
 export function exportToTxt(outDir, onProgress = () => {}) {
   const db = openDb()
-  const dir = outDir || path.dirname(dbPath())
+  const dir = outDir || dataDirPath() || path.dirname(dbPath())
   fs.mkdirSync(dir, { recursive: true })
   const srcs = db.prepare('SELECT id, name FROM src ORDER BY id').all()
   const written = []

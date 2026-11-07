@@ -148,6 +148,19 @@ function blankParams() {
     seg_mode: !!s.seg_mode,
     with_path: !!s.with_path,
     replace_set: typeof s.replace_set === 'string' ? s.replace_set : '',
+    // 过滤组 / 随机替换(2026-10-29): 之前不在初值表里, 存预设会被静默剥掉(实锤的坑)
+    // 2026-10-30 槽级粒度: randomize_slots; 老预设的 randomize_sections 同格式,
+    // 打开编辑时直接并进 slots 字段(解析端两边都认, 存回就是新格式)
+    groups: !!s.groups,
+    randomize: !!s.randomize,
+    randomize_nsfw: s.randomize_nsfw !== false,
+    pin_fill: s.pin_fill !== false,
+    randomize_slots: typeof s.randomize_slots === 'string' ? s.randomize_slots
+      : typeof s.randomize_sections === 'string' ? s.randomize_sections
+      : Array.isArray(s.randomize_slots) ? s.randomize_slots.join(',') : '',
+    pin_slots: typeof s.pin_slots === 'string' ? s.pin_slots : '',
+    ban_slots: typeof s.ban_slots === 'string' ? s.ban_slots : '',
+    randomize_seed: typeof s.randomize_seed === 'string' ? s.randomize_seed : '',
   }
 }
 
@@ -475,6 +488,38 @@ function shortDir(d) {
           <TvCheckbox v-model="editing.params.seg_mode" label="段位模式（只留内容 tag）" title="过滤画师/角色/系列/meta, 人数排最前, 通用按分类归堆 —— 给绘图管线随机抽注入用; 关掉则保持原始顺序" />
           <TvCheckbox v-model="editing.params.safe_only" label="只导出安全模式的标签" title="每个标签串里剔除敏感tag, 行数不变。敏感词表分 core(明确露骨)/edge(擦边)两段, 口径在下面选" />
           <TvCheckbox v-model="editing.params.groups" label="过滤组去冲突(槽内单选+互斥)" title="导出前按槽位词典消解: 同槽位只留本地图片量最多的一个, 并消解裸足×无鞋这类互斥对; 仅对单人图生效, 群像原样保留" />
+          <TvCheckbox v-model="editing.params.randomize" label="🎲 高级替换(按槽随机 + 钉词必现)" title="导出时对勾选槽位的词条做同槽随机替换 + 钉词必现: 结构不变只换内容; 参数跟首页「高级替换」面板同口径" />
+          <div v-if="editing.params.randomize" class="setpick rnd-preset">
+            <span class="faint">参与槽位与换词率(也兼容老的大类串)</span>
+            <TvInput
+              v-model="editing.params.randomize_slots"
+              size="sm"
+              placeholder="如 legwear:0.65,pose (留空 = 不随机)"
+              title="槽串, 每段 id 或 id:换词率(0~1); legwear:0.65 = 腿袜槽六成半的词被换, legwear = 必换。可勾哪些槽见首页高级替换面板的 chips"
+            />
+            <span class="faint">钉词(该槽必现指定词, 优先于随机)</span>
+            <TvInput
+              v-model="editing.params.pin_slots"
+              size="sm"
+              placeholder="如 legwear:white_thighhighs (留空 = 无钉词)"
+              title="钉词串, 每段 槽:词, 逗号分隔可多个; 钉了的槽必现指定词并跳过随机"
+            />
+            <span class="faint">禁用槽(原图该槽的词整词删除, 与钉词互斥)</span>
+            <TvInput
+              v-model="editing.params.ban_slots"
+              size="sm"
+              placeholder="如 headwear,eyewear (留空 = 不禁用)"
+              title="禁用槽串, 逗号分隔槽 id; 原图词条里属于这些槽的词导出时整词删除(与换词率 0% 的保留相反)"
+            />
+            <TvCheckbox v-model="editing.params.pin_fill" label="原图没有该槽词条时补上钉词" title="开着 = 缺词也追加; 关掉 = 只替换已有的词" />
+            <TvCheckbox v-model="editing.params.randomize_nsfw" label="含成人词库" title="关掉后候选池构建期剔除成人词, 低档绝不越界" />
+            <TvInput
+              v-model="editing.params.randomize_seed"
+              size="sm"
+              placeholder="种子(留空 = 每次导出都不同)"
+              title="固定种子时同样的筛选结果导出完全可复现"
+            />
+          </div>
           <div v-if="editing.params.safe_only" class="half safe-level-row">
             <span class="lb">剔除口径</span>
             <TvSelect v-model="editing.params.safe_level" size="sm" :options="SAFE_LEVEL_OPTS" />
@@ -573,6 +618,9 @@ function shortDir(d) {
 .tag-q { font-size: 11px; color: var(--muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag-set { font-size: 10px; color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 0 4px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .setpick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 6px; }
+/* 随机替换参数块(2026-10-29): 纵排的两行输入 + 一个开关, 借 setpick 的缩进 */
+.rnd-preset { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-left: 22px; }
+.rnd-preset > .faint { font-size: 11px; }
 .recent { align-items: center; }
 .recent .rlab { font-size: 12px; color: var(--muted); }
 .faint { color: var(--faint); font-size: 11px; }

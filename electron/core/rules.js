@@ -507,6 +507,20 @@ export function testReplaceRules(raw = {}) {
   return { tag, hits, result: replaceTag(tag, rules) }
 }
 
+/** 黑名单测试器(2026-10-30, 黑名单编辑器的 🧪 测试条用): 返回命中了哪些 ban 模式。
+ * 口径与 isBlocked 一致(整段/通配/精确), 但逐条上报模式 —— 用户能看到"被谁 ban 的"。 */
+export function testBlacklist(raw = {}) {
+  const tag = String(raw.tag || '').trim()
+  if (!tag) return { error: 'empty tag' }
+  const t = tag.toLowerCase()
+  const hits = []
+  for (const rule of rawBlacklistRules()) {
+    if (isSegPat(rule)) { if (segHit(t, rule.slice(1, -1))) hits.push(rule) }
+    else if (wildHit(t, rule)) hits.push(rule)
+  }
+  return { tag, hits, banned: hits.length > 0 }
+}
+
 export function saveReplaceText(text) {
   const { active, sets } = replaceSets()
   const next = sets.map((s) => (s.id === active ? { ...s, text: String(text ?? '') } : s))

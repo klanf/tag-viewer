@@ -27,7 +27,7 @@ import {
   blacklistText, blacklistRules, saveBlacklistText, toggleBlacklistTag,
   replaceText, saveReplaceText, loadReplaceRules, loadReplaceRulesGroup,
   replaceSets, saveReplaceSets, loadBgConfig, invalidateRuleCaches,
-  testReplaceRules,
+  testReplaceRules, testBlacklist,
 } from './core/rules.js'
 import {
   historySummary, historyDetail, saveHistory, deleteHistory, renameHistory,
@@ -71,7 +71,7 @@ import {
 // ds/tagPoolSize 供旧逻辑用; recomputeSafety 只为读数据集里那两个敏感标记计数
 // (安全模式界面要显示"开了会隐藏多少张"), 别拆成两行 import —— ESM 会因重复声明直接报错。
 import { ds, tagPoolSize, recomputeSafety, relocateRecord } from './core/dataset.js'
-import { randomDraw, randomMeta, randomResetCounts, randomLedger } from './core/random.js'
+import { randomSections, randomSlots, wordInfos } from './core/export-random.js'
 import { searchStats, clearSearchCache } from './core/search.js'
 import { moveFile, copyFile } from './core/fileTransfer.js'
 import { spawnOpenWith, detectPhotoshop, INPAINT_EXE } from './core/externalApp.js'
@@ -425,6 +425,8 @@ function clampMenuPos(win, template, point) {
 export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdate, onSetupDownload } = {}) {
   // tagger:accel 的会话级缓存(见 handler 注释)
   let accelCache = null
+  // 按档下载的互斥锁: 两档同时拉 = 两条 1GB 流抢带宽 + 进度条互相覆盖
+  let presetBusy = false
   // 自动导出的结果(成功/失败)由主进程推给渲染层弹 toast。
   // 注册一次即可: 防抖到期时主窗口可能已经不是同一个, 所以每次都现取。
   setAutoNotifier((payload) => mainWindow()?.webContents.send('export:auto', payload))
@@ -869,6 +871,8 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'rules:reload': safe(() => { invalidateRuleCaches(); return { ok: true } }),
     // 规则测试器(编辑器底部 🧪): 与导出引擎同一套代码算命中与替换结果
     'rules:test': safe((raw) => testReplaceRules(raw || {})),
+    // 黑名单测试条(2026-10-30 编辑器改版): 报命中了哪些 ban 模式
+    'blacklist:test': safe((raw) => testBlacklist(raw || {})),
 
     // ---------------- 安全模式(按标签集合隐藏露骨内容) ----------------
     /* 只做**展示层过滤**: 库里一行数据都不动, 统计数字也不重算 —— 开关关掉
@@ -896,14 +900,16 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       return { ...r, ...counts }
     }),
 
-    // ---------------- 随机抽签(pin + 权重窗口 + 查重降权) ----------------
-    'random:draw': safe(({ n, level, seed, pins, profile, tagsTarget, char, save } = {}) => {
-      const r = randomDraw({ n, level, seed, pins, profile, tagsTarget, char, save })
-      return r.error ? { error: r.error, warns: r.warns || [] } : r
-    }),
-    'random:meta': safe(() => randomMeta()),
-    'random:ledger': safe(() => randomLedger()),
-    'random:resetCounts': safe(() => randomResetCounts()),
+    // ---------------- 导出端随机化(大类/槽勾选清单) ----------------
+    'random:sections': safe(() => randomSections()),
+    'random:slots': safe(() => randomSlots()),
+    // 词归属反查(2026-10-30 钉词分类标识): words = 词数组, 返回每个词的槽+大类中文名。
+    // 兼容单串入参(前端有时只查一个词)。
+    'random:wordinfo': safe((raw) => wordInfos(
+      Array.isArray(raw?.words) ? raw.words
+        : Array.isArray(raw) ? raw
+        : raw?.words != null ? [raw.words]
+        : [])),
 
     // ---------------- 购物车历史 ----------------
     'cart:history': safe(() => historySummary()),
@@ -1142,6 +1148,42 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       if (!onSetupDownload) return { ok: false, note: '当前环境不支持自动下载' }
       await onSetupDownload()
       return { ok: true }
+    }),
+    // 'tagger:model-download': 按档下载 v1.0 系列（2026-11-08）。
+    // v0.9 之外的三档都不进安装包（每档约 1GB），用户在设置里选了哪档、点了
+    // 「下载」才拉那一档。词表不下载 csv —— 从同仓库的 config.json 现场合成
+    // （理由见 runtime-setup.cjs 的 csvFromHfConfig）。
+    // 进度复用 tagger:setup-progress 通道: TvSetupProgress 卡片与引导弹窗都能吃。
+    'tagger:model-download': safe(async (raw = {}) => {
+      const { normalizeTaggerModel } = await import('./core/tagger-models.js')
+      const presetId = normalizeTaggerModel(raw.preset)
+      if (!presetId) return { error: '未知模型档位' }
+      if (presetBusy) return { error: '正在下载另一个模型，等它完成再试' }
+      presetBusy = true
+      const push = (p) => mainWindow()?.webContents.send('tagger:setup-progress', p)
+      try {
+        const { ensurePresetModel } = await import('./runtime-setup.cjs')
+        const ws = getWorkspace()
+        const r = await ensurePresetModel({
+          presetId,
+          force: !!raw.force,
+          destDir: path.join(ws.dataDir, 'models'),
+          onStage: (stage) => push({ stage }),
+          onProgress: (file, bytes, total) => push({
+            file, bytes, total,
+            pct: total ? Math.min(100, Math.floor((bytes * 100) / total)) : 0,
+          }),
+        })
+        push({ done: true, stage: r.skipped ? '模型已就绪（无需下载）' : `模型就绪: ${path.basename(r.modelPath)}` })
+        // 换词表 = 角色/系列索引的类别分段变了, 不重载的话新档的角色查不出来
+        if (!r.skipped) { try { reloadCats() } catch (e) { flog('tagger', `换词表后分类重载失败: ${e?.message || e}`) } }
+        return { ok: true, ...r }
+      } catch (e) {
+        push({ error: e?.message || String(e) })
+        return { error: e?.message || String(e) }
+      } finally {
+        presetBusy = false
+      }
     }),
 
     // ---------------- 文件夹登记表(扫描夹 + 看板来源 共用一份) ----------------

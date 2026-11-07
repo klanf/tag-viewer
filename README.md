@@ -6,7 +6,7 @@
 
 把一堆散落的 PNG，变成能搜、能改、能复用的提示词资产。
 
-`v2.3.1` · Windows x64 · Electron + Vue 3 · MIT · 全程本地，默认离线
+`v2.4.0` · Windows x64 · Electron + Vue 3 · MIT · 全程本地，默认离线
 
 [English](README.en.md) · [📦 下载安装包](https://gitee.com/klanf/tag-viewer/releases) · [🎬 2 分钟上手视频](https://www.bilibili.com/video/BV19ZaD67EMs/) · [🚀 新手上手](docs/新手上手.md) · [🛠️ 开发手册](docs/开发手册.md)
 
