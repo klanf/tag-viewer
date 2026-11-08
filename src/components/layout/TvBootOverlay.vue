@@ -6,7 +6,7 @@
  * 这里把主进程推上来的 parse/stats 进度画成进度条, 并在失败时把错误与
  * 数据目录直接摆出来(这是最常见的"起不来"原因: 配置里的路径不存在)。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import TvButton from '../base/TvButton.vue'
 import { useAppStore } from '@/stores/useAppStore.js'
 import { nfmt, ms } from '@/utils/format.js'
@@ -14,14 +14,60 @@ import { api } from '@/utils/api.js'
 
 const app = useAppStore()
 
+/* 2026-11-08: 阶段文案补全 —— 遮罩靠 progress.phase 取词, 以前只认 4 个阶段,
+ * 剩下的(同步/读库/系列索引)一律显示「正在准备」, 用户报障时说的现象就和日志
+ * 对不上号(「卡在正在解析标签文件」其实是还没开始读库)。缺的词补齐。 */
 const phaseText = computed(() => ({
+  config: '正在读取配置与数据源',
+  'db-sync': '正在核对标签来源',
+  'db': '正在导入标签文件',
+  'db-read': '正在从标签库读取记录',
   parse: '正在解析标签文件',
   stats: '正在统计标签与系列',
+  series: '正在建立系列索引',
   translate: '正在载入翻译库',
   done: '完成',
 }[app.progress.phase] || '正在准备'))
 
 const pct = computed(() => Math.max(0, Math.min(100, app.progress.percent || 0)))
+
+/* ---- 版本号 + 检查更新(2026-11-08) ----
+ * 启动失败时顶栏被这层遮罩整个盖住, 用户既进不了设置弹窗、也点不到任何按钮,
+ * 唯一的出路就是**升级到修复版**。所以遮罩右下角常驻一个检查更新入口。
+ * 流程复用主进程的「检查更新…」(检查 → 确认下载 → 确认安装, 全是原生弹窗),
+ * 渲染层只负责触发, 不重复实现下载/校验那一套。
+ * 注意: 如果主进程的事件循环真被卡死了, 这个按钮也会没反应 —— 它救的是
+ * 「加载失败但进程还活着」这一类, 那才是用户最常见的处境。 */
+const ver = ref('')
+const updBusy = ref(false)
+const updErr = ref('')
+
+async function checkUpd() {
+  if (updBusy.value) return
+  updBusy.value = true
+  updErr.value = ''
+  try { await api.checkUpdate() } catch (e) { updErr.value = e?.message || String(e) } finally { updBusy.value = false }
+}
+
+onMounted(() => {
+  api.appVersion().then((r) => { ver.value = r?.version || '' }).catch(() => { /* 拿不到就不显示 */ })
+})
+
+/* ---- 「卡在 0% 却不给任何动静」(2026-11-08 用户反馈) ----
+ * 进度条只认主进程推来的 app:progress。一旦主进程卡在某个同步段(库被另一实例
+ * 占着 / 数据目录在掉线的磁盘或网盘 / 反推子进程还攥着 db), 界面就永久停在
+ * 第一帧(parse 0%), 既没有进度也没有按钮 —— 用户只能强杀, 还以为是"更新坏了"。
+ * 这里自己数"多久没动静", 超过阈值就把「可能卡住」和自救按钮摆出来。 */
+const stuckSec = ref(0)
+let lastSig = ''
+const stuckTimer = setInterval(() => {
+  if (app.ready) return
+  const sig = [app.phase, app.progress.phase, app.progress.records, app.progress.percent, app.progress.source].join('|')
+  if (sig !== lastSig) { lastSig = sig; stuckSec.value = 0; return }
+  if (app.phase === 'loading') stuckSec.value++
+}, 1000)
+onBeforeUnmount(() => clearInterval(stuckTimer))
+const stuck = computed(() => app.phase === 'loading' && stuckSec.value >= 45)
 
 /**
  * 「一个数据源都还没配」和「配了但读不到」是两种完全不同的处境, 给的引导也该不一样:
@@ -270,6 +316,7 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
             </div>
             <div class="btns">
               <TvButton variant="primary" @click="reveal">打开数据目录</TvButton>
+              <TvButton variant="secondary" title="修好被占用的库/盘符后不用重启应用" @click="reload">↻ 重试</TvButton>
             </div>
           </template>
         </template>
@@ -285,10 +332,31 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
           <div class="hint">
             正在从本地标签库(tags.db)读入全部记录 —— 之后同一进程内搜索是毫秒级的。
           </div>
+          <template v-if="stuck">
+            <div class="warn">
+              ⏳ 已经 {{ stuckSec }} 秒没有任何进展 —— 常见原因: 数据库被另一个实例/反推进程占着、
+              数据目录在掉线的磁盘或网盘上、或者磁盘正在被别的程序吃满。<br>
+              可以先「重试」一次; 反复不行就用「检查更新」装最新修复版, 再把 logs/launch.log 发我。
+            </div>
+            <div class="btns">
+              <TvButton variant="secondary" @click="reveal">打开数据目录</TvButton>
+              <TvButton variant="secondary" @click="reload">↻ 重试</TvButton>
+              <TvButton variant="primary" :loading="updBusy" @click="checkUpd">检查更新</TvButton>
+            </div>
+          </template>
         </template>
 
         <div v-if="app.loadMs && app.ready" class="hint">上次加载耗时 {{ ms(app.loadMs) }}</div>
       </div>
+
+      <!-- 右下角常驻的救命入口: 任何「进不去」的状态下都能自己升级 -->
+      <div class="foot">
+        <span v-if="ver" class="ver">v{{ ver }}</span>
+        <button class="link" :disabled="updBusy" @click="checkUpd">
+          {{ updBusy ? '正在检查更新…' : '检查更新' }}
+        </button>
+      </div>
+      <div v-if="updErr" class="foot-err">{{ updErr }}</div>
     </div>
   </Teleport>
 </template>
@@ -336,4 +404,32 @@ watch(taggingWait, (v) => { if (v) startTagPoll() }, { immediate: true })
   padding: 10px; font-size: 11px; color: var(--danger); max-height: 160px; overflow: auto;
 }
 .btns { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
+.warn {
+  margin-top: 14px; padding: 9px 11px;
+  background: var(--warn-soft, rgba(184, 117, 20, .12));
+  border: 1px solid var(--warn, #b87514);
+  border-left-width: 3px; border-radius: var(--r-sm);
+  color: var(--warn, #b87514); font-size: 11px; line-height: 1.75; text-align: left;
+}
+
+/* 右下角的常驻救援入口(版本号 + 检查更新) */
+.foot {
+  position: fixed; right: 18px; bottom: 14px;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 11px; color: var(--faint);
+}
+.foot .ver { color: var(--faint); }
+.foot .link {
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 4px 10px; font-size: 11px; cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.foot .link:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.foot .link:disabled { opacity: .6; cursor: default; }
+.foot-err {
+  position: fixed; right: 18px; bottom: 44px;
+  max-width: 300px; text-align: right;
+  color: var(--danger); font-size: 11px; word-break: break-all;
+}
 </style>

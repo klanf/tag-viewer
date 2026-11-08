@@ -37,12 +37,20 @@ import path from 'node:path'
 import { BUNDLED_KNOWLEDGE_DIR } from './paths.js'
 
 let _slots = null, _pools = null
+/* 缺知识包时不能抛 —— 装出来的包漏打 knowledge/ 那轮(2026-11-08), 随机提示词页
+ * 一打开就 ENOENT。降级成空表: 页面只是没有可选大类, 不影响其它功能。 */
 function slots() {
-  if (!_slots) _slots = JSON.parse(readFileSync(path.join(BUNDLED_KNOWLEDGE_DIR, 'tag_slots.json'), 'utf8')).tags || {}
+  if (!_slots) {
+    try { _slots = JSON.parse(readFileSync(path.join(BUNDLED_KNOWLEDGE_DIR, 'tag_slots.json'), 'utf8')).tags || {} }
+    catch { _slots = {} }
+  }
   return _slots
 }
 function pools() {
-  if (!_pools) _pools = JSON.parse(readFileSync(path.join(BUNDLED_KNOWLEDGE_DIR, 'slot-pools.json'), 'utf8'))
+  if (!_pools) {
+    try { _pools = JSON.parse(readFileSync(path.join(BUNDLED_KNOWLEDGE_DIR, 'slot-pools.json'), 'utf8')) }
+    catch { _pools = { pools: {}, nsfwPools: {} } }
+  }
   return _pools
 }
 

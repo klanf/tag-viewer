@@ -175,7 +175,17 @@ function hitOne(tag, part) {
 function dictLevels() {
   const p = path.join(BUNDLED_KNOWLEDGE_DIR, 'tag_slots.json')
   const mt = mtimeOf(p)
-  if (cache.dict.mtime !== mt) {
+  /* 2026-11-08 修复(安装版全新用户"进不去"的根因):
+   * 文件不存在时 mtimeOf 返回 -1, 与 cache.dict 初值的 mtime(-1)相等 -> 缓存条件
+   * 不成立 -> 直接把初值 value(null) 返回 -> levelOfTag 里 mat.dict[tag] 抛
+   * "Cannot read properties of null (reading '1girl')" -> dataset 的 SQLite 路线
+   * 整条报废, 界面只剩"反推一张都没落进库"的误导文案。
+   * 触发条件: 打包时没带 knowledge/(v2.4.0 的 extraResources 就没有) —— 所有
+   * 安装版新用户必崩, 开发态因为仓库里有 knowledge/ 一直看不出来。
+   * 现在: 缓存命中要求 value 非空; 文件缺失就每次现算(statSync 一次, 可以忽略),
+   * 读不到就走 out={} —— 只剩覆盖段(safety_tags.txt)兜底, 绝不返回 null。
+   */
+  if (!cache.dict.value || cache.dict.mtime !== mt) {
     const out = {}
     try {
       const raw = JSON.parse(fs.readFileSync(p, 'utf8')).tags || {}
@@ -236,7 +246,8 @@ export function levelOfTag(tag, m = null) {
   const mat = m || safetyMatcher()
   const t = String(tag).toLowerCase()
   for (const s of SECS) if (hitOne(t, mat.secs[s])) return Number(s.slice(1))
-  return mat.dict[t] ?? 0
+  // dict 恒为对象(见 dictLevels); 这里再兜一层, 免得将来别的构造路径漏了字段又炸整库
+  return (mat.dict || {})[t] ?? 0
 }
 
 /**

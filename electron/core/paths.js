@@ -31,8 +31,23 @@ export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.
  * 仓库内置的「知识」目录 —— 随仓库分发的那份 WeiLin 翻译库住这里
  * (来源与授权见 knowledge/README.md)。数据目录下自动发现不到 weilin_data* 时,
  * translate.js 回落到这里, 让新装机器**零配置**就有中文标签。
+ *
+ * 打包态(2026-11-08 修复): knowledge/ 走 extraResources 落在 resources/knowledge/,
+ * **不能**留在 asar 内 —— 里面的 weilin_*.db 是 SQLite, node:sqlite 打不开 asar
+ * 虚拟路径(与 translations.db 同一个坑, 见上面 bundledTranslationsDb 的注释)。
+ * 以前这里只认 PROJECT_ROOT —— 安装版这一整块(槽位词典/过滤规则/内置翻译)全静默
+ * 缺失, safety.js 的 dictLevels 因此返回 null, 全新用户第一次入库就崩(见 safety.js)。
+ *
+ * TV_KNOWLEDGE_DIR: 测试/排查用的覆盖钩子(指向空目录即可复现"知识包缺失"降级)。
  */
-export const BUNDLED_KNOWLEDGE_DIR = path.join(PROJECT_ROOT, 'knowledge')
+export function bundledKnowledgeDir() {
+  const env = String(process.env.TV_KNOWLEDGE_DIR || '').trim()
+  if (env) return path.resolve(env)
+  const packed = process.resourcesPath ? path.join(process.resourcesPath, 'knowledge') : ''
+  if (packed && fs.existsSync(packed)) return packed
+  return path.join(PROJECT_ROOT, 'knowledge')
+}
+export const BUNDLED_KNOWLEDGE_DIR = bundledKnowledgeDir()
 
 /**
  * 内置统一翻译库(scripts/build-translations-db.py 把 WeiLin 两个库 +

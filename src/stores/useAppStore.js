@@ -402,7 +402,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function reload() {
     phase.value = 'loading'
-    progress.value = { percent: 0, phase: 'parse', records: 0, source: '' }
+    progress.value = { percent: 0, phase: 'config', records: 0, source: '' }
     applyStatus(await api.reload())
   }
 

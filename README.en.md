@@ -6,7 +6,7 @@
 
 Turn a pile of loose PNGs into prompt assets you can search, correct and reuse.
 
-`v2.4.0` · Windows x64 · Electron + Vue 3 · MIT · local-first, offline by default
+`v2.4.1` · Windows x64 · Electron + Vue 3 · MIT · local-first, offline by default
 
 [中文](README.md) · [📦 Downloads](https://gitee.com/klanf/tag-viewer/releases) · [🎬 2-minute walkthrough](https://www.bilibili.com/video/BV19ZaD67EMs/) · [🚀 Getting started (Chinese)](docs/新手上手.md) · [🛠️ Dev manual (Chinese)](docs/开发手册.md)
 

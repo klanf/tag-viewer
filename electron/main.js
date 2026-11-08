@@ -652,10 +652,36 @@ async function startLoad(opts = {}) {
     const push = quiet
       ? () => {}
       : (p) => { if (win && !win.isDestroyed()) win.webContents.send('app:progress', p) }
-    push({ phase: 'parse', done: 0, total: 1, percent: 0, records: 0 })
-    const st = await bootstrap({ onProgress: push })
+    /* 第一帧刻意标成 config 而不是 parse(2026-11-08): 这一帧在主进程读到配置之前
+     * 就发出去了, 以前挂的是「正在解析标签文件」—— 用户报障说"卡在解析标签文件 0%",
+     * 实际卡的是读配置/扫数据源, 现象和日志对不上号, 排查先走了一圈冤枉路。 */
+    push({ phase: 'config', done: 0, total: 1, percent: 0, records: 0 })
+    /* 测试钩子(TV_LOAD_DELAY_MS): 人为拖慢首载, 用来验证启动遮罩的"卡住自救"面板。
+     * 真机上这种"卡在 0%"是外部原因(库被占/网盘掉线/杀毒扫描), 不可能稳定复现,
+     * 所以留一个显式的慢加载开关 —— 见 scripts/test-boot-rescue.mjs。 */
+    const fakeDelay = Number(process.env.TV_LOAD_DELAY_MS) || 0
+    if (fakeDelay > 0) {
+      log('warn', `[test] TV_LOAD_DELAY_MS=${fakeDelay} —— 人为延迟首载`)
+      await new Promise((r) => setTimeout(r, fakeDelay))
+    }
+    /* 慢加载留痕(2026-11-08): "卡在 0% 一直不动"这类报障, 用户能给的只有一句体验,
+     * launch.log 里却什么都没有 —— 因为进度只走 IPC, 不落盘。这里到点就往日志里
+     * 写一行当时的阶段, 下次再有人报"卡住", 看一眼最后一行的 phase 就能定性。
+     * 只观察, 不改行为: 真超时也不在这里动手, 兜底交给遮罩上的自救面板。 */
+    const slowTimer = setTimeout(() => {
+      try {
+        const p = status().progress || {}
+        log('warn', `首载已超过 30s 仍未结束(phase=${p.phase || '?'} 记录=${p.records || 0}) —— `
+          + `往数据目录/数据库被占用、磁盘或网盘掉线这类外部原因上查`)
+      } catch { /* 日志写不出去也不影响加载 */ }
+    }, 30000)
+    let st
+    try {
+      st = await bootstrap({ onProgress: push })
+    } finally {
+      clearTimeout(slowTimer)
+    }
     // bootstrap() 自己会 catch(它返回 status() 而不是抛), 所以这里必须显式看 phase。
-    // 否则加载失败也会走到下面那行, 记成 `[ok] 数据集就绪: null` —— launch.log 是双击
     // 启动时**唯一**的排障线索, 日志报 ok 比没有日志更坏(会把人往错误方向带)。
     if (st.phase === 'error') {
       log('warn', `数据集加载失败: ${st.error}`)
@@ -748,6 +774,14 @@ function buildMenu() {
     {
       label: '帮助',
       submenu: [
+        /* 2026-11-08: 启动失败的用户完全没有自救入口 —— 顶栏被启动遮罩盖着,
+         * 而「检查更新」原本只长在设置弹窗里(进不去设置就等于没有)。
+         * 菜单是**主进程**画的, 遮罩盖不到它, 所以这里必须有一条。
+         * 顺带补「打开日志目录」: 报错文案里让用户"带 logs/launch.log 反馈",
+         * 没有入口等于让人自己摸路径。 */
+        { label: '检查更新…', click: () => { checkForUpdateManually() } },
+        { label: '打开日志目录', click: () => { shell.openPath(LOG_DIR) } },
+        { type: 'separator' },
         {
           label: '关于',
           click: () => {

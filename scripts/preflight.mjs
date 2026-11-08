@@ -127,6 +127,26 @@ export function checkChannels() {
   return problems
 }
 
+/* 打包必须带知识包(2026-11-08): v2.4.0 的 build.extraResources 漏了 knowledge/,
+ * 装出来的包既没有槽位词典也没有过滤规则 —— safety.js 的 dictLevels 因此返回 null,
+ * 全新用户第一次入库就抛 "Cannot read properties of null (reading '1girl')",
+ * 界面只显示"反推一张标签都没落进库"。开发态因为仓库里有 knowledge/ 完全看不出来,
+ * 所以把"打包清单齐不齐"前置到这里, 不靠"装一次试试"。
+ */
+export function checkPackaging() {
+  const problems = []
+  let pkg
+  try { pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) } catch { return problems }
+  const extras = (pkg.build?.extraResources || []).map((e) => String(e.from || '').replace(/\\/g, '/').replace(/\/+$/, ''))
+  for (const need of ['knowledge', 'assets/translations.db', 'assets/wd-pixai-tagger-v0.9.csv', 'tools/tagger_serve.py']) {
+    if (!extras.includes(need)) problems.push({ kind: `build.extraResources 少了 ${need}（装出来的包会静默缺文件）` })
+  }
+  for (const need of ['knowledge/tag_slots.json', 'knowledge/filter-rules.json', 'knowledge/slot-pools.json']) {
+    if (!fs.existsSync(path.join(ROOT, need))) problems.push({ kind: `知识包缺文件: ${need}` })
+  }
+  return problems
+}
+
 export function preflight({ dirs = ['electron', 'scripts', 'src'] } = {}) {
   const files = dirs.flatMap((d) => {
     const p = path.join(ROOT, d)
@@ -173,6 +193,7 @@ export function preflight({ dirs = ['electron', 'scripts', 'src'] } = {}) {
   problems.push(...checkTemplates())
   problems.push(...checkPaths())
   problems.push(...checkBannedApis(files))
+  problems.push(...checkPackaging())
   if (problems.length) {
     console.log(`✗ 预检发现 ${problems.length} 处问题:`)
     for (const p of problems) {
@@ -181,7 +202,7 @@ export function preflight({ dirs = ['electron', 'scripts', 'src'] } = {}) {
   } else {
     console.log(`✓ 预检通过: ${files.length} 个文件的所有相对 import 都能解析, `
       + 'IPC channel 两侧一致, 启动脚本编码正确, 模板绑定无遗漏, 源码里没有硬编码绝对路径, '
-      + '没有用会静默崩进程的 fs.cpSync')
+      + '没有用会静默崩进程的 fs.cpSync, 打包资源(知识包/翻译库/词表/反推脚本)齐全')
   }
   return problems
 }
