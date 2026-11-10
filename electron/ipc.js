@@ -18,7 +18,7 @@ import { ipcMain, dialog, clipboard, shell, BrowserWindow, Menu, app } from 'ele
 import { getWorkspace, getSettings, saveSettings, dataFile, applyTaggerEnv } from './core/workspace.js'
 import { bootstrap, status, whenReady } from './core/app-state.js'
 import {
-  getStats, doSearch, getSeries, getCharacters, getSeriesMeta, postSeriesMeta,
+  getStats, doSearch, getSeries, getCharacters, getSeriesMeta, postSeriesMeta, searchCharacters,
   getSuggest, getAllTags, getScanTagList, getScanTagImages, getTagsForPath, getLightboxData, getTranslations, matchMetaTags,
   getCoverCandidates, setCover,
 } from './core/query.js'
@@ -166,6 +166,8 @@ function safe(fn) {
 const DATA_CHANNELS = new Set([
   'stats:get', 'search:do',
     'series:get', 'characters:get',
+    // 全局角色搜索要读内存数据集(seriesChars), 同样得等就绪
+    'chars:search',
     'covers:candidates',
     // 批量拉封面: 内部要 setCover -> recordByPath(读内存数据集), 所以要等就绪
     'covers:auto:run', 'covers:auto:state',
@@ -708,6 +710,8 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'series:meta:get': safe(() => getSeriesMeta()),
     'series:meta:post': safe((body) => postSeriesMeta(body)),
     'characters:get': safe((raw) => getCharacters(raw)),
+    // 全局角色搜索(2026-11-10): 系列页搜索框同时搜角色, 敲角色名直接跳它的图集
+    'chars:search': safe((raw) => searchCharacters(raw)),
     'covers:candidates': safe((raw) => getCoverCandidates(raw)),
     /* 设封面成功后**主动广播** cover:changed(2026-10-22):
      * 原先只靠换封面弹窗 emit('saved') 让父组件刷新 —— 用户在「下载中」把弹窗关掉,

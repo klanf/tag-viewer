@@ -223,5 +223,77 @@ ok('插入同种子可复现', () => {
   nassert.equal(linesOf(a).join('\n'), linesOf(b).join('\n'), '同种子两次结果不同')
 })
 
+console.log('\n=== ⑦ 权重(2026-11-10): 钉词权重 / 槽位权重 ===')
+/* 权重壳的判定: (tag:1.4) 这种形态(尾零会省掉)。spaces='1' 会把下划线换空格, 但括号与冒号原样,
+ * 所以先剥壳再归一才能跟词表比。 */
+const RE_W = /^\((.+):(\d+(?:\.\d+)?)\)$/
+const bareOf = (t) => norm(String(t).replace(RE_W, '$1'))
+const isWrapped = (t) => RE_W.test(String(t).trim())
+const tokensOf = (line) => line.split(', ').map((t) => t.trim()).filter(Boolean)
+const legwearPool = (randomSlots().find((s) => s.id === 'legwear')?.words || [])
+ok('负向控制: legwear 池里确实有词(否则权重断言没意义)', () => {
+  nassert.ok(legwearPool.length > 3, `legwear 池只有 ${legwearPool.length} 个词`)
+})
+
+// 钉词权重走**快照参数**(确定性最强): 每行必现同一个词, 直接看它有没有套壳
+const pinWord = legwearPool[0]
+ok('钉词权重: pin_slots=legwear:词@1.4 → 每行都是 (词:1.4), 不出现裸词', () => {
+  const r = buildExport({ ...BASE, randomize: '1', pin_slots: `legwear:${pinWord}@1.4`, pin_fill: '1' })
+  const lines = linesOf(r)
+  const wrapped = `(${norm(pinWord)}:1.4)`
+  const hit = lines.filter((l) => l.includes(wrapped)).length
+  nassert.equal(hit, lines.length, `只有 ${hit}/${lines.length} 行带 ${wrapped}`)
+  // 裸词不能一起出现(钉词阶段同槽只留一个词)
+  const bareCnt = lines.reduce((n, l) => n + tokensOf(l).filter((t) => !isWrapped(t) && norm(t) === norm(pinWord)).length, 0)
+  nassert.equal(bareCnt, 0, `还有 ${bareCnt} 个裸 ${pinWord}`)
+})
+ok('钉词权重缺省(=1) → 不加壳(老格式不变)', () => {
+  const r = buildExport({ ...BASE, randomize: '1', pin_slots: `legwear:${pinWord}`, pin_fill: '1' })
+  const lines = linesOf(r)
+  const wrapped = lines.reduce((n, l) => n + tokensOf(l).filter((t) => isWrapped(t) && bareOf(t) === norm(pinWord)).length, 0)
+  nassert.equal(wrapped, 0, `默认权重却套了壳: ${wrapped} 处`)
+  nassert.ok(lines.every((l) => norm(l).includes(norm(pinWord))), '钉词没生效 —— 前置断言失败')
+})
+ok('钉词权重经方案库走通(adv_set 路径)', () => {
+  saveAdvSets({ active: 'adv-W', sets: [
+    { id: 'adv-W', name: '权重钉词', cfg: {
+      enabled: true, picked: [], inserts: [], rates: {}, weights: {}, pins: [{ slot: 'legwear', word: pinWord, weight: 1.6 }],
+      pinFill: true, banned: [], nsfw: true, seed: '',
+      nl: { enabled: false, dims: [], level: 'sfw', poseView: true, stripPose: true, stripCostume: true, stripHair: true, seed: '' },
+    } },
+  ] })
+  const r = buildExport({ ...BASE, adv_set: 'adv-W' })
+  const wrapped = `(${norm(pinWord)}:1.6)`
+  const hit = linesOf(r).filter((l) => l.includes(wrapped)).length
+  nassert.equal(hit, linesOf(r).length, `方案里的钉词权重没生效: ${hit}/${linesOf(r).length}`)
+})
+
+/* 槽位权重: 换出来的词套壳。rate 100% 时该槽每个词都会被换, 所以输出里不该剩裸词;
+ * 种子固定 = 完全可复现, 不存在偶发。 */
+const legwearSet = new Set(legwearPool.map((w) => norm(w)))
+const cntLegwear = (lines) => lines.reduce((n, l) => n + tokensOf(l).filter((t) => legwearSet.has(bareOf(t))).length, 0)
+const cntWrappedLegwear = (lines) => lines.reduce((n, l) => n + tokensOf(l).filter((t) => isWrapped(t) && legwearSet.has(bareOf(t))).length, 0)
+ok('负向控制: 基线里 legwear 词是行行都有的', () => {
+  nassert.ok(cntLegwear(linesOf(plain)) > 0, '基线 0 个 legwear 词 —— 下面的权重断言会假通过')
+})
+ok('槽位权重: slot_weights=legwear:1.3 → 换出来的 legwear 词全部套壳, 一个裸词都不剩', () => {
+  const r = buildExport({ ...BASE, randomize: '1', randomize_slots: 'legwear', slot_weights: 'legwear:1.3', randomize_seed: 'w1' })
+  const lines = linesOf(r)
+  const all = cntLegwear(lines)
+  const wrapped = cntWrappedLegwear(lines)
+  nassert.ok(all > 0, '输出里没有 legwear 词')
+  nassert.equal(wrapped, all, `有 ${all - wrapped} 个 legwear 词没套壳(共 ${all})`)
+  nassert.ok(lines.some((l) => l.includes(':1.3)')), '权重数值不对(应为 1.3)')
+})
+ok('槽位权重 =1 → 不加壳(与老行为逐字一致)', () => {
+  const a = buildExport({ ...BASE, randomize: '1', randomize_slots: 'legwear', randomize_seed: 'w1' })
+  const b = buildExport({ ...BASE, randomize: '1', randomize_slots: 'legwear', slot_weights: 'legwear:1', randomize_seed: 'w1' })
+  nassert.equal(linesOf(a).join('\n'), linesOf(b).join('\n'), '权重 1 改变了输出')
+})
+ok('槽位权重非法值 → 忽略(不套壳, 不报错)', () => {
+  const r = buildExport({ ...BASE, randomize: '1', randomize_slots: 'legwear', slot_weights: 'legwear:abc,,,:,', randomize_seed: 'w1' })
+  nassert.equal(cntWrappedLegwear(linesOf(r)), 0, '非法权重也套了壳')
+})
+
 console.log(`\n===== adv-sets: ${pass} 通过, ${fail} 失败 =====`)
 process.exit(fail ? 1 : 0)

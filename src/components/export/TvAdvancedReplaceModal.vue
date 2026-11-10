@@ -21,14 +21,16 @@ import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import TvModal from '../base/TvModal.vue'
 import TvButton from '../base/TvButton.vue'
 import TvCheckbox from '../base/TvCheckbox.vue'
-// 钉词输入复用看板筛选同款联想框(2026-10-30 用户要求统一): localTags 传槽池词条,
-// 下拉项带「槽·大类」标识 —— 与看板联想同一套交互(补全/高亮/防抖)
+// 钉词输入复用看板筛选同款联想框(2026-10-30 用户要求统一, 2026-11-10 再统一一次):
+// 走**全局联想**(suggest:get, 带中文翻译与 槽·大类 标识), 不再只给所选槽的池子 ——
+// 用户实锤「钉词那边没有翻译, 也不支持中文输入」。全局联想里词条本来就带 zh, 中英文都能搜。
 import TvTagSuggestInput from '../tag/TvTagSuggestInput.vue'
 import { api } from '@/utils/api.js'
 import { useUiStore } from '@/stores/useUiStore.js'
 import {
   adv, ensureAdvLoaded, advZh, slotMode, cycleSlotMode,
-  addAdvPin, removeAdvPin, advPinCount, advConflicts, advPinConflicts,
+  addAdvPin, removeAdvPin, advPinCount, advConflicts, advPinConflicts, advStripSoftNotes,
+  slotWeightOf, setSlotWeight, pinWeightOf,
   nlActive, nlPoolSize, nlTotalSize,
   switchAdvSet, addAdvSet, renameAdvSet, deleteAdvSet,
 } from '@/utils/advReplace.js'
@@ -123,7 +125,7 @@ const pendingWords = new Set()
 /** 批量查归属(词典反查走主进程, 250ms 合并同批词) */
 function lookupWords(words) {
   const todo = words.filter((w) => w && !(w in infoCache) && !pendingWords.has(w))
-  if (!todo.length) return
+  if (!todo.length) { autoFillPinSlots(); return }
   todo.forEach((w) => pendingWords.add(w))
   clearTimeout(lookupTimer)
   lookupTimer = setTimeout(async () => {
@@ -133,34 +135,71 @@ function lookupWords(words) {
       const infos = await api.random.wordinfo(batch)
       for (const it of infos || []) infoCache[it.word.toLowerCase().replace(/\s+/g, '_')] = it
     } catch { /* 失败 = 缓存没有, 界面只少个标识不挡功能 */ }
+    autoFillPinSlots()          // 反查回来 → 把还没归类的钉词行补上槽
   }, 250)
 }
-/* 已输词变化 → 补查归属 */
-watch(() => adv.pins.map((p) => p.word).join('|'), () => {
-  for (const p of adv.pins) { const w = pinQuery(p); if (w) lookupWords([w]) }
-})
 
 const infoOf = (w) => infoCache[String(w || '').toLowerCase().replace(/\s+/g, '_')]
 
-/** 钉词联想池: 所选槽的词条映射成 TvTagSuggestInput 的 localTags 形态。
- *  slotZh 恒定(所选槽), sec 从归属缓存补(反查回来后重渲染自动补上)。 */
-function pinPool(p) {
-  const s = adv.slots.find((x) => x.id === p.slot)
-  if (!s) return []
-  return s.words.map((w) => ({ tag: w, slotZh: advZh(p.slot), sec: infoOf(w)?.sec || '' }))
+/**
+ * 自动归类(2026-11-10 用户要求: 「只能先选分类再选提示词, 要支持输入提示词自动选择分类」)。
+ * 只填 `auto` 标记为真的行 —— 用户手动选过槽的行(auto=false)不擅自改, 那是他自己的判断。
+ */
+function autoFillPinSlots() {
+  for (const p of adv.pins) {
+    if (!p.auto) continue
+    const it = infoOf(pinQuery(p))
+    if (it?.slot && p.slot !== it.slot) p.slot = it.slot
+  }
 }
+
+/** 输入框里选中一条联想: 候选自带 slot(后端 suggest 已补) → 直接定类, 不必再反查 */
+function onPinPick(p, item) {
+  if (item?.slot) { p.slot = item.slot; p.auto = true; return }
+  lookupWords([pinQuery(p)])
+}
+
+/** 槽下拉手选 = 关掉自动归类(否则下一次反查回来会把用户的选择顶掉) */
+function onPinSlotChange(p) { p.auto = false }
+
+/* 词变了 → 重新走一次自动归类(敲的是另一个词, 分类就该跟着换)。
+ * 逐行比 _seenWord: 只有**自己这一行**的词变了才把 auto 置真 —— 否则删掉一行会让后面
+ * 所有行错位比较, 把用户手选的槽也一起重置掉。 */
+watch(() => adv.pins.map((p) => p.word).join('\u0001'), () => {
+  for (const p of adv.pins) {
+    if (p._seenWord === p.word) continue
+    p._seenWord = p.word
+    p.auto = true
+  }
+  const words = adv.pins.map((p) => pinQuery(p)).filter(Boolean)
+  if (!words.length) return
+  autoFillPinSlots()     // 缓存里已有时立刻生效, 没有就等反查回来
+  lookupWords(words)
+})
 
 /** 手输词校验(三级): ok=在所选槽 / warn=在词典但别的槽 / out=词典外; 空词=null */
 function pinVerdictOf(p) {
-  if (!p.slot) return null
   const w = pinQuery(p)
   if (!w) return null
   const it = infoOf(w)
   if (!it) return { level: 'pending', msg: '归属查询中…' }
-  if (!it.slot) return { level: 'out', msg: '词典外 — 直接写入导出结果, 不参与槽位判断' }
-  if (it.slot === p.slot) return { level: 'ok', msg: `✓ ${it.slotZh}·${it.sec}` }
-  return { level: 'warn', msg: `⚠ 实际在「${it.slotZh}」≠ 所选「${advZh(p.slot)}」— 生效时按词典归属, 不进这个槽` }
+  if (!p.slot) return { level: 'warn', msg: '⚠ 还没定槽 — 手动选一个, 否则这条钉词不生效(引擎按槽替换)' }
+  if (!it.slot) {
+    // 词典外的词照样能钉: 引擎按**槽**替换, 不看词在不在池子里
+    return { level: 'out', msg: `词典外 — 原样写入导出结果(钉进「${advZh(p.slot)}」槽)` }
+  }
+  if (it.slot === p.slot) {
+    const wv = pinWeightOf(p)
+    return { level: 'ok', msg: `✓ ${it.slotZh}·${it.sec}${Math.abs(wv - 1) > 1e-3 ? ` · 权重 ${wv}` : ''}` }
+  }
+  return {
+    level: 'warn',
+    msg: `⚠ 实际在「${it.slotZh}」≠ 当前「${advZh(p.slot)}」— 点右边改过来`,
+    fix: it.slot,
+  }
 }
+
+function applyFixSlot(p, slot) { if (slot) { p.slot = slot; p.auto = true } }
 
 onBeforeUnmount(() => { clearTimeout(lookupTimer) })
 
@@ -211,9 +250,16 @@ const saving = ref(false)
 function save() {
   const conflicts = advPinConflicts.value
   if (conflicts.length) {
-    // 2026-11-09: 拦截范围 = 既钉又禁 / 钉词×NL剔槽 / 插入×NL剔槽 ——
-    // 钉词在导出端豁免禁用剔除; 插入会把被剔槽的词从池里补回来, 都等于绕过剔除
-    ui.err(`这些槽与其他设置打架(钉词/插入 撞上 禁用/自然语言段剔除): ${conflicts.map((s) => advZh(s)).join('、')} —— 二选一, 改完再保存`)
+    // 只剩「既钉又禁」这一种硬冲突(同槽既要某词必现、又要整槽词全删, 逻辑上不可能)
+    ui.err(`这些槽既钉了词又被禁用: ${conflicts.map((s) => advZh(s)).join('、')} —— 二选一, 改完再保存`)
+    return
+  }
+  /* 2026-11-10: 「钉词 / 插入 撞上自然语言段剔除」**不再拦保存** ——
+   * 钉了的槽在导出端本来就豁免剔除(pinnedSlots), 钉词优先, 语义上没冲突。
+   * 原来是这里报了"打架"让用户一头雾水(他只想钉一双鞋)。只在下面给软提示。 */
+  const noSlot = adv.pins.filter((p) => p.word.trim() && !p.slot)
+  if (noSlot.length) {
+    ui.err(`钉词「${noSlot.map((p) => p.word.trim()).join('、')}」还没定槽 —— 输入框里选中一条联想会自动归类, 查不到就手动选一个(引擎按槽替换, 没槽等于没钉)`)
     return
   }
   if (adv.nl.enabled && !adv.nl.dims.length) {
@@ -337,7 +383,8 @@ function save() {
       </div>
       <div v-if="emptySlots" class="empty">槽位清单加载失败, 关掉重开弹窗再试</div>
       <!-- 换词率滑杆行: 随机/插入的槽各一行(禁用不需要)。
-           插入槽同一根滑杆两用: 有词时 = 换词率, 缺词时 = 补上的概率。 -->
+           插入槽同一根滑杆两用: 有词时 = 换词率, 缺词时 = 补上的概率。
+           2026-11-10: 每行多一个「权重」—— 换/补出来的词套 (词:1.2) 壳, 空/1 = 不加。 -->
       <template v-for="s in slotsSorted" :key="`r-${s.id}`">
         <div v-if="modeOf(s.id) === 'random' || modeOf(s.id) === 'insert'" class="rate">
           <span class="rate-lb">{{ s.zh }}</span>
@@ -353,32 +400,70 @@ function save() {
               : `「${s.zh}」的换词率: 每个词有此概率被换成同槽位的新词; 100% = 必换`"
           />
           <span class="rate-v">{{ adv.rates[s.id] ?? 100 }}%</span>
+          <label
+            class="rate-w"
+            :title="`「${s.zh}」换出来的词带多少权重(0.1~2.0)。1 = 不加权重; 1.2 会写成 (词:1.2)`"
+          >
+            权重
+            <input
+              class="rate-w-in"
+              type="number"
+              min="0.1"
+              max="2"
+              step="0.05"
+              placeholder="1"
+              :value="slotWeightOf(s.id)"
+              @change="setSlotWeight(s.id, $event.target.value)"
+            />
+          </label>
         </div>
       </template>
       <div v-if="advConflicts.length" class="conflict">⚠ 既钉又禁: {{ advConflicts.map((s) => advZh(s)).join('、') }} —— 保存前二选一</div>
+      <div v-if="advStripSoftNotes.length" class="soft">
+        ℹ 自然语言段会剔掉这些槽: {{ advStripSoftNotes.map((n) => `${advZh(n.slot)}(${n.kind === 'pin' ? '钉词优先, 照常生效' : '插入会被跳过'})`).join('、') }}
+        —— 不拦保存
+      </div>
     </div>
 
     <!-- ② 钉词 -->
     <div class="zone pin-zone">
-      <div class="zh">② 钉词(必现) <span class="zh-sub">该槽导出时必定是指定词, 优先于随机; 钉了的槽自动跳过随机</span></div>
+      <div class="zh">② 钉词(必现) <span class="zh-sub">该槽导出时必定是指定词, 优先于随机; 钉了的槽自动跳过随机 —— 中英文都能输入, 选中即自动归类</span></div>
       <div v-for="(p, i) in adv.pins" :key="`pin-${i}`" class="pin">
-        <select v-model="p.slot" class="pin-slot" title="钉词放在哪个槽">
-          <option value="" disabled>选槽…</option>
-          <option v-for="s in slotsSorted" :key="s.id" :value="s.id">{{ s.zh }}</option>
-        </select>
-        <span class="pin-eq">必现</span>
         <span class="pin-word-box">
-          <!-- 2026-10-30 复用看板筛选同款联想框: 槽池联想(带「槽·大类」标识), 手输词典外词也允许 -->
+          <!-- 2026-11-10: 不再先选槽再搜词 —— 输入优先, 联想走全局(带中文翻译),
+               选中的候选自带槽归属就自动填进右边的下拉; 手选的槽不会被自动顶掉。 -->
           <TvTagSuggestInput
             v-model="p.word"
             size="sm"
-            :local-tags="p.slot ? pinPool(p) : []"
-            :empty-text="p.slot ? '该槽池里没有匹配的词条(手输会直接写入导出结果)' : '先在左边选槽'"
-            :disabled="!p.slot"
-            @pick="lookupWords([pinQuery(p)])"
+            :limit="10"
+            placeholder="输入提示词(中/英文都行), 如 白丝 / thighhighs"
+            empty-text="词典里没有匹配的词条 —— 手输任意词也行, 但要手动选一个槽"
+            @pick="(tag, item) => onPinPick(p, item)"
           />
-          <span v-if="pinVerdictOf(p)" :class="['pin-verdict', `v-${pinVerdictOf(p).level}`]">{{ pinVerdictOf(p).msg }}</span>
+          <span v-if="pinVerdictOf(p)" :class="['pin-verdict', `v-${pinVerdictOf(p).level}`]">
+            {{ pinVerdictOf(p).msg }}
+            <button
+              v-if="pinVerdictOf(p).fix"
+              type="button"
+              class="fix-ln"
+              @click="applyFixSlot(p, pinVerdictOf(p).fix)"
+            >改为「{{ advZh(pinVerdictOf(p).fix) }}」</button>
+          </span>
         </span>
+        <span class="pin-arrow" title="自动归类自词典归属; 手动选过就不再被自动改">→</span>
+        <select
+          v-model="p.slot"
+          class="pin-slot"
+          :class="{ auto: p.auto && p.slot }"
+          title="钉词放在哪个槽(必填)。输入框里选中联想会自动填; 查不到就手动选一个"
+          @change="onPinSlotChange(p)"
+        >
+          <option value="">自动分类…</option>
+          <option v-for="s in slotsSorted" :key="s.id" :value="s.id">{{ s.zh }}</option>
+        </select>
+        <label class="pin-w" :title="`给这个钉词加权重(0.1~2.0), 导出成 (词:权重); 1 = 不加权重`">
+          <input v-model.number="p.weight" class="pin-w-in" type="number" min="0.1" max="2" step="0.05" placeholder="1" />
+        </label>
         <button type="button" class="pin-del" title="删掉这行钉词" @click="removeAdvPin(i)">×</button>
       </div>
       <TvButton size="xs" variant="ghost" class="pin-add" @click="addAdvPin">＋ 添加钉词</TvButton>
@@ -580,13 +665,27 @@ function save() {
 .rate-lb { flex: 0 0 auto; font-size: 11px; color: var(--muted); min-width: 4em; }
 .rate-in { flex: 1 1 auto; min-width: 0; height: 14px; accent-color: var(--accent, #534ab7); }
 .rate-v { flex: 0 0 3em; text-align: right; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* 权重(2026-11-10): 与滑杆同一行, 窄输入 —— 只在需要时改, 平时一律 1(占位符) */
+.rate-w {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 3px;
+  font-size: 10.5px; color: var(--faint); cursor: help;
+}
+.rate-w-in {
+  width: 3.4em; font-size: 11px; padding: 2px 4px; text-align: center;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: var(--panel2); color: var(--text); outline: none;
+}
+.rate-w-in:focus { border-color: var(--accent); }
 
 .pin { display: flex; align-items: flex-start; gap: 5px; }
 .pin-slot {
-  flex: 0 0 5.5em; font-size: 11px; padding: 3px 4px;
+  flex: 0 0 6.4em; font-size: 11px; padding: 3px 4px;
   border: 1px solid var(--border); border-radius: 6px;
   background: var(--panel2); color: var(--text);
 }
+/* 自动归类填上的槽用主色描边 —— 一眼看出"这个分类是猜的, 不是我自己选的" */
+.pin-slot.auto { border-color: var(--ok, #3d9970); color: var(--ok, #3d9970); }
+.pin-arrow { flex: 0 0 auto; font-size: 11px; color: var(--faint); line-height: 24px; }
 .pin-eq { flex: 0 0 auto; font-size: 11px; color: var(--faint); line-height: 24px; }
 .pin-word-box { flex: 1 1 auto; min-width: 0; position: relative; }
 .pin-verdict { display: block; font-size: 10.5px; line-height: 1.4; margin-top: 2px; }
@@ -594,6 +693,19 @@ function save() {
 .v-warn { color: var(--warn, #c8862a); }
 .v-out { color: var(--faint); }
 .v-pending { color: var(--faint); }
+.fix-ln {
+  margin-left: 4px; padding: 0 4px; font-size: 10px; line-height: 15px;
+  border: 1px solid var(--warn, #c8862a); border-radius: 4px;
+  background: transparent; color: var(--warn, #c8862a); cursor: pointer;
+}
+.fix-ln:hover { background: var(--warn, #c8862a); color: #fff; }
+.pin-w { flex: 0 0 auto; padding-top: 1px; cursor: help; }
+.pin-w-in {
+  width: 3.4em; font-size: 11px; padding: 3px 4px; text-align: center;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel2); color: var(--text); outline: none;
+}
+.pin-w-in:focus { border-color: var(--accent); }
 .pin-del {
   flex: 0 0 auto; width: 20px; height: 20px; line-height: 18px; padding: 0;
   border: 1px solid var(--border); border-radius: 50%;
@@ -610,6 +722,8 @@ function save() {
 }
 .seed:focus { border-color: var(--accent); }
 .conflict { font-size: 11px; color: var(--danger, #c05050); }
+/* 软提示(不拦保存): 钉词/插入 与自然语言段剔除重叠时的说明 */
+.soft { font-size: 10.5px; line-height: 1.6; color: var(--warn, #c8862a); }
 
 /* ④ 自然语言段(2026-11-08) */
 .nl-t { color: var(--accent, #534ab7); }

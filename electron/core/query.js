@@ -527,6 +527,64 @@ export function getCharacters(raw = {}) {
   return { series, total: shown.length, characters: shown }
 }
 
+/**
+ * 全局角色搜索(2026-11-10 用户要求): 系列页那个搜索框原来只搜系列, 敲角色名一无所获。
+ * 现在同时搜**角色**, 命中的角色卡直接点进它的图集 —— 不必先想起来它在哪个作品里。
+ *
+ * 口径:
+ *   · 候选 = 内存数据集 seriesChars(有本地图的角色); 0 图补全角色不参与
+ *     (那是"系列内补全"才有的东西, 全局搜索给一堆空卡没意义)
+ *   · 命中面 = 代表标签 / 其它写法(alt) / 短名 / 中文译名 / 所属系列名 —— 一个子串即可
+ *   · 屏蔽角色(hidden_chars) 一律不给(用户在分类管理里明确屏蔽过)
+ *   · 来源过滤跟系列页同口径(srcSet): 选了某个来源就只算那个来源的图
+ *   · 排序 = 图多的在前(热门角色先出现), 同数按名字
+ * @param {{q?: string, limit?: number, source?: string}} raw
+ * @returns {{total: number, characters: Array<{tag, alt, name, zh, series, images, thumb}>}}
+ */
+export function searchCharacters(raw = {}) {
+  const kw = String(raw.q || '').trim().toLowerCase()
+  if (!kw) return { total: 0, characters: [] }
+  const limit = clampInt(raw.limit, 40, 1, 200)
+  const p = parseQuery(raw)
+  const srcSet = p.srcSet
+  const meta = loadUserMeta()
+  const hidden = hiddenCharSet(meta)
+  const ccov = meta.custom_covers?.chars || {}
+  const tr = translateMap()
+  const out = []
+  for (const [series, chars] of ds.seriesChars) {
+    // 系列名命中时把该系列的角色也带出来(敲 "blue archive" 能直接跳角色)
+    const seriesHit = String(series).toLowerCase().includes(kw)
+    for (const [, g] of mergeCharVariants(chars)) {
+      if (g.tags.some((t) => hidden.has(t.toLowerCase()))) continue
+      const { rep, alt } = charRep(g)
+      const zh = tr.get(rep.toLowerCase()) || ''
+      if (!seriesHit) {
+        const hit = [rep, ...alt, charShortName(rep)]
+          .some((s) => String(s).toLowerCase().includes(kw)) || (zh && zh.includes(kw))
+        if (!hit) continue
+      }
+      let ids = g.ids
+      if (srcSet) {
+        ids = new Set()
+        for (const i of g.ids) if (srcSet.has(ds.records[i].source)) ids.add(i)
+        if (!ids.size) continue
+      }
+      out.push({
+        tag: rep,
+        alt,
+        name: displayNameOf(meta, g.tags, charShortName(rep)),
+        zh,
+        series,
+        images: ids.size,
+        thumb: ccov[rep] || ds.records[coverIdx(ids)].path,
+      })
+    }
+  }
+  out.sort((a, b) => b.images - a.images || a.name.localeCompare(b.name, 'en'))
+  return { total: out.length, characters: out.slice(0, limit) }
+}
+
 export function getSeriesMeta() { return loadUserMeta() }
 
 export async function postSeriesMeta(body) {

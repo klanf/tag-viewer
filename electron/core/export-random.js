@@ -60,6 +60,18 @@ function tagKey(t) {
   return bare.toLowerCase().replace(/[\s_]+/g, '_')
 }
 
+/**
+ * 给输出词套权重壳(2026-11-10 用户要求: 高级替换/钉词都能设权重)。
+ * 格式与 A1111 一致 `(tag:1.2)` —— exporter 的去重/黑名单/分类全都先 unwrapWeight
+ * 再比, 所以带壳的词后续不会被重复计算。
+ * 权重 1(或非法/缺省)= **原样输出** —— 绝大多数词不需要壳, 别给导出文件添噪音。
+ */
+function withWeight(tag, w) {
+  const n = Number(w)
+  if (!Number.isFinite(n) || n <= 0 || Math.abs(n - 1) < 1e-3) return tag
+  return `(${tag}:${Number(n.toFixed(2))})`
+}
+
 /** sec id -> 展示名(去掉 ①② 这类序号前缀, 如 "① 数量与身份" -> "数量与身份") */
 const secZh = (info) => String(info?.secZh || info?.sec || '').replace(/^[①-⑳⓪\s]+/, '') || info?.sec
 
@@ -251,9 +263,10 @@ function mulberry32(seed) {
  *           rates?: Map<string,number>, nsfw?: boolean}} opts
  *   sections  参与随机的**大类** sec id 集(老参数, 保留兼容老预设)
  *   slots     参与随机的**槽** slot id 集(新粒度, 2026-10-30)
- *   pins      钉词表 slot -> 词(该槽必现指定词, 优先于随机)
+ *   pins      钉词表 slot -> 词 或 {word, weight}(该槽必现指定词, 优先于随机)
  *   pinFill   原图缺钉词槽的词条时, 是否把钉词补上去(缺省 true = 补)
  *   rates     换词率表(slot id 或 sec id -> 0~1; 槽优先于大类), 缺省 = 1(必换, 旧行为)
+ *   weights   权重表(2026-11-10): slot id -> 0~2, 换/补出来的词套 (tag:w) 壳, 缺省 1 = 不加壳
  *   inserts   插入槽表(2026-11-09): slot id -> 插入率(0~1, 缺词时补上的概率)。
  *             插入槽的「有词 → 换」由调用方把槽并进 slots/rates 复用随机管线;
  *             这里只管「整行都没有该槽词」的补词 —— 按率掷骰后从槽池抽一个追加到行尾,
@@ -266,14 +279,24 @@ function mulberry32(seed) {
 export function makeRandomizer(opts = {}) {
   const secs = opts.sections instanceof Set ? opts.sections : new Set()
   const slotSet = opts.slots instanceof Set ? opts.slots : new Set()
-  // 钉词表: 词归一成词典写法(小写 + 空格转下划线), 手输的词也能对上
+  // 钉词表: 词归一成词典写法(小写 + 空格转下划线), 手输的词也能对上。
+  // 2026-11-10 起值可以是字符串(老调用方) 或 {word, weight}(带权重)
   const pins = new Map()
   if (opts.pins instanceof Map) {
-    for (const [slot, w] of opts.pins) {
-      const key = String(w || '').trim().toLowerCase().replace(/\s+/g, '_')
+    for (const [slot, v] of opts.pins) {
+      const word = (v && typeof v === 'object') ? v.word : v
+      const key = String(word || '').trim().toLowerCase().replace(/\s+/g, '_')
       const sl = String(slot || '').trim()
-      if (sl && key) pins.set(sl, key)
+      if (!sl || !key) continue
+      const w = Number((v && typeof v === 'object') ? v.weight : 1)
+      pins.set(sl, { word: key, weight: Number.isFinite(w) && w > 0 ? w : 1 })
     }
+  }
+  // 权重表(2026-11-10): 只认正数, 缺省 1 = 不套壳。按槽查, 大类不设权重
+  const weights = opts.weights instanceof Map ? opts.weights : new Map()
+  const weightOf = (slot) => {
+    const v = Number(weights.get(slot))
+    return Number.isFinite(v) && v > 0 ? Math.min(2, v) : 1
   }
   const pinFill = opts.pinFill !== false
   // 插入槽表(2026-11-09): slot -> 插入率; 率只认 0~1, 非法按 1(必补)
@@ -324,6 +347,7 @@ export function makeRandomizer(opts = {}) {
   const useOf = (t) => used.get(t) || 0
 
   const RETRY = 5
+  /** 从槽池抽一个新词; 抽中的词按**该槽的权重**套壳(权重 1 不加壳) */
   function pickFor(slot, selfKey, recordKeys, rng) {
     const arr = poolOf(slot)
     if (!arr.length) return null
@@ -335,7 +359,7 @@ export function makeRandomizer(opts = {}) {
       for (let k = 0; k < arr.length; k++) { r -= W[k]; if (r <= 0) { hit = arr[k]; break } }
       const hitKey = tagKey(hit.tag)
       // 不抽回原词、也不抽本行已有的词(一换一换出重复没意义)
-      if (hitKey !== selfKey && !recordKeys.has(hitKey)) return hit.tag
+      if (hitKey !== selfKey && !recordKeys.has(hitKey)) return withWeight(hit.tag, weightOf(slot))
     }
     return null
   }
@@ -360,20 +384,28 @@ export function makeRandomizer(opts = {}) {
           const info = sl[tagKey(t)]
           const slot = info?.slot
           if (!slot || !pins.has(slot)) { kept.push(t); continue }
-          const pw = pins.get(slot)
+          const pin = pins.get(slot)
+          const pw = pin.word
           if (seen.has(slot)) continue          // 同槽第二个词: 丢掉, 别让钉词出现两遍
           seen.add(slot)
-          if (tagKey(pw) === tagKey(t)) { kept.push(t); continue }  // 本来就是钉词
-          kept.push(pw)
+          if (tagKey(pw) === tagKey(t)) {
+            /* 原图本来就是钉词。权重 1 = 不动原图(它自己可能带 (tag:1.5) 的壳, 别给剥了);
+             * 权重 ≠ 1 = 以钉词的为准, 覆盖成新壳 —— 否则"钉了词还设权重"在最常见的那种
+             * 图上(原本就有这个词)完全不生效。 */
+            kept.push(Math.abs(pin.weight - 1) < 1e-3 ? t : withWeight(pw, pin.weight))
+            continue
+          }
+          kept.push(withWeight(pw, pin.weight))
           recordKeys.add(tagKey(pw))
           replaced++
           bump(slot)
         }
         // 补词: 原图整行都没有该槽的词 → 按开关把钉词追加到行尾
         if (pinFill) {
-          for (const [slot, pw] of pins) {
+          for (const [slot, pin] of pins) {
+            const pw = pin.word
             if (seen.has(slot) || recordKeys.has(tagKey(pw))) continue
-            kept.push(pw)
+            kept.push(withWeight(pw, pin.weight))
             recordKeys.add(tagKey(pw))
             replaced++
             bump(slot)

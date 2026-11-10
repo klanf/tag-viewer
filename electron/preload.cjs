@@ -22,6 +22,8 @@ const CHANNELS = new Set([
   'stats:get', 'search:do',
   // 系列 / 角色
   'series:get', 'series:meta:get', 'series:meta:post', 'characters:get',
+  // 全局角色搜索(2026-11-10): 系列页搜索框同时搜角色
+  'chars:search',
   // 自定义封面(2026-10-06): 系列卡/角色卡 ⚙️ 挑封面
   'covers:candidates', 'covers:set',
   // 网上挑封面(2026-10-22): Danbooru / Safebooru 搜索 + 下载选中图到 user_picks

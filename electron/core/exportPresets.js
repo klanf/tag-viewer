@@ -172,7 +172,9 @@ const PARAM_STRS = ['q', 'exclude', 'sort', 'append', 'replace_set',
   // ban_slots = 禁用槽串 "headwear,eyewear"(整词删除)。
   // 自然语言段(2026-11-08): nl_dims "pose,costume,hair" / nl_level / nl_seed。
   // 同样必须进白名单 —— 漏一个键, 预设里那段配置就被 normParams 静默剥掉。
-  'randomize_sections', 'randomize_slots', 'insert_slots', 'pin_slots', 'ban_slots', 'randomize_seed',
+  // 槽位权重(2026-11-10): "legwear:1.2" —— 换/补出来的词套 (tag:w) 壳。
+  // 与 pin_slots 同批进白名单, 漏了会被 normParams 静默剥掉(老坑)。
+  'randomize_sections', 'randomize_slots', 'insert_slots', 'pin_slots', 'ban_slots', 'slot_weights', 'randomize_seed',
   'nl_dims', 'nl_level', 'nl_seed',
   // 高级替换方案(2026-11-09): '@active'=跟随当前方案 / '0'=不启用 / 方案 id / 空=旧版快照参数。
   // 预设选了方案后, exporter 以方案库 cfg 为准, 上面的 randomize_*/nl_* 快照参数被覆盖。

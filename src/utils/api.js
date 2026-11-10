@@ -117,6 +117,8 @@ export const api = {
   seriesMeta: () => call('series:meta:get'),
   saveSeriesMeta: (body) => call('series:meta:post', body),
   characters: (q) => call('characters:get', q),
+  // 全局角色搜索(2026-11-10): 系列页搜框同时搜角色 {q, source, limit} -> {total, characters}
+  charsSearch: (q) => call('chars:search', q),
   // 自定义封面(2026-10-06): 挑选候选 / 设定与清除(path 空 = 恢复自动)
   coverCandidates: (q) => call('covers:candidates', q),
   coverSet: (body) => call('covers:set', body),

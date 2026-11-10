@@ -21,7 +21,8 @@ export const adv = reactive({
   picked: [],            // 参与随机的槽 id(原图有词 → 按率换)
   inserts: [],           // 插入槽 id(2026-11-09: 原图没词 → 按率从槽池抽词补上; 有词行为同随机)
   rates: {},             // 槽 id -> 换词率(0~100), 缺 100 = 必换(插入槽兼任插入率)
-  pins: [],              // 钉词行 [{slot, word}]
+  weights: {},           // 槽 id -> 权重(0.1~2.0, 2026-11-10), 1 = 不加壳; 换/补出来的词套 (tag:w)
+  pins: [],              // 钉词行 [{slot, word, weight, auto}] —— auto = 槽是词归属自动填的
   pinFill: true,         // 原图缺该槽词时补上钉词
   banned: [],            // 禁用槽 id(原图该槽的词整词删除)
   nsfw: true,            // 候选池是否含成人词库
@@ -63,12 +64,25 @@ function cfgFromAdv() {
     const n = Number(v)
     if (Number.isFinite(n) && n >= 0 && n <= 100) rates[k] = Math.max(0, n) / 100
   }
+  /* 权重(2026-11-10): 只存非 1 的槽 —— 1 是"不加壳"的缺省, 存进去只会让 json 长胖,
+   * 而且没法从"没有这个键"和"显式 1"里分辨用户意图(其实也没区别)。 */
+  const weights = {}
+  for (const [k, v] of Object.entries(adv.weights)) {
+    const n = Number(v)
+    if (!k || !Number.isFinite(n) || n <= 0) continue
+    const w = Math.min(2, Math.max(0.05, n))
+    if (Math.abs(w - 1) > 1e-3) weights[k] = Number(w.toFixed(2))
+  }
   return {
     enabled: !!adv.enabled,
     picked: [...adv.picked],
     inserts: [...adv.inserts],
     rates,
-    pins: adv.pins.filter((p) => p.slot && p.word.trim()).map((p) => ({ slot: p.slot, word: p.word.trim() })),
+    weights,
+    pins: adv.pins.filter((p) => p.slot && p.word.trim()).map((p) => {
+      const w = Math.min(2, Math.max(0.05, Number(p.weight) || 1))
+      return { slot: p.slot, word: p.word.trim(), weight: Math.abs(w - 1) > 1e-3 ? Number(w.toFixed(2)) : 1 }
+    }),
     pinFill: adv.pinFill !== false,
     banned: [...adv.banned],
     nsfw: adv.nsfw !== false,
@@ -99,7 +113,18 @@ function applyCfgToAdv(cfg = {}) {
       const n = Number(v)
       if (Number.isFinite(n)) adv.rates[k] = Math.round(Math.min(1, Math.max(0, n)) * 100)
     }
-    adv.pins = Array.isArray(cfg.pins) ? cfg.pins.map((p) => ({ slot: p.slot, word: p.word })) : []
+    adv.weights = {}
+    for (const [k, v] of Object.entries(cfg.weights || {})) {
+      const n = Number(v)
+      if (k && Number.isFinite(n) && n > 0) adv.weights[k] = Math.min(2, Math.max(0.05, n))
+    }
+    adv.pins = Array.isArray(cfg.pins)
+      ? cfg.pins.map((p) => {
+          const w = Number(p.weight)
+          // _seenWord: 弹窗用它判断"词是不是刚被改过"(改过才重新自动归类), 不落盘
+          return { slot: p.slot, word: p.word, weight: Number.isFinite(w) && w > 0 ? w : 1, auto: false, _seenWord: p.word }
+        })
+      : []
     adv.pinFill = cfg.pinFill !== false
     adv.banned = Array.isArray(cfg.banned) ? [...cfg.banned] : []
     adv.nsfw = cfg.nsfw !== false
@@ -142,7 +167,7 @@ function schedulePersist() {
   saveTimer = setTimeout(() => { persistSets().catch(() => {}) }, 600)
 }
 watch(
-  () => [adv.enabled, adv.picked, adv.inserts, adv.rates, adv.pins, adv.pinFill, adv.banned, adv.nsfw, adv.seed, adv.nl],
+  () => [adv.enabled, adv.picked, adv.inserts, adv.rates, adv.weights, adv.pins, adv.pinFill, adv.banned, adv.nsfw, adv.seed, adv.nl],
   schedulePersist,
   { deep: true },
 )
@@ -281,10 +306,15 @@ export const advSlotsParam = computed(() => [...adv.picked, ...adv.inserts].map(
   return (Number.isFinite(r) && r >= 0 && r < 100) ? `${id}:${Math.max(0, r / 100).toFixed(2)}` : id
 }).join(','))
 
-/** 钉词参数串: "legwear:white_thighhighs,headwear:hat"(只收槽和词都填了的行) */
+/** 钉词参数串: "legwear:white_thighhighs@1.2,headwear:hat"(只收槽和词都填了的行)。
+ *  @权重(2026-11-10): 只在不是 1 的时候挂尾巴 —— 1 = 不加壳, 与老格式完全等价。 */
 export const advPinsParam = computed(() => adv.pins
   .filter((p) => p.slot && p.word.trim())
-  .map((p) => `${p.slot}:${p.word.trim().toLowerCase().replace(/\s+/g, '_')}`)
+  .map((p) => {
+    const w = Math.min(2, Math.max(0.05, Number(p.weight) || 1))
+    const tail = Math.abs(w - 1) > 1e-3 ? `@${w.toFixed(2)}` : ''
+    return `${p.slot}:${p.word.trim().toLowerCase().replace(/\s+/g, '_')}${tail}`
+  })
   .join(','))
 
 /** 禁用槽参数串: "headwear,eyewear" */
@@ -295,6 +325,37 @@ export const advInsertParam = computed(() => adv.inserts.map((id) => {
   const r = Number(adv.rates[id])
   return (Number.isFinite(r) && r >= 0 && r < 100) ? `${id}:${Math.max(0, r / 100).toFixed(2)}` : id
 }).join(','))
+
+/** 槽位权重参数串(2026-11-10): "legwear:1.2,pose:0.8" —— 非 1 的槽才进串 */
+export const advWeightsParam = computed(() => [...adv.picked, ...adv.inserts]
+  .map((id) => {
+    const w = slotWeightOf(id)
+    return Math.abs(w - 1) > 1e-3 ? `${id}:${w.toFixed(2)}` : ''
+  })
+  .filter(Boolean)
+  .join(','))
+
+/** 槽的权重(1 = 不加壳) */
+export function slotWeightOf(id) {
+  const n = Number(adv.weights[id])
+  return Number.isFinite(n) && n > 0 ? Math.min(2, n) : 1
+}
+
+/** 设槽权重: 0.1~2.0, 落 1 就把键删掉(缺省即 1, 不占 json) */
+export function setSlotWeight(id, v) {
+  const n = Number(v)
+  if (!id) return
+  if (!Number.isFinite(n) || n <= 0) { delete adv.weights[id]; return }
+  const w = Math.min(2, Math.max(0.1, n))
+  if (Math.abs(w - 1) < 1e-3) delete adv.weights[id]
+  else adv.weights[id] = Number(w.toFixed(2))
+}
+
+/** 钉词行的权重(缺省 1 = 不加壳) */
+export function pinWeightOf(p) {
+  const n = Number(p?.weight)
+  return Number.isFinite(n) && n > 0 ? Math.min(2, n) : 1
+}
 
 /** 有效钉词行数(统计展示用) */
 export const advPinCount = computed(() => adv.pins.filter((p) => p.slot && p.word.trim()).length)
@@ -334,17 +395,34 @@ export function nlStripSlots() {
   return [...out]
 }
 
-/** 钉词冲突槽 = 既钉又禁 + 既钉/既插又被 NL 剔(都拦, 保存前二选一)。
- * 插入 × NL 剔槽也是打架: NL 把该槽词删干净了, 插入又从池子里补一个回来 ——
- * 等于绕过了剔除, 所以一并拦。 */
+/**
+ * 钉词冲突 = **既钉又禁**(同槽), 只在手改 json / 旧数据里可能出现。
+ *
+ * 2026-11-10 大改(用户实锤): 原来这里把「钉词 × 自然语言段剔槽」也算冲突, 于是
+ * 「钉一双鞋 + 开着穿搭句剔除」就被拦下报"打架" —— 可钉子本来就是**用户点名要的东西**,
+ * 导出端 filterBannedSlots 早就给钉了的槽开了豁免(pinnedSlots), 语义上钉词优先,
+ * 根本不该拦。现在这类重叠降级成软提示(见 advStripSoftNotes), 保存照过。
+ */
 export const advPinConflicts = computed(() => {
   const pinSlots = new Set(adv.pins.filter((p) => p.slot && p.word.trim()).map((p) => p.slot))
-  const insSlots = new Set(adv.inserts)
-  const hits = new Set(advConflicts.value)
-  for (const s of nlStripSlots()) {
-    if (pinSlots.has(s) || insSlots.has(s)) hits.add(s)
+  return adv.banned.filter((s) => pinSlots.has(s))
+})
+
+/**
+ * 软提示(不拦保存): 这些槽会被自然语言段剔除, 而用户又在上面钉词/插入。
+ *   · pin    钉词 —— 导出时钉词槽豁免剔除, 该槽**只留钉词**(随机阶段先整槽定死), 正常生效
+ *   · insert 插入 —— 导出端会把这类插入槽删掉(rndBan 里的一律不补词), 等于不生效,
+ *             所以要明确告诉用户"想补词就关掉该维度的剔除开关"
+ */
+export const advStripSoftNotes = computed(() => {
+  const strip = new Set(nlStripSlots())
+  if (!strip.size) return []
+  const out = []
+  for (const p of adv.pins) {
+    if (p.slot && p.word.trim() && strip.has(p.slot)) out.push({ slot: p.slot, kind: 'pin' })
   }
-  return [...hits]
+  for (const s of adv.inserts) if (strip.has(s)) out.push({ slot: s, kind: 'insert' })
+  return out
 })
 
 /** 开关是否带着任何实际配置(决定导出参数里 randomize 是 1 还是 0) */
@@ -403,6 +481,9 @@ export function setSlotMode(id, mode) {
     if (adv.rates[id] === undefined) adv.rates[id] = 100
   } else if (mode === 'ban') {
     adv.banned.push(id)
+    delete adv.weights[id]      // 禁用的槽不再出词, 权重留着只会让 json 长草
+  } else {
+    delete adv.weights[id]
   }
 }
 
@@ -423,7 +504,7 @@ export function toggleAdvBan(id) {
   setSlotMode(id, slotMode(id) === 'ban' ? 'off' : 'ban')
 }
 
-export function addAdvPin() { adv.pins.push({ slot: '', word: '' }) }
+export function addAdvPin() { adv.pins.push({ slot: '', word: '', weight: 1, auto: true, _seenWord: '' }) }
 export function removeAdvPin(i) { adv.pins.splice(i, 1) }
 
 /**
@@ -438,6 +519,7 @@ export function advParams() {
     randomize_slots: advSlotsParam.value,
     insert_slots: advInsertParam.value,
     pin_slots: advPinsParam.value,
+    slot_weights: advWeightsParam.value,
     pin_fill: adv.pinFill ? '1' : '0',
     ban_slots: advBanParam.value,
     randomize_nsfw: adv.nsfw ? '1' : '0',

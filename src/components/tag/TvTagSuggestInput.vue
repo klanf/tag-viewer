@@ -296,17 +296,23 @@ function onInput(e) {
   timer = setTimeout(fetchSuggest, 180)      // 与旧版一致的 180ms 防抖
 }
 
-function pick(tag) {
+/**
+ * 选中一条补全。
+ * 第二个参数带**整条候选**(tag/zh/slot/slotZh/sec/count) —— 高级替换的钉词输入靠它
+ * 「选中即自动归类」(2026-11-10 用户要求: 输入提示词自动选分类), 不必再发一次反查。
+ * 其余使用方只关心第一个参数, 多传一个不影响。
+ */
+function pick(tag, item = null) {
   if (props.multi) {
     // 仅补全(2026-10-30 定稿): 把正在打的词补全成所选词, 不定格、不搜索 ——
     // 定格归分隔符管(敲空格/逗号才定格+搜索); 下拉保持开着, 连续换词不用再点输入框
     emit('update:modelValue', renderVal(doneWords.value, tag))
-    emit('pick', tag)
+    emit('pick', tag, item)
     cursor.value = -1                       // 不再高亮任何项, 下一次 Enter = 提交搜索
     return
   }
   emit('update:modelValue', tag)
-  emit('pick', tag)
+  emit('pick', tag, item)
   if (props.remember) { clearTimeout(rememberTimer); hist.push(tag) }
   hide()
 }
@@ -346,7 +352,7 @@ function onKeydown(e) {
     const active = open.value && mode.value === 'suggest' ? items.value[cursor.value] : null
     if (active) {
       e.preventDefault()
-      pick(active.tag)      // 仅补全(2026-10-30): 再按一次 Enter(无高亮项)才提交搜索
+      pick(active.tag, active)      // 仅补全(2026-10-30): 再按一次 Enter(无高亮项)才提交搜索
     } else {
       submit()
     }
@@ -355,7 +361,7 @@ function onKeydown(e) {
   if (e.key === 'Tab' && props.multi) {
     // Tab = 补全(不打断输入节奏): 有高亮项就补全, 没有就让默认行为走
     const active = open.value && mode.value === 'suggest' ? items.value[cursor.value] : null
-    if (active) { e.preventDefault(); pick(active.tag) }
+    if (active) { e.preventDefault(); pick(active.tag, active) }
     return
   }
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -460,7 +466,7 @@ defineExpose({ focus: () => input.value?.focus(), hide })
           :class="['item', { active: i === cursor, dup: doneSet.has(normKey(s.tag)) }]"
           :title="doneSet.has(normKey(s.tag)) ? '已在筛选中(再点是空操作)' : ''"
           @mouseenter="cursor = i"
-          @mousedown.prevent="pick(s.tag)"
+          @mousedown.prevent="pick(s.tag, s)"
         >
           <span class="s-en">{{ s.tag }}<span v-if="doneSet.has(normKey(s.tag))" class="s-dup"> ✓已选</span></span>
           <span v-if="s.zh || s.slotZh" class="s-zh">

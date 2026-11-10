@@ -188,6 +188,61 @@ async function showSeriesList() {
   requestAnimationFrame(() => { if (seriesScrollEl.value) seriesScrollEl.value.scrollTop = scrollSeries.value })
 }
 
+/* ---------------- 角色搜索(2026-11-10): 系列页那个搜索框同时搜角色 ----------------
+ * 用户反馈: 想找某个角色的图, 得先想起来它在哪个作品里, 先搜系列再进角色层 —— 太绕。
+ * 现在敲角色名(中/英文都行)直接在系列网格上方出一排角色卡, 点进去就是它的图集。
+ *
+ * 数据走主进程 chars:search(跨全部系列扫 seriesChars), 前端只做 260ms 防抖 +
+ * 来源过滤同口径。中文名并进 charZh 缓存, 购物车命名/角色层显示都复用那一份。 */
+const charHits = ref([])
+const charHitTotal = ref(0)
+const charHitLoading = ref(false)
+let charHitTimer = null
+let charHitSeq = 0
+
+async function runCharSearch(kw) {
+  const q = String(kw || '').trim()
+  if (!q) { charHits.value = []; charHitTotal.value = 0; charHitLoading.value = false; return }
+  const my = ++charHitSeq
+  charHitLoading.value = true
+  try {
+    const r = await api.charsSearch({ q, source: src.param, limit: 40 })
+    if (my !== charHitSeq) return
+    charHits.value = r?.characters || []
+    charHitTotal.value = r?.total || 0
+    const add = {}
+    for (const c of charHits.value) if (c.zh) add[c.tag] = c.zh
+    if (Object.keys(add).length) charZh.value = { ...charZh.value, ...add }
+  } catch {
+    if (my === charHitSeq) { charHits.value = []; charHitTotal.value = 0 }
+  } finally {
+    if (my === charHitSeq) charHitLoading.value = false
+  }
+}
+
+watch(seriesKw, (v) => {
+  clearTimeout(charHitTimer)
+  if (!String(v || '').trim()) { charHits.value = []; charHitTotal.value = 0; return }
+  charHitTimer = setTimeout(() => runCharSearch(v), 260)
+})
+
+/** 点角色卡 → 直接进它的图集(不必先进系列再进角色层)。
+ *  角色层列表在后台补一份, 这样"返回"退回去时那层是满的而不是空的。 */
+async function openCharFromSearch(c) {
+  if (!c?.tag) return
+  scrollSeries.value = seriesScrollEl.value?.scrollTop || 0
+  curSeries.value = c.series || ''
+  curSeriesZh.value = seriesZh.value[c.series] || ''
+  if (c.zh) charZh.value = { ...charZh.value, [c.tag]: c.zh }
+  charKw.value = ''
+  curChar.value = { tag: c.tag, alt: c.alt || [], name: c.name || c.tag }
+  view.value = 'images'
+  imgFeed.setPageSize(imgPageSize.value)
+  await imgFeed.search(imgQuery(0))
+  requestAnimationFrame(() => { if (imgScrollEl.value) imgScrollEl.value.scrollTop = 0 })
+  if (c.series) loadChars(c.series).catch(() => {})
+}
+
 /* ---------------- 二: 角色列表 ---------------- */
 const curSeries = ref('')
 const curSeriesZh = ref('')
@@ -451,9 +506,9 @@ function addSelectedToCart() {
   toggleSelectMode()
 }
 
-function toggleCartOne(c) {
+function toggleCartOne(c, series = curSeries.value) {
   const name = cartNameOf(c)
-  const added = cart.toggle({ ...c, name }, curSeries.value)
+  const added = cart.toggle({ ...c, name }, series)
   ui.ok(added ? `🛒 已加入: ${name}` : `已移除: ${name}`, 'info', 1400)
 }
 
@@ -580,7 +635,11 @@ const crumb = computed(() => ({
 
 /** 来源变化: 系列/角色/图片全部重算 */
 async function onSourceChange() {
-  if (view.value === 'series') return showSeriesList()
+  if (view.value === 'series') {
+    await showSeriesList()
+    if (seriesKw.value.trim()) runCharSearch(seriesKw.value)   // 角色命中也跟来源口径走
+    return
+  }
   if (view.value === 'chars' && curSeries.value) return loadChars(curSeries.value)
   if (view.value === 'images' && curChar.value) return reloadImages()
 }
@@ -767,7 +826,8 @@ useScrollKeep('.series-view .scroll')
           <TvInput
             v-model="seriesKw"
             size="sm"
-            placeholder="🔍 搜索系列(中/英文)"
+            clearable
+            placeholder="🔍 搜索系列 / 角色(中/英文)"
             class="kw"
           />
           <label class="zero-tog" title="显示 danbooru 补全的、本地没有图片的角色(可入购物车)">
@@ -778,15 +838,40 @@ useScrollKeep('.series-view .scroll')
         </div>
 
         <div ref="seriesScrollEl" class="scroll" @wheel="onCardWheel">
+          <!-- 角色命中(2026-11-10): 敲角色名时先出一排角色卡 —— 点进去直接是它的图集,
+               不用先想起来这个角色属于哪个作品(用户提的"系列框只能搜系列")。 -->
+          <div v-if="charHits.length" class="char-hit">
+            <div class="char-hit-t">
+              角色 · 命中 <b>{{ charHits.length }}</b><span v-if="charHitTotal > charHits.length"> / 共 {{ charHitTotal }}</span> 个
+              <span v-if="charHitLoading">查询中…</span>
+              <span class="dim-t">点卡片直接进它的图集</span>
+            </div>
+            <div class="char-grid" :style="cardGridStyle">
+              <TvEntityCard
+                v-for="c in charHits"
+                :key="c.tag"
+                :title="c.zh ? stripZhSeries(c.zh) : c.name"
+                :subtitle="c.tag"
+                :thumb="c.thumb"
+                :images="c.images"
+                :badge="seriesZh[c.series] || c.series"
+                badge-tone="ok"
+                :thumb-width="300"
+                :in-cart="inCart(c.tag)"
+                @open="openCharFromSearch(c)"
+                @toggle-cart="toggleCartOne(c, c.series)"
+              />
+            </div>
+          </div>
           <TvState v-if="loading" state="loading" text="加载中..." />
           <TvState v-else-if="listError" state="error" :text="`加载失败: ${listError}`" />
           <TvState v-else-if="!seriesData?.series.length" state="empty" text="暂无系列数据" />
           <TvState
-            v-else-if="!shownSeries.length"
+            v-else-if="!shownSeries.length && !charHits.length"
             state="empty"
-            :text="seriesKw.trim() ? `没有匹配「${seriesKw.trim()}」的系列` : '该分类下没有系列(或分类已被隐藏)'"
+            :text="seriesKw.trim() ? `没有匹配「${seriesKw.trim()}」的系列或角色` : '该分类下没有系列(或分类已被隐藏)'"
           />
-          <div v-else class="grid" :style="cardGridStyle">
+          <div v-if="!loading && !listError && shownSeries.length" class="grid series-grid" :style="cardGridStyle">
             <TvEntityCard
               v-for="s in shownSeries"
               :key="s.name"
@@ -808,6 +893,10 @@ useScrollKeep('.series-view .scroll')
               @fetch="fetchOneCover('series', s.name, seriesZh[s.name] || s.name)"
             />
           </div>
+          <div
+            v-else-if="!loading && !listError && !shownSeries.length && charHits.length"
+            class="char-hit-none"
+          >系列里没有匹配「{{ seriesKw.trim() }}」的, 只有上面这些角色命中</div>
         </div>
       </template>
 
@@ -1160,6 +1249,23 @@ useScrollKeep('.series-view .scroll')
   gap: 10px;
   align-content: start;
 }
+/* 角色命中块(2026-11-10): 搜角色名时浮在系列网格上方, 点卡直接进图集。
+ * 容器**刻意不叫 .grid** —— 系列网格才叫 .grid/.series-grid, 免得 e2e 那句
+ * 「筛出 n 张系列卡」把角色卡也数进去(两套卡都是 .ecard)。 */
+.char-hit { margin-bottom: 14px; }
+.char-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+.char-hit-t {
+  font-size: 12px; color: var(--muted); margin-bottom: 8px;
+  display: flex; align-items: center; gap: 6px;
+}
+.char-hit-t b { color: var(--accent); }
+.char-hit-t .dim-t { color: var(--faint); font-size: 11px; }
+.char-hit-none { font-size: 12px; color: var(--faint); padding: 6px 2px; }
 
 /* ban 确认弹窗(2026-10-23) */
 .ban-modal { display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.65; }

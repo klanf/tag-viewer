@@ -5,7 +5,8 @@
  * Danbooru 清洗版 / 某个角色表专用…), 于是方案化, 预设里选哪一套。
  *
  * 存法: user/adv_sets.json = { active, sets: [{id, name, cfg}] }
- *   cfg = { enabled, picked, inserts, rates, pins, pinFill, banned, nsfw, seed, nl }
+ *   cfg = { enabled, picked, inserts, rates, weights, pins, pinFill, banned, nsfw, seed, nl }
+ *   pins 每项 = {slot, word, weight}(权重 2026-11-10 起, 缺省 1 = 不加壳)
  *   nl  = { dims, level, poseView, stripPose, stripCostume, stripHair, seed }
  *
  * 迁移: 首次读时 json 不存在, 建一个全空「默认」组落盘 —— 与旧行为完全一致
@@ -23,6 +24,7 @@ const emptyCfg = () => ({
   picked: [],
   inserts: [],
   rates: {},
+  weights: {},           // 槽 id -> 权重(2026-11-10): 换/补出来的词套 (tag:w), 缺省 1 = 不加壳
   pins: [],
   pinFill: true,
   banned: [],
@@ -58,9 +60,26 @@ function normCfg(raw) {
   }
   out.pins = Array.isArray(raw.pins)
     ? raw.pins
-        .map((p) => ({ slot: String(p?.slot || '').trim(), word: String(p?.word || '').trim() }))
+        .map((p) => {
+          const w = Number(p?.weight)
+          return {
+            slot: String(p?.slot || '').trim(),
+            word: String(p?.word || '').trim(),
+            // 权重(2026-11-10): 0.05~2 之外一律按 1(不加壳), 免得手改 json 出一个 50 倍词
+            weight: Number.isFinite(w) && w > 0 ? Math.min(2, Math.max(0.05, w)) : 1,
+          }
+        })
         .filter((p) => p.slot && p.word)
     : []
+  // 槽位权重(2026-11-10): 0.05~2, 非数字丢掉; 1 = 不加壳(不落冗余键)
+  if (raw.weights && typeof raw.weights === 'object' && !Array.isArray(raw.weights)) {
+    const ws = {}
+    for (const [k, v] of Object.entries(raw.weights)) {
+      const n = Number(v)
+      if (k && Number.isFinite(n) && n > 0 && Math.abs(n - 1) > 1e-3) ws[k] = Math.min(2, Math.max(0.05, n))
+    }
+    out.weights = ws
+  }
   out.pinFill = raw.pinFill !== false
   out.banned = Array.isArray(raw.banned) ? raw.banned.map((s) => String(s).trim()).filter(Boolean) : []
   // 插入槽(2026-11-09): 原图缺词也从槽池补一个, 与 picked/banned 三态互斥。

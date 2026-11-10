@@ -1110,12 +1110,45 @@ async function main() {
     const zhHit = await cdp.eval(`
       __t.setInput('.cat-bar .tv-input', '蔚蓝')
       await new Promise(r => setTimeout(r, 700))
-      return { n: __t.count('.ecard'), first: __t.text('.ecard .name') }
+      return { n: __t.count('.series-grid .ecard'), first: __t.text('.series-grid .ecard .name') }
     `)
     check('系列: 中文搜索可用', zhHit.n > 0 && zhHit.n <= seriesList.cards,
       `「蔚蓝」-> ${zhHit.n} 个, 首个=${zhHit.first}`)
     await cdp.eval(`__t.setInput('.cat-bar .tv-input', ''); return true`)
     await sleep(600)
+
+    /* 系列搜索(角色): 2026-11-10 起这个框也搜角色 —— 敲角色名出一排角色卡,
+     * 点进去直接是它的图集(原来得先想起来角色属于哪个作品)。
+     * 探针角色从后端现取, 不写死名字(换夹具也不假失败)。 */
+    const charSearch = await cdp.eval(`
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      const probe = await window.tv.invoke('chars:search', { q: 'a', limit: 1 })
+      const full = probe?.characters?.[0]?.tag
+      if (!full) return { skipped: true }
+      const short = full.replace(/_\\(.+\\)$/, '')
+      __t.setInput('.cat-bar .tv-input', short)
+      await sleep(1100)
+      const out = { probe: short, chars: __t.count('.char-grid .ecard'), series: __t.count('.series-grid .ecard') }
+      const card = document.querySelector('.char-grid .ecard')
+      if (card) { card.click(); await sleep(1800) }
+      out.imgCards = __t.count('.grid .card')
+      out.opened = out.imgCards > 0
+      return out
+    `)
+    check('系列: 搜索框能搜角色 —— 敲角色名直接出角色卡', charSearch.skipped === true
+      || (charSearch.chars > 0),
+      charSearch.skipped ? '夹具里没有角色, 跳过' : `「${charSearch.probe}」-> ${charSearch.chars} 个角色卡`)
+    check('系列: 点角色卡直接进它的图集', charSearch.skipped === true || charSearch.opened === true,
+      charSearch.skipped ? '跳过' : `图片卡 ${charSearch.imgCards} 张`)
+    // 回系列列表: 先点面包屑回列表, **再清空搜索词** —— 词还留着的话网格按它过滤,
+    // 系列名里没有 "kisaki" 就一张都不剩(等 40s 也等不到, 会假红)。
+    if (!charSearch.skipped) {
+      await cdp.eval(`__t.clickText('[data-test="path-crumb"]', '全部系列'); return true`)
+      await waitFor(cdp, `!!document.querySelector('.cat-bar .tv-input')`, { label: '回到系列列表', timeout: 40000 })
+      await cdp.eval(`__t.setInput('.cat-bar .tv-input', ''); return true`)
+      await waitFor(cdp, `__t.count('.series-grid .ecard') > 0`, { label: '系列网格恢复', timeout: 40000 })
+      await sleep(300)
+    }
 
     /* 进入角色列表 */
     await cdp.eval(`
@@ -2208,6 +2241,8 @@ async function main() {
           mode: modeOf(chips[0]),
           rates: pickZone.querySelectorAll('.rate').length,
           val: pickZone.querySelector('.rate input[type="range"]')?.value ?? null,
+          // 权重输入(2026-11-10): 随机/插入态各一行, 禁用/未选态不该有
+          wIn: pickZone.querySelectorAll('.rate .rate-w-in').length,
         })
         for (let k = 0; k < 4; k++) {
           chips[0].click(); await sleep(200)
@@ -2219,12 +2254,33 @@ async function main() {
       out.setSide = !!mask.querySelector('.adv-grid .side')
       out.setNames = [...mask.querySelectorAll('.adv-grid .side-item .side-name')].map(b => b.textContent.trim()).join(',')
       out.setBtns = [...mask.querySelectorAll('.side-ops .tv-btn')].map(b => b.textContent.trim()).join(',')
-      // ② 钉词行
+      // ② 钉词行(2026-11-10 改版: 词输入在前 + 槽自动归类 + 权重)
       const addBtn = [...mask.querySelectorAll('.pin-zone .tv-btn')].find(b => b.textContent.includes('添加钉词'))
       if (addBtn) {
         addBtn.click(); await sleep(250)
         const row = mask.querySelector('.pin-zone .pin')
-        out.pinRow = { shown: !!row, hasSlot: !!row?.querySelector('.pin-slot'), hasWord: !!row?.querySelector('.pin-word-box input') }
+        const wordIn = row?.querySelector('.pin-word-box input')
+        out.pinRow = {
+          shown: !!row, hasSlot: !!row?.querySelector('.pin-slot'),
+          hasWord: !!wordIn, hasWeight: !!row?.querySelector('.pin-w-in'),
+          // 输入框不该再被"先选槽"锁住(用户实测: 以前不选槽连字都打不进去)
+          locked: wordIn ? wordIn.disabled === true : null,
+        }
+        // 敲词 → 联想(带中文/槽标识) → 选中 → 槽自动填上
+        if (wordIn) {
+          __t.setInput('.pin-zone .pin .pin-word-box input', 'thighhighs')
+          await sleep(900)
+          const items = [...row.querySelectorAll('.drop .item')]
+          out.pinSuggest = {
+            n: items.length,
+            zh: items[0]?.querySelector('.s-zh')?.textContent?.trim() || '',
+          }
+          items[0]?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+          await sleep(500)
+          out.pinRow.word = row.querySelector('.pin-word-box input')?.value || ''
+          out.pinRow.slot = row.querySelector('.pin-slot')?.value || ''
+          out.pinRow.verdict = row.querySelector('.pin-verdict')?.textContent?.trim() || ''
+        }
         row?.querySelector('.pin-del')?.click(); await sleep(150)   // 还原
       }
       out.enabledBox = [...mask.querySelectorAll('.tv-check')].some(e => e.textContent.includes('启用高级替换'))
@@ -2250,10 +2306,20 @@ async function main() {
       && advModal.cycle[2].mode === 'm-ban' && advModal.cycle[2].rates === 0
       && advModal.cycle[3].mode === 'off' && advModal.cycle[3].rates === 0,
       `cycle=${JSON.stringify(advModal.cycle)}`)
-    check('高级替换弹窗: 「添加钉词」出现 槽下拉 + 词条输入, 总开关/成人词库/种子齐全',
-      advModal.pinRow && advModal.pinRow.shown === true && advModal.pinRow.hasSlot === true && advModal.pinRow.hasWord === true
+    check('高级替换弹窗: 换词率行带「权重」输入(随机/插入态有, 禁用态没有)',
+      advModal.cycle && advModal.cycle[0].wIn === 1 && advModal.cycle[1].wIn === 1
+      && advModal.cycle[2].wIn === 0 && advModal.cycle[3].wIn === 0,
+      `权重输入数=${(advModal.cycle || []).map((c) => c.wIn).join('/')}`)
+    check('高级替换弹窗: 「添加钉词」= 词输入(未选槽也能打字) + 槽下拉 + 权重, 总开关/成人词库/种子齐全',
+      advModal.pinRow && advModal.pinRow.shown === true && advModal.pinRow.hasSlot === true
+      && advModal.pinRow.hasWord === true && advModal.pinRow.hasWeight === true
+      && advModal.pinRow.locked === false
       && advModal.enabledBox === true && advModal.nsfwBox === true && advModal.seed === true,
       `钉词行=${JSON.stringify(advModal.pinRow)} 启用=${advModal.enabledBox} 成人词库=${advModal.nsfwBox} 种子=${advModal.seed}`)
+    check('高级替换弹窗: 钉词输入带中文翻译的联想, 选中即自动归类(不用先选槽)',
+      (advModal.pinSuggest?.n || 0) > 0 && (advModal.pinSuggest?.zh || '').length > 0
+      && advModal.pinRow?.slot === 'legwear',
+      `联想=${JSON.stringify(advModal.pinSuggest)} 词=${advModal.pinRow?.word} 槽=${advModal.pinRow?.slot} 判读=${advModal.pinRow?.verdict}`)
     check('高级替换弹窗: 取消后关窗且状态未启用(后续步骤无随机化副作用)',
       advModal.closed === true,
       `已关=${advModal.closed}`)

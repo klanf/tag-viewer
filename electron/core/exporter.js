@@ -45,9 +45,24 @@ function advSetParams(cfg = {}) {
   }).join(',')
   const slotsAll = [slots, inserts].filter(Boolean).join(',')
   const pins = (Array.isArray(cfg.pins) ? cfg.pins : [])
-    .map((pt) => `${pt.slot}:${String(pt.word).toLowerCase().replace(/\s+/g, '_')}`)
+    .map((pt) => {
+      const w = Number(pt.weight)
+      // 钉词权重(2026-11-10): 词后面挂 @1.2 —— 用 @ 而不是再一个冒号, 词里可能带下划线
+      // 和括号(角色名 xxx_(series)), 但不会带 @; 权重 1 不挂尾巴。
+      const tail = (Number.isFinite(w) && w > 0 && Math.abs(w - 1) > 1e-3) ? `@${w.toFixed(2)}` : ''
+      return `${pt.slot}:${String(pt.word).toLowerCase().replace(/\s+/g, '_')}${tail}`
+    })
     .join(',')
   const ban = (Array.isArray(cfg.banned) ? cfg.banned : []).join(',')
+  // 槽位权重(2026-11-10): "legwear:1.2,pose:0.8" —— 换/补出来的词套 (tag:w) 壳。
+  // 权重 1(缺省) 不写进串, 老方案那份 json 里没有 weights 字段 = 全 1 = 行为不变。
+  const weights = Object.entries(cfg.weights && typeof cfg.weights === 'object' ? cfg.weights : {})
+    .map(([id, v]) => {
+      const n = Number(v)
+      return (id && Number.isFinite(n) && n > 0 && Math.abs(n - 1) > 1e-3) ? `${id}:${n.toFixed(2)}` : ''
+    })
+    .filter(Boolean)
+    .join(',')
   const nl = cfg.nl || {}
   const hasCfg = (cfg.picked?.length || cfg.inserts?.length || pins || ban)
   return {
@@ -57,6 +72,7 @@ function advSetParams(cfg = {}) {
     pin_slots: pins,
     pin_fill: cfg.pinFill !== false ? '1' : '0',
     ban_slots: ban,
+    slot_weights: weights,
     randomize_nsfw: cfg.nsfw !== false ? '1' : '0',
     randomize_seed: String(cfg.seed || ''),
     nl_dims: (nl.enabled === true && Array.isArray(nl.dims) && nl.dims.length) ? nl.dims.join(',') : '',
@@ -95,8 +111,11 @@ function exportCore(raw = {}) {
   //                      非法数字/越界一律按 1, 与引擎 rateOf 同口径)
   //   randomize_slots    槽串, 格式同上 —— "legwear:0.65,pose"(2026-10-30 槽级粒度,
   //                      "只抽袜子"这类需求必须到槽; 老大类串继续认, 两边可混用)
-  //   pin_slots          钉词串, 每段 "槽:词" —— "legwear:white_thighhighs";
-  //                      钉了的槽必现指定词, 优先于随机(见 export-random.js 阶段①)
+  //   pin_slots          钉词串, 每段 "槽:词[@权重]" —— "legwear:white_thighhighs"
+  //                      (2026-11-10 起可挂 @1.2 权重); 钉了的槽必现指定词, 优先于随机
+  //                      (见 export-random.js 阶段①)
+  //   slot_weights       槽位权重串, "legwear:1.2,pose:0.8"(2026-11-10): 换/补出来的
+  //                      词套 (tag:w) 壳; 权重 1 = 不加壳(缺省)
   //   pin_fill           '1'/'0' 原图缺钉词槽词条时是否补上; 缺省 = '1'(补)
   //   ban_slots          禁用槽串, 逗号分隔槽 id —— "headwear,eyewear"(2026-10-30):
   //                      原图词条里属于这些槽的词**整词删除**(与换词率 0% 的"保留"相反)。
@@ -112,7 +131,7 @@ function exportCore(raw = {}) {
   let advRaw = raw
   if (advSetId === '0') {
     advRaw = { ...raw, randomize: '0', randomize_slots: '', pin_slots: '', ban_slots: '',
-      randomize_seed: '', nl_dims: '' }
+      slot_weights: '', randomize_seed: '', nl_dims: '' }
   } else if (advSetId) {
     const { active, sets } = advSets()
     const set = advSetId === '@active'
@@ -154,18 +173,39 @@ function exportCore(raw = {}) {
       rndInserts.set(id, rndRates.get(id) ?? 1)   // 没写率 = 必补
     }
   }
-  // 钉词串: "槽:词" —— indexOf(':') 而不是正则, 词本身可以带冒号以外的任何字符
+  /* 钉词串: "槽:词[@权重]" —— 用**最后一个**冒号切槽: 槽 id 自己也带冒号
+   * (nsfw:nudity / nsfw:see_through 这类命名空间槽), indexOf 会把它们截成 "nsfw"。
+   * 词本身是 tag 名, 不含冒号。 */
   const rndPins = new Map()
   for (const part of String(advRaw.pin_slots || '').split(',')) {
     const t = part.trim()
     if (!t) continue
-    const i = t.indexOf(':')
+    const i = t.lastIndexOf(':')
     if (i <= 0) continue
     const slot = t.slice(0, i).trim()
-    const w = t.slice(i + 1).trim()
-    if (slot && w) rndPins.set(slot, w)
+    let w = t.slice(i + 1).trim()
+    let weight = 1
+    // 尾部的 @1.2 = 钉词权重(2026-11-10); 不是数字就当词的一部分, 原样保留
+    const at = w.lastIndexOf('@')
+    if (at > 0) {
+      const num = Number(w.slice(at + 1))
+      if (Number.isFinite(num) && num > 0) { weight = Math.min(2, num); w = w.slice(0, at).trim() }
+    }
+    if (slot && w) rndPins.set(slot, { word: w, weight })
   }
   const rndPinFill = !(advRaw.pin_fill === '0' || advRaw.pin_fill === false)
+  /* 槽位权重串(2026-11-10): "legwear:1.2,pose:0.8" —— 换/补出来的词套 (tag:w) 壳。
+   * 与率表同格式但语义不同(1.0 = 不加壳), 所以单独一张表, 不并进 rndRates。 */
+  const rndWeights = new Map()
+  for (const part of String(advRaw.slot_weights || '').split(',')) {
+    const t = part.trim()
+    if (!t) continue
+    const i = t.lastIndexOf(':')      // 同上: 命名空间槽(nsfw:nudity)要按最后一个冒号切
+    if (i <= 0) continue
+    const id = t.slice(0, i).trim()
+    const v = Number(t.slice(i + 1))
+    if (id && Number.isFinite(v) && v > 0) rndWeights.set(id, Math.min(2, Math.max(0.05, v)))
+  }
   // 禁用槽串: 纯槽 id 列表, 没有率段
   const rndBan = new Set()
   for (const part of String(advRaw.ban_slots || '').split(',')) {
@@ -250,6 +290,7 @@ function exportCore(raw = {}) {
     ? makeRandomizer({
         sections: rndSecs, slots: rndSlots, pins: rndPins, pinFill: rndPinFill,
         seed: rndSeed || null, rates: rndRates, nsfw: rndNsfw, inserts: rndInserts,
+        weights: rndWeights,
       })
     : null
   /* 追加标签 —— **UI 已于 2026-10-04 移除**(看板筛选区与预设编辑页的输入框都删了,

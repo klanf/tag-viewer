@@ -191,6 +191,8 @@ function blankParams() {
       : Array.isArray(s.randomize_slots) ? s.randomize_slots.join(',') : '',
     pin_slots: typeof s.pin_slots === 'string' ? s.pin_slots : '',
     ban_slots: typeof s.ban_slots === 'string' ? s.ban_slots : '',
+    // 槽位权重(2026-11-10): 与 run 时的同名字段同位, 同样必须进初值表
+    slot_weights: typeof s.slot_weights === 'string' ? s.slot_weights : '',
     randomize_seed: typeof s.randomize_seed === 'string' ? s.randomize_seed : '',
     // 高级替换方案(2026-11-09): '@active'=跟随当前 / '0'=不启用 / 方案 id / 空=老预设快照参数
     adv_set: typeof s.adv_set === 'string' ? s.adv_set : '',
