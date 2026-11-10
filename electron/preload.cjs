@@ -86,6 +86,10 @@ const CHANNELS = new Set([
   'diag:stats', 'diag:clearSearchCache', 'diag:clearThumbs', 'diag:fileInfo',
   // 导出端随机化(大类/槽勾选清单, 2026-10-28 / 2026-10-30 槽粒度)
   'random:sections', 'random:slots', 'random:wordinfo',
+  // 自然语言语料库概况(动作/穿搭/发型条数, 2026-11-08)
+  'random:nlstats',
+  // 高级替换方案库(多套方案, 2026-11-09)
+  'adv:sets', 'adv:sets:save',
 ])
 
 /**

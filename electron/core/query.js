@@ -18,7 +18,7 @@ import { translateMap, translateMany, zhIndex } from './translate.js'
 // 只读词典不碰库, 和 translateMap 同级开销 —— 每条联想补 slot/slotZh/sec 三个字段
 import { wordInfos } from './export-random.js'
 import { parseQuery, scopeRecords, searchCached, applySort, frozenKey } from './search.js'
-import { extractImagePrompt } from './png.js'
+import { extractImageMeta, promptTagWeights } from './png.js'
 import { promptToTags, dedupeTags } from './prompt.js'
 import { openDb } from './store.js'
 import { reloadCharLib, libCharsBySeries } from './charlib.js'
@@ -902,17 +902,25 @@ function dbTagsByPath(p) {
 /** 图内元数据第二套标签(2026-10-20 光箱双源):
  * 实时读一次 PNG 文本块(文件头、IDAT 即停, 毫秒级)。v3 覆盖语义后反推会覆盖
  * 库里的 meta, 所以图内原始提示词**只能现场读盘**, 库里没有。
- * @returns {{meta_prompt:string, meta_tags:string[], meta_source:string}} */
+ * 2026-11-10: 加 meta_negative / meta_loras —— 负面提示词原文 + LoRA 清单
+ * (有用户把 lora 塞进负面元数据里存, 光箱要能显示出来);
+ * meta_weights —— 各 tag 的权重写法(promptTagWeights, 光箱权重开关用)。
+ * 2026-11-10 二版: meta_nl 撤了 —— nl 词的中文/分类改走 nl-bank 片段索引。
+ * @returns {{meta_prompt:string, meta_tags:string[], meta_source:string, meta_negative:string, meta_loras:Array, meta_weights:Record}} */
 function metaInfoFor(p) {
+  const empty = { meta_prompt: '', meta_tags: [], meta_source: '', meta_negative: '', meta_loras: [], meta_weights: {} }
   try {
-    if (!fs.existsSync(p)) return { meta_prompt: '', meta_tags: [], meta_source: '' }
-    const { text, source } = extractImagePrompt(p)
+    if (!fs.existsSync(p)) return empty
+    const r = extractImageMeta(p)
     return {
-      meta_prompt: String(text || ''),
-      meta_tags: text ? promptToTags(text) : [],
-      meta_source: String(source || ''),
+      meta_prompt: String(r.text || ''),
+      meta_tags: r.text ? promptToTags(r.text) : [],
+      meta_source: String(r.source || ''),
+      meta_negative: String(r.negative || ''),
+      meta_loras: Array.isArray(r.loras) ? r.loras : [],
+      meta_weights: r.text ? promptTagWeights(r.text) : {},
     }
-  } catch { return { meta_prompt: '', meta_tags: [], meta_source: '' } }
+  } catch { return empty }
 }
 
 /** lightbox 用的结构化数据: 角色 / 系列 / 全部标签(已滤掉 Danbooru 分类噪声)
@@ -934,15 +942,18 @@ export function getLightboxData(raw = {}) {
   // 兜底②: 库外图片(「扫描文件夹」里的 AI 生成图) —— 直接读图片元数据。
   // 注意: 即使没有任何元数据也要回 200 语义, 否则前端拿不到结构, lightbox 直接空白。
   if (fs.existsSync(p)) {
-    const { text, source } = extractImagePrompt(p)
-    const tags = text ? promptToTags(text) : []
+    const r = extractImageMeta(p)
+    const tags = r.text ? promptToTags(r.text) : []
     return {
       ...packLightbox(p, tags),
       external: true,
-      prompt_source: source,          // 旧字段, 「库外图片」徽章还在用
-      meta_prompt: String(text || ''),
+      prompt_source: r.source,        // 旧字段, 「库外图片」徽章还在用
+      meta_prompt: String(r.text || ''),
       meta_tags: tags,
-      meta_source: String(source || ''),
+      meta_source: String(r.source || ''),
+      meta_negative: String(r.negative || ''),
+      meta_loras: Array.isArray(r.loras) ? r.loras : [],
+      meta_weights: r.text ? promptTagWeights(r.text) : {},
     }
   }
   return { error: 'not found' }

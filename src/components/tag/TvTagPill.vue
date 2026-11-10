@@ -36,6 +36,8 @@ const props = defineProps({
   showBan: { type: Boolean, default: false },
   /** 显示计数 */
   showCount: { type: Boolean, default: false },
+  /** 权重写法(2026-11-10 光箱 meta 模式): '1.2' / '1.2:0.8', 空串不显示。展示层用, 复制仍是裸 tag */
+  weight: { type: String, default: '' },
   /** 显示中文 */
   showZh: { type: Boolean, default: true },
   /** 视觉变体: auto 会根据标签自动判定角色/系列 */
@@ -247,6 +249,8 @@ function onCtxMenu(e) {
   max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .cnt { color: var(--accent); font-size: 10px; font-weight: 700; }
+/* 权重角标(2026-11-10 光箱 meta): 与 lora chip 的 .w 同语义, 青灰不抢 tag 本体 */
+.wgt { color: var(--muted); font-size: 10px; font-weight: 700; font-style: normal; white-space: nowrap; }
 
 /* ── 段位配色(2026-10-16): 边框+浅底+文字同色相 ──────────────
  * 人数蓝/角色绿/系列紫/画师红, 通用与 meta 维持中性灰让四类跳出来。

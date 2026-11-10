@@ -296,6 +296,14 @@ export const api = {
     slots: () => call('random:slots'),
     // 词归属反查: 传词数组(或单个词), 返回 [{word, slot, slotZh, sec}]
     wordinfo: (words) => call('random:wordinfo', { words }),
+    // 自然语言语料库概况: {dims:[{id, zh, total, byLevel}], totals, empty}
+    nlstats: () => call('random:nlstats'),
+  },
+
+  // 高级替换方案库(2026-11-09): {active, sets:[{id, name, cfg}]}, 整存整取
+  advSets: {
+    get: () => call('adv:sets'),
+    save: (body) => call('adv:sets:save', body),
   },
 
   // 诊断

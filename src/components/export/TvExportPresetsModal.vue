@@ -25,6 +25,7 @@ import TvCartPresetSection from '../cart/TvCartPresetSection.vue'
 import TvTagSuggestInput from '../tag/TvTagSuggestInput.vue'
 import { api } from '@/utils/api.js'
 import { useUiStore } from '@/stores/useUiStore.js'
+import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import { nfmt, bytes, dur, ts as fmtTs } from '@/utils/format.js'
 
 const props = defineProps({
@@ -38,6 +39,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'changed'])
 
 const ui = useUiStore()
+const safety = useSafetyStore()
 
 const presets = ref([])
 const loading = ref(false)
@@ -46,16 +48,6 @@ const editing = ref(null)     // 表单对象; null = 看列表
 const formErr = ref('')
 
 const MODE_OPTS = [{ value: 'any', label: '任一命中(any)' }, { value: 'all', label: '全部命中(all)' }]
-/* 安全剔除口径(2026-10-28 等级统一): 阈值 N = 剔除等级 > N 的词;
- * follow=跟随全局安全模式「显示上限」。旧预设里的 core/edge 仍被主进程
- * 兼容映射(core→2 / edge→0), 但 UI 不再产生。 */
-const SAFE_LEVEL_OPTS = [
-  { value: 'follow', label: '跟随全局安全模式上限' },
-  { value: '3', label: 'L3 —— 只剔极端词(L4)' },
-  { value: '2', label: 'L2 —— 剔露骨词(L3+)' },
-  { value: '1', label: 'L1 —— 剔暗示词(L2+)' },
-  { value: '0', label: 'L0 —— 擦边以上全剔(最严)' },
-]
 const MATCH_OPTS = [{ value: 'contains', label: '包含(contains)' }, { value: 'exact', label: '完全相等(exact)' }]
 
 const isNew = computed(() => !!editing.value && !presets.value.some((p) => p.id === editing.value.id))
@@ -73,8 +65,46 @@ async function loadReplaceSets() {
   } catch { /* 读不到就用默认组 */ }
 }
 
+/* 高级替换方案库(2026-11-09): 预设里存方案 id(adv_set), 界面上显示方案名。
+ * 2026-11-10 用户拍板:「跟随当前方案」不再作为新选项 —— 只选已有方案(或关掉)。
+ * '@active' 只剩老预设遗留的显示位(和「旧版参数」同一待遇), 建议重存成具体方案。
+ * '' = 老预设遗留的"旧版快照参数"(老预设没有 adv_set 字段, 走当年存的参数串)。 */
+const ADV_OPTS_HEAD = [
+  { value: '0', label: '不启用', hint: '导出完全不做随机/钉词/禁用/自然语言处理' },
+]
+const ADV_OPTS_TAIL = [
+  { value: '@active', label: '跟随当前方案(老预设遗留)', hint: '这条预设存的还是「跟随当前方案」—— 建议选一套具体方案后重新保存' },
+  { value: '', label: '旧版参数(老预设遗留)', hint: '这条预设是方案化之前存的, 按当年存的参数串导出; 建议选一套方案后重新保存' },
+]
+const advSetOptions = ref([...ADV_OPTS_HEAD, ...ADV_OPTS_TAIL])
+async function loadAdvSets() {
+  try {
+    const r = await api.advSets.get()
+    advSetOptions.value = [
+      ...ADV_OPTS_HEAD,
+      ...(r.sets || []).map((x) => ({ value: x.id, label: x.name, hint: `用方案「${x.name}」(方案在高级替换弹窗里维护)` })),
+      ...ADV_OPTS_TAIL,
+    ]
+  } catch { /* 读不到就只给头尾两项 */ }
+}
+
+/** 安全档位只认 '0'..'4'(2026-11-10 去掉「跟随全局」): 老预设的 'follow' 就地折算成当前全局档 */
+function safeLevelInit(v) {
+  if (typeof v === 'string' && /^[0-4]$/.test(v)) return v
+  return String(safety.maxLevel ?? 2)
+}
+/* 档位 chips 用安全模式设置弹窗同款可读标签 —— 不裸写 01234(2026-11-10 用户拍板) */
+const SAFE_LEVELS_EXPORT = [
+  { v: '4', label: '≤L4 · 全显示', hint: '阈值 4 = 基本不剔(所有等级的词都留下)' },
+  { v: '3', label: '≤L3 · 藏极端', hint: '阈值 3 = 剔掉极端(L4)的词' },
+  { v: '2', label: '≤L2 · 藏露骨', hint: '阈值 2 = 剔掉露骨(L3+)和极端(L4)的词' },
+  { v: '1', label: '≤L1 · 藏暗示', hint: '阈值 1 = 剔掉明显暗示(L2+)以上的词' },
+  { v: '0', label: '≤L0 · 只留常规', hint: '阈值 0 = 最严, 连擦边(L1)也剔, 只留常规词' },
+]
+
 async function load() {
   await loadReplaceSets()
+  await loadAdvSets()
   await loadDirs()
   loading.value = true
   try {
@@ -145,6 +175,7 @@ function blankParams() {
     strip_char: !!s.strip_char,
     strip_view: !!s.strip_view,
     safe_only: !!s.safe_only,
+    safe_level: safeLevelInit(s.safe_level),
     seg_mode: !!s.seg_mode,
     with_path: !!s.with_path,
     replace_set: typeof s.replace_set === 'string' ? s.replace_set : '',
@@ -161,6 +192,17 @@ function blankParams() {
     pin_slots: typeof s.pin_slots === 'string' ? s.pin_slots : '',
     ban_slots: typeof s.ban_slots === 'string' ? s.ban_slots : '',
     randomize_seed: typeof s.randomize_seed === 'string' ? s.randomize_seed : '',
+    // 高级替换方案(2026-11-09): '@active'=跟随当前 / '0'=不启用 / 方案 id / 空=老预设快照参数
+    adv_set: typeof s.adv_set === 'string' ? s.adv_set : '',
+    // 自然语言段(2026-11-08): 与随机替换同位, 同样必须进初值表 —— 漏了就会被
+    // 存预设时静默剥掉(上面那条注释就是同一个坑)。
+    nl_dims: typeof s.nl_dims === 'string' ? s.nl_dims : '',
+    nl_level: typeof s.nl_level === 'string' ? s.nl_level : 'sfw',
+    nl_strip_pose: s.nl_strip_pose !== false,
+    nl_pose_view: s.nl_pose_view !== false,
+    nl_strip_costume: s.nl_strip_costume !== false,
+    nl_strip_hair: s.nl_strip_hair !== false,
+    nl_seed: typeof s.nl_seed === 'string' ? s.nl_seed : '',
   }
 }
 
@@ -238,13 +280,15 @@ function startNew() {
 function startEdit(p) {
   formErr.value = ''
   fileTouched.value = false
+  const params = { ...blankParams(), ...(p.params || {}) }
+  params.safe_level = safeLevelInit(params.safe_level)   // 老预设的 'follow' 折算成具体档位
   editing.value = {
     id: p.id,
     name: p.name,
     dir: p.dir,
     file: p.file,
     auto: !!p.auto,
-    params: { ...blankParams(), ...(p.params || {}) },
+    params,
   }
 }
 
@@ -464,11 +508,6 @@ function shortDir(d) {
         </div>
       </div>
 
-      <div class="frow">
-        <span class="lb">排除标签</span>
-        <TvInput v-model="editing.params.exclude" size="sm" placeholder="逗号分隔 (留空 = 不排除)" />
-      </div>
-
       <div class="fsec">
         <div class="fsec-t">🧹 导出时套用</div>
         <div class="switches">
@@ -482,51 +521,40 @@ function shortDir(d) {
             />
             <span class="faint">(规则组在 🔁 替换规则弹窗里管理)</span>
           </div>
-          <TvCheckbox v-model="editing.params.bg" label="缺背景时补背景标签" />
           <TvCheckbox v-model="editing.params.strip_char" label="剔除角色/系列标签" />
-          <TvCheckbox v-model="editing.params.strip_view" label="剔除视角/机位标签" title="去掉 from behind / high angle / dutch angle 等视角机位类标签, 词表 data/export_view_tags.txt 可自行增删" />
-          <TvCheckbox v-model="editing.params.seg_mode" label="段位模式（只留内容 tag）" title="过滤画师/角色/系列/meta, 人数排最前, 通用按分类归堆 —— 给绘图管线随机抽注入用; 关掉则保持原始顺序" />
-          <TvCheckbox v-model="editing.params.safe_only" label="只导出安全模式的标签" title="每个标签串里剔除敏感tag, 行数不变。敏感词表分 core(明确露骨)/edge(擦边)两段, 口径在下面选" />
-          <TvCheckbox v-model="editing.params.groups" label="过滤组去冲突(槽内单选+互斥)" title="导出前按槽位词典消解: 同槽位只留本地图片量最多的一个, 并消解裸足×无鞋这类互斥对; 仅对单人图生效, 群像原样保留" />
-          <TvCheckbox v-model="editing.params.randomize" label="🎲 高级替换(按槽随机 + 钉词必现)" title="导出时对勾选槽位的词条做同槽随机替换 + 钉词必现: 结构不变只换内容; 参数跟首页「高级替换」面板同口径" />
-          <div v-if="editing.params.randomize" class="setpick rnd-preset">
-            <span class="faint">参与槽位与换词率(也兼容老的大类串)</span>
-            <TvInput
-              v-model="editing.params.randomize_slots"
-              size="sm"
-              placeholder="如 legwear:0.65,pose (留空 = 不随机)"
-              title="槽串, 每段 id 或 id:换词率(0~1); legwear:0.65 = 腿袜槽六成半的词被换, legwear = 必换。可勾哪些槽见首页高级替换面板的 chips"
-            />
-            <span class="faint">钉词(该槽必现指定词, 优先于随机)</span>
-            <TvInput
-              v-model="editing.params.pin_slots"
-              size="sm"
-              placeholder="如 legwear:white_thighhighs (留空 = 无钉词)"
-              title="钉词串, 每段 槽:词, 逗号分隔可多个; 钉了的槽必现指定词并跳过随机"
-            />
-            <span class="faint">禁用槽(原图该槽的词整词删除, 与钉词互斥)</span>
-            <TvInput
-              v-model="editing.params.ban_slots"
-              size="sm"
-              placeholder="如 headwear,eyewear (留空 = 不禁用)"
-              title="禁用槽串, 逗号分隔槽 id; 原图词条里属于这些槽的词导出时整词删除(与换词率 0% 的保留相反)"
-            />
-            <TvCheckbox v-model="editing.params.pin_fill" label="原图没有该槽词条时补上钉词" title="开着 = 缺词也追加; 关掉 = 只替换已有的词" />
-            <TvCheckbox v-model="editing.params.randomize_nsfw" label="含成人词库" title="关掉后候选池构建期剔除成人词, 低档绝不越界" />
-            <TvInput
-              v-model="editing.params.randomize_seed"
-              size="sm"
-              placeholder="种子(留空 = 每次导出都不同)"
-              title="固定种子时同样的筛选结果导出完全可复现"
-            />
+          <div>
+            <TvCheckbox v-model="editing.params.safe_only" label="只导出安全模式的标签(剔除敏感tag)" title="每个标签串里去掉敏感标签(nude/sex 等), 行数不变; 词表即 data/safety_tags.txt; 敏感等级阈值用下面的 chips 选" />
+            <div v-if="editing.params.safe_only" class="setpick">
+              <span class="faint">敏感档位:</span>
+              <TvChip
+                v-for="lv in SAFE_LEVELS_EXPORT"
+                :key="lv.v"
+                :label="lv.label"
+                :active="editing.params.safe_level === lv.v"
+                :title="lv.hint"
+                @click="editing.params.safe_level = lv.v"
+              />
+            </div>
           </div>
-          <div v-if="editing.params.safe_only" class="half safe-level-row">
-            <span class="lb">剔除口径</span>
-            <TvSelect v-model="editing.params.safe_level" size="sm" :options="SAFE_LEVEL_OPTS" />
+          <TvCheckbox v-model="editing.params.seg_mode" label="段位模式（只留内容 tag）" title="过滤画师/角色/系列/meta, 人数排最前, 通用按分类归堆 —— 给绘图管线随机抽注入用; 关掉则保持原始顺序" />
+          <TvCheckbox v-model="editing.params.groups" label="过滤组去冲突(槽内单选+互斥)" title="导出前按槽位词典消解: 同槽位只留本地图片量最多的一个, 并消解裸足×无鞋这类互斥对; 仅对单人图生效, 群像原样保留" />
+          <!-- 高级替换方案(2026-11-09): 整套配置(随机槽/插入槽/钉词/禁用槽/自然语言段)都在方案库里,
+               预设只存"用哪一套" —— 与替换规则组同一模型。选择器也用同一款 chips 胶囊
+               (TvReplaceSetPicker 同款交互): 原生 select 在弹窗容器里点不开是 2026-10-04 实锤的坑。
+               老预设的参数串(adv_set 为空)仍被引擎认账, 但 UI 不再产生, 显示为"旧版参数"。 -->
+          <div class="setpick">
+            <span class="faint">🎲 高级替换方案(随机/插入/钉词/禁用/自然语言段整套):</span>
+            <TvChip
+              v-for="o in advSetOptions"
+              :key="o.value || '@legacy'"
+              :label="o.label"
+              :active="editing.params.adv_set === o.value"
+              :title="o.hint || ''"
+              @click="editing.params.adv_set = o.value"
+            />
           </div>
           <TvCheckbox v-model="editing.params.spaces" label="下划线转空格" />
           <TvCheckbox v-model="editing.params.with_path" label="每行带图片路径" />
-          <TvCheckbox v-model="editing.params.exclude_char" label="排除词也命中带括号标签" />
         </div>
       </div>
 

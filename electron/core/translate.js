@@ -32,6 +32,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { dataFile, getWorkspace } from './workspace.js'
 import { BUNDLED_TRANSLATIONS_DB, BUNDLED_KNOWLEDGE_DIR, KNOWLEDGE_DIR_PREFIXES } from './paths.js'
+import { nlTagIndex } from './nl-bank.js'
 
 const state = {
   map: new Map(),        // 小写标签 -> 中文
@@ -200,6 +201,15 @@ export function loadTranslations(translateDir, opts = {}) {
   for (const [k, v] of local) {
     if (!map.has(k)) { map.set(k, v); localAdded++ }
   }
+  // 自然语言语料词(2026-11-10): WeiLin 词典只收 danbooru tag, "she_is_kneeling_..."
+  // 这类 nl 长句词翻不到 —— 用 nl-bank 的片段索引补中文(只补词典没有的)。
+  // 这样光箱/标签页的 nl 词胶囊直接带中文, 不再需要单独的「自然语言」回译块。
+  let nlAdded = 0
+  try {
+    for (const [k, v] of nlTagIndex().entries()) {
+      if (!map.has(k)) { map.set(k, v.zh); nlAdded++ }
+    }
+  } catch { /* 缺知识包时索引为空, 不致命 */ }
   state.map = map
   state.zhIndex = null
   state.sources = {
@@ -207,6 +217,7 @@ export function loadTranslations(translateDir, opts = {}) {
     bundled: bundled ? bundled.size : 0,
     local: local.size,
     localAdded,
+    nl: nlAdded,
   }
   // 内置库兜底生效时, dirs 报库文件路径, 来源仍标 'bundled'(界面显示"仓库内置")
   state.dirs = r.dirs.length ? r.dirs : (bundled ? [opts.bundledDb || BUNDLED_TRANSLATIONS_DB] : [])

@@ -41,6 +41,7 @@ import { openTaggerSetup } from '@/composables/useTaggerSetup.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import TvZoomBadge from '@/components/base/TvZoomBadge.vue'
 import MoveTargetModal from '@/components/scan/MoveTargetModal.vue'
+import TvCompareView from '@/components/image/TvCompareView.vue'
 import TagImagesPanel from '@/components/tag/TagImagesPanel.vue'
 import TvSeriesCharsPanel from '@/components/series/TvSeriesCharsPanel.vue'
 import MetaHitsPanel from '@/components/tag/MetaHitsPanel.vue'
@@ -497,6 +498,21 @@ function exitSelectMode() {
   ui.toast('已退出选择模式', 'info', 1400)
 }
 
+/* 双图对比(2026-11-10 用户反馈「双选图片后支持并排显示和滑动对比」):
+ * 选中恰好 2 张时工具条亮「🆚 对比」。左右顺序按当前排序稳定取,
+ * 关掉对比不动选择集 —— 对比只是"看", 不改变任何状态。 */
+const compareOpen = ref(false)
+const comparePair = ref(['', ''])
+const canCompare = computed(() => selected.value.size === 2)
+function openCompare() {
+  if (selected.value.size !== 2) return
+  // 按当前排序取这两张(而不是 Set 迭代序), 左右固定可预期
+  const pair = sortedItems.value.filter((it) => selected.value.has(it.path)).map((it) => it.path)
+  if (pair.length !== 2) return
+  comparePair.value = pair
+  compareOpen.value = true
+}
+
 /** 勾选框 / 长按 / Ctrl+点 三条路共用: 还没进模式就先进去, 再走同一套勾选逻辑 */
 function pickCard(it, ev, quiet = false) {
   if (!selectMode.value) enterSelectMode(quiet)
@@ -628,6 +644,12 @@ async function doMove(target) {
     // 失败的留在选择集里, 成功的清掉; 弹窗关掉
     selected.value = new Set((r.failed || []).map((f) => f.path))
     moveOpen.value = false
+    // 全部成功就收掉多选(2026-11-10 用户反馈: 移完还挂着工具条, 不知道还在选什么);
+    // 有失败则留在选择模式, 失败项仍勾着可重试。静默退出, 别把成功 toast 盖掉。
+    if (!r.failed?.length && selectMode.value) {
+      selectMode.value = false
+      lastSelIdx = -1
+    }
   } catch (e) {
     ui.err('移动失败: ' + e.message)
   } finally {
@@ -655,6 +677,11 @@ async function doCopy(target) {
     // 副本落盘成功不代表这批要继续操作 —— 与批量移动同款语义: 失败的留着可重试。
     selected.value = new Set((r.failed || []).map((f) => f.path))
     copyOpen.value = false
+    // 与批量移动同款: 全部成功收掉多选工具条(2026-11-10), 有失败留在选择模式可重试
+    if (!r.failed?.length && selectMode.value) {
+      selectMode.value = false
+      lastSelIdx = -1
+    }
   } catch (e) {
     ui.err('复制失败: ' + e.message)
   } finally {
@@ -1272,6 +1299,14 @@ usePagePath('scan', computed(() => {
             data-test="scan-batch-copy"
             @click="openCopy"
           >📋 复制到…</TvButton>
+          <TvButton
+            size="sm"
+            variant="ghost"
+            :disabled="!canCompare"
+            data-test="scan-batch-compare"
+            :title="canCompare ? '两图并排/滑动对比' : '选中恰好 2 张时可用'"
+            @click="openCompare"
+          >🆚 对比</TvButton>
 
           <!-- 删除与移动/复制之间隔一道**带颜色**的分隔线: 不可逆动作不能和常规动作挤在一格里
                (用户 2026-10-22 明确要求), 再靠右贴到 ✕ 旁边, 顺手划过也划不到它。 -->
@@ -1296,6 +1331,14 @@ usePagePath('scan', computed(() => {
         :folders="folders"
         :busy="copying"
         @pick="doCopy"
+      />
+
+      <!-- 双图对比全屏遮罩(2026-11-10): 不动选择集, 关掉即回到选择模式 -->
+      <TvCompareView
+        v-if="compareOpen"
+        :a="comparePair[0]"
+        :b="comparePair[1]"
+        @close="compareOpen = false"
       />
     </template>
     </div>

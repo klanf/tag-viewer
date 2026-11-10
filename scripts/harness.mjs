@@ -239,7 +239,18 @@ export function ensureWorkDir({ quiet = false } = {}) {
   //
   //   顺序很重要: 先把 as_source 打回复位, 再按"目录在不在磁盘"降级, 最后才删。
   //   库不存在(第一次跑, 还没建) 时跳过。
-  const sandboxDb = path.join(dataDir, 'tags.db')
+  //
+  //   ⚠️ 2026-11-08: 这里原来写死 `path.join(dataDir, 'tags.db')`, 而 2026-10-30 路由
+  //   改造后库搬到了 **`db/` 子目录**(e2e.mjs 里的 isStaleRecord 早就改成双位置探测了,
+  //   harness 没跟上)。于是 sandboxDb 指向一个不存在的路径 ⇒ **下面整段 folders 复位
+  //   从来没执行过** ⇒ 真实库里 17 条 as_source=1 的行每轮都被原样带进沙箱 ⇒
+  //   「文件夹库: 首次进入是空列表」恒 FAIL(实测 17 张), 而现象看着像"缺夹具库"。
+  //   双位置探测, 别赌。
+  const pickDb = (dir) => {
+    const cands = [path.join(dir, 'db', 'tags.db'), path.join(dir, 'tags.db')]
+    return cands.find((x) => fs.existsSync(x)) || cands[0]
+  }
+  const sandboxDb = pickDb(dataDir)
 
   /**
    * 1.9) 沙箱标签库的**冷启动种子** —— 只在沙箱库不存在时, 从真实库拷一份。
@@ -259,9 +270,11 @@ export function ensureWorkDir({ quiet = false } = {}) {
    * 不一致; VACUUM INTO 出来的是一致快照。失败就退回逐文件拷贝(含 -wal/-shm)。
    */
   if (!fs.existsSync(sandboxDb)) {
-    const realDb = path.join(src, 'tags.db')
+    const realDb = pickDb(src)
     if (fs.existsSync(realDb)) {
       try {
+        // sandboxDb 落在 db/ 子目录时, 那一层可能还不存在(VACUUM INTO 不会自建目录)
+        fs.mkdirSync(path.dirname(sandboxDb), { recursive: true })
         const d = new DatabaseSync(realDb)
         d.exec('PRAGMA busy_timeout = 5000')
         d.exec(`VACUUM INTO '${sandboxDb.replace(/'/g, "''")}'`)

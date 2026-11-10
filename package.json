@@ -1,7 +1,7 @@
 {
   "name": "tag-viewer-electron",
   "productName": "TagViewer",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "private": true,
   "description": "WD14 标签可视化看板 —— Electron + Vue 3 重构版",
   "type": "module",
@@ -52,6 +52,9 @@
     "test:layout": "node scripts/test-data-layout.mjs",
     "test:nodata": "node scripts/test-nodata-boot.mjs",
     "test:boot-rescue": "node scripts/test-boot-rescue.mjs",
+    "test:nlbank": "node scripts/test-nl-bank.mjs",
+    "test:nlexport": "node scripts/test-nl-export.mjs",
+    "test:advsets": "node scripts/test-adv-sets.mjs",
     "test:paths": "node scripts/check-paths.mjs",
     "test:tagcats": "node scripts/test-tagcats.mjs",
     "test:scan-stream": "node scripts/test-scan-stream.mjs",
@@ -66,7 +69,8 @@
     "txt:archive:apply": "node scripts/archive-legacy-txt.mjs --apply",
     "txt:archive:undo": "node scripts/archive-legacy-txt.mjs --undo",
     "test:modeldl": "node scripts/test-model-download.mjs",
-    "test:safety-kb": "node scripts/test-safety-knowledge.mjs"
+    "test:safety-kb": "node scripts/test-safety-knowledge.mjs",
+    "test:safety-floor": "node scripts/test-safety-floor.mjs"
   },
   "dependencies": {
     "pinia": "^3.0.3",

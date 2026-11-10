@@ -141,7 +141,11 @@ export function checkPackaging() {
   for (const need of ['knowledge', 'assets/translations.db', 'assets/wd-pixai-tagger-v0.9.csv', 'tools/tagger_serve.py']) {
     if (!extras.includes(need)) problems.push({ kind: `build.extraResources 少了 ${need}（装出来的包会静默缺文件）` })
   }
-  for (const need of ['knowledge/tag_slots.json', 'knowledge/filter-rules.json', 'knowledge/slot-pools.json']) {
+  for (const need of ['knowledge/tag_slots.json', 'knowledge/filter-rules.json',
+    'knowledge/slot-pools.json',
+    // 自然语言语料库(2026-11-08): 少了它导出端"自然语言段"整块变空功能 ——
+    // 界面会显示"语料库缺失", 用户以为功能没做。与 tag_slots 同理, 必须在包里。
+    'knowledge/nl-bank.json']) {
     if (!fs.existsSync(path.join(ROOT, need))) problems.push({ kind: `知识包缺文件: ${need}` })
   }
   return problems

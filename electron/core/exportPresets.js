@@ -170,18 +170,31 @@ const PARAM_STRS = ['q', 'exclude', 'sort', 'append', 'replace_set',
   // pin_slots = 钉词串 "legwear:white_thighhighs"。
   // randomize_sections 留在白名单里 = 老预设兼容, 解析端两边都认。
   // ban_slots = 禁用槽串 "headwear,eyewear"(整词删除)。
-  'randomize_sections', 'randomize_slots', 'pin_slots', 'ban_slots', 'randomize_seed']
+  // 自然语言段(2026-11-08): nl_dims "pose,costume,hair" / nl_level / nl_seed。
+  // 同样必须进白名单 —— 漏一个键, 预设里那段配置就被 normParams 静默剥掉。
+  'randomize_sections', 'randomize_slots', 'insert_slots', 'pin_slots', 'ban_slots', 'randomize_seed',
+  'nl_dims', 'nl_level', 'nl_seed',
+  // 高级替换方案(2026-11-09): '@active'=跟随当前方案 / '0'=不启用 / 方案 id / 空=旧版快照参数。
+  // 预设选了方案后, exporter 以方案库 cfg 为准, 上面的 randomize_*/nl_* 快照参数被覆盖。
+  'adv_set']
 const PARAM_ENUMS = {
   mode: ['any', 'all'],
   match: ['contains', 'exact'],
   exclude_match: ['contains', 'exact'],
   // 安全剔除口径(2026-10-18): follow=跟随全局安全模式档位(老预设缺省, 行为不变)
   safe_level: ['follow', 'core', 'edge', '0', '1', '2', '3', '4'],
+  // 自然语言段档位(2026-11-08): 只认三档, 脏值落回 sfw(默认最保守)
+  nl_level: ['sfw', 'soft', 'nsfw'],
 }
 /** 这几个与首页/ buildExport 的默认值对齐: 缺省 = 开 */
 const PARAM_BOOL_TRUE = ['exclude_char', 'spaces', 'blacklist', 'replace', 'bg',
   'randomize_nsfw',    // 成人词库闸门缺省 = 允许(与旧行为一致)
-  'pin_fill']          // 钉词缺词补上(2026-10-30): 缺省 = 补("必现"语义)
+  'pin_fill',          // 钉词缺词补上(2026-10-30): 缺省 = 补("必现"语义)
+  'nl_strip_pose',     // 抽动作句时剔掉原图动作槽(2026-11-08): 缺省 = 剔(防打架)
+  'nl_strip_costume',  // 抽穿搭句时剔掉原图单品槽(2026-11-09): 缺省 = 剔(防打架)
+  'nl_strip_hair',     // 抽发型句时剔掉发型形状槽(2026-11-09): 缺省 = 剔(防打架)
+  'nl_pose_view']      // 动作句带机位(2026-11-08): 缺省 = 带。机位是 pose 的附属,
+                       // 不是独立维度 —— 与管线里的 strip_view("剔除视角标签")是两回事
 const PARAM_BOOL_FALSE = ['with_path', 'strip_char', 'strip_view', 'safe_only', 'seg_mode',
   'groups',           // 过滤组去冲突: 之前不在白名单里, 编辑预设一存就静默丢(实锤)
   'randomize']        // 随机替换总开关: 缺省 = 关

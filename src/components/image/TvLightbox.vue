@@ -153,6 +153,28 @@ async function copyMetaTags() {
   ui.ok(`✅ 已复制图内标签 ${metaTags.value.length} 个`)
 }
 
+/* LoRA 清单(2026-11-10): 图内正/负面提示词里的 <lora:名字:权重>, 点 chip 复制完整写法。
+ * 有用户把 lora 塞进负面元数据存着, 这里正面负面一起收, chip 上标出来源。
+ * 2026-11-10 三补: 「🧩 LoRA」块本体也加显隐开关(用户原话: 开关控制是否显示 lora 节点容器)。
+ * 2026-11-10 二版: 开关搬到独立一行左对齐; lora 权重默认显示、不再给开关(用户拍板)。 */
+const metaLoras = computed(() => lb.data?.meta_loras || [])
+/* tag 权重表(2026-11-10): {tag: '1.2'} —— promptTagWeights 归一化 key, 与 metaTags 对得上 */
+const metaWeights = computed(() => lb.data?.meta_weights || {})
+/* 显示开关(LoRA 块本体 / tag 权重, 各自独立记忆 localStorage; 默认都开)。
+ * lora 权重没有开关 —— 2026-11-10 用户拍板: 权重默认就该显示, 少一个按钮少一分乱 */
+const showLoraBlock = ref(localStorage.getItem('lb_lora_block') !== '0')
+const showTagW = ref(localStorage.getItem('lb_tag_weight') !== '0')
+watch(showLoraBlock, (v) => localStorage.setItem('lb_lora_block', v ? '1' : '0'))
+watch(showTagW, (v) => localStorage.setItem('lb_tag_weight', v ? '1' : '0'))
+async function copyLora(l) {
+  await ui.copy(`<lora:${l.name}:${l.weight}>`)
+  ui.ok(`📋 已复制 ${l.name} · ${l.weight}`)
+}
+
+/* 自然语言回译块(2026-11-10 第一版)已撤: nl 词的中文翻译与 动作/服装/发型 分类
+ * 改由 nl-bank 片段索引直接供给(translate.js 补中文 + tagcats 归类) ——
+ * 胶囊自己长中文、落对分组, 不再需要单独一个块(2026-11-10 用户拍板)。 */
+
 /* 点图片区: 点在**图片本体**上不关(2026-09-19 定的, 防误关);
  * 点在四周黑边(letterbox)上算空白 -> 关(2026-09-19 追加: 关闭区域太小)。
  * img 是 object-fit: contain —— 元素盒子铺满整个图片区, 但可见内容只占中间
@@ -494,9 +516,7 @@ function preheat() {
             <span v-if="external" class="badge" title="这张图不在标签库里, 标签是从图片元数据(PNG tEXt / A1111 / ComfyUI)现场解析的">
               库外图片 · {{ promptSource || '未知来源' }}
             </span>
-            <span v-if="lb.needBg && tagSet === 'db'" class="badge warn" title="该图缺背景/场景标签, 复制时会自动追加背景标签">
-              🌄 缺背景 · 复制时补 {{ lb.bgAppend.join('/') }}
-            </span>
+            <!-- 缺背景徽章已撤(2026-11-10 用户拍板): 复制时补背景的逻辑照旧, 只是不再挂这行提示 -->
             <!-- ban 命中数: 明确区分「没适配」和「这张图确实没有黑名单词」;
                  旁边挂 显示/隐藏 开关(只在本图有命中时出现)。meta 集没有 ban 体系, 切走就藏 -->
             <span
@@ -524,7 +544,9 @@ function preheat() {
           </div>
 
           <!-- 双 tag 源切换(2026-10-20): 只在图内真有元数据时出现。
-               底部那排「复制」永远作用于标签库; meta 集在自己的小节里复制 -->
+               底部那排「复制」永远作用于标签库; meta 集在自己的小节里复制。
+               显隐开关独立一行(2026-11-10): 挤在切换行右侧太乱, 换行左对齐;
+               lora 权重默认就显示, 不再给开关 -->
           <div v-if="!lb.loading && hasMeta" class="lb-src-row">
             <div class="seg" role="tablist">
               <button :class="{ on: tagSet === 'db' }" title="反推入库的规范化 Danbooru 标签(tags.db)" @click="setTagSet('db')">标签库</button>
@@ -536,6 +558,20 @@ function preheat() {
                 <button :class="{ on: metaMode === 'raw' }" title="一字不动展示原始提示词(自然语言/混合写法用)" @click="setMetaMode('raw')">原始</button>
               </div>
             </template>
+          </div>
+          <div v-if="!lb.loading && hasMeta" class="lb-toggle-row">
+            <button
+              class="wtoggle"
+              :class="{ on: showLoraBlock }"
+              title="显示/隐藏 LoRA 区块(图内元数据里收集到的 lora 清单)"
+              @click="showLoraBlock = !showLoraBlock"
+            >🧩 LoRA</button>
+            <button
+              class="wtoggle"
+              :class="{ on: showTagW }"
+              title="显示/隐藏 tag 的权重角标(图内元数据里带 (tag:1.2) 写法的)"
+              @click="showTagW = !showTagW"
+            >tag权重</button>
           </div>
 
           <TvState v-if="lb.loading" state="loading" size="sm" text="加载标签..." inline />
@@ -565,6 +601,7 @@ function preheat() {
               copyable
               :grouped="app.settings.groupedTags !== false"
               :hit-map="metaHits"
+              :weight-map="showTagW ? metaWeights : null"
               size="sm"
               empty-text="图内元数据里没解析出标签"
               @click="({ tag }) => metaJump(tag)"
@@ -581,6 +618,21 @@ function preheat() {
                 <TvButton size="sm" @click="copyMetaPrompt">📋 复制原文</TvButton>
               </div>
               <pre class="raw-prompt">{{ metaPrompt || '(空)' }}</pre>
+            </div>
+            <!-- 自然语言回译块已撤(2026-11-10 二版): nl 词的中文/分类由 nl-bank 片段索引
+                 直接供给, 胶囊自己长中文、落对分组, 不再单独成块 -->
+            <!-- LoRA 区块(2026-11-10): 正/负面原文里的 lora 标记, 分类/原始两种模式都显示。
+                 点 chip = 复制完整 <lora:名字:权重>, 直接贴回提示词用 -->
+            <div v-if="showLoraBlock && metaLoras.length" class="lora-row">
+              <span class="lora-label">🧩 LoRA ×{{ metaLoras.length }}</span>
+              <button
+                v-for="l in metaLoras"
+                :key="l.name + l.src"
+                class="lora-chip"
+                type="button"
+                :title="`复制 <lora:${l.name}:${l.weight}>${l.src === '负面' ? '(来自负面提示词)' : l.src === '节点' ? '(来自工作流加载节点, 权重=节点强度)' : ''}`"
+                @click="copyLora(l)"
+              >{{ l.name }}<b class="w">{{ l.weight }}</b><i v-if="l.src === '负面'" class="neg">负面</i><i v-else-if="l.src === '节点'" class="nsrc">节点</i></button>
             </div>
           </template>
 
@@ -656,6 +708,22 @@ function preheat() {
               @leave="ui.hideTip()"
               @mousemove="ui.moveTip($event)"
             />
+            <!-- 自然语言回译块已撤(2026-11-10 二版): 标签库模式同样不再需要,
+                 nl 词的中文/分类由 nl-bank 片段索引直接供给 -->
+            <!-- LoRA 区块(2026-11-10): 标签库模式同样显示 —— lora 信息在图内元数据里,
+                 与 tag 来源(库内/图内)无关, 两种模式都该看得到; getLightboxData 的库内
+                 路径也合并了 metaInfoFor, meta_loras 两种模式都有数据 -->
+            <div v-if="showLoraBlock && metaLoras.length" class="lora-row">
+              <span class="lora-label">🧩 LoRA ×{{ metaLoras.length }}</span>
+              <button
+                v-for="l in metaLoras"
+                :key="l.name + l.src"
+                class="lora-chip"
+                type="button"
+                :title="`复制 <lora:${l.name}:${l.weight}>${l.src === '负面' ? '(来自负面提示词)' : l.src === '节点' ? '(来自工作流加载节点, 权重=节点强度)' : ''}`"
+                @click="copyLora(l)"
+              >{{ l.name }}<b class="w">{{ l.weight }}</b><i v-if="l.src === '负面'" class="neg">负面</i><i v-else-if="l.src === '节点'" class="nsrc">节点</i></button>
+            </div>
           </template>
         </div>
       </div>
@@ -841,8 +909,38 @@ a.badge.hint:hover { border-color: var(--accent); }
 .lb-meta-label { font-size: 11px; color: var(--muted); flex: 0 0 auto; }
 .lb-nometa { font-size: 11px; color: var(--muted); }
 
+/* LoRA 区块(2026-11-10): chip 点了复制完整 <lora:名字:权重> */
+.lora-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
+.lora-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.lora-chip {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  padding: 2px 9px; border-radius: 999px; cursor: pointer;
+  font-size: 11px; line-height: 1.7; text-align: left;
+  background: var(--panel-2, var(--panel)); border: 1px solid var(--border); color: var(--text);
+  overflow: hidden;
+}
+.lora-chip:hover { border-color: var(--accent, var(--primary)); }
+.lora-chip .w { font-weight: 600; color: var(--accent, var(--primary)); font-style: normal; }
+.lora-chip .neg {
+  font-style: normal; font-size: 10px; padding: 0 5px; border-radius: 4px;
+  background: var(--warn-bg, rgba(255, 170, 60, .18)); color: var(--warn, #e0a040); white-space: nowrap;
+}
+.lora-chip .nsrc {
+  font-style: normal; font-size: 10px; padding: 0 5px; border-radius: 4px;
+  background: var(--panel-3, rgba(128, 128, 128, .14)); color: var(--muted); white-space: nowrap;
+}
+
 /* 双 tag 源切换(2026-10-20): 一排分段按钮, 与设置页开关同一套观感 */
 .lb-src-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 权重角标开关(2026-11-10): chip 形小按钮, 与 seg 同观感 */
+.wtoggle {
+  border: 1px solid var(--border); border-radius: 999px; background: transparent;
+  color: var(--muted); font-size: 11px; padding: 2px 10px; cursor: pointer; flex: 0 0 auto;
+}
+.wtoggle.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft, rgba(59, 130, 246, .12)); }
+
+/* 显隐开关行(2026-11-10 二版): 从双源切换行右侧搬到独立一行, 左对齐 */
+.lb-toggle-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .seg {
   display: inline-flex; border: 1px solid var(--border); border-radius: 8px;
   overflow: hidden; flex: 0 0 auto;

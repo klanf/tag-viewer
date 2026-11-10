@@ -52,6 +52,118 @@ export const DEFAULT_EDGE = [
   'censored', 'mosaic_censoring', 'uncensored',
 ]
 
+/**
+ * 内置兜底档位表(2026-11-11): 槽位词典没收、词表也没写的**毫无争议**敏感词。
+ * ---------------------------------------------------------------
+ * 起因(用户实测): 「≤L0 导出」漏出 small_penis / group_sex / imminent_vaginal
+ * 这批 —— 它们在槽位表里要么词条缺失, 要么挂在 count/body_part 槽且
+ * level=null(被刻意不收: "画里有胸≠暴露"的展示口径), levelOfTag 兜底 0 =
+ * 常规, L0 阈值自然拦不住。摸底 80 个常见 danbooru NSFW 词, 当时 39 个漏。
+ * 这里只收**语义上不可能中性**的词; 刻度对齐既有数据
+ * (sex=3 / threesome=4 / nude·nipples=2 / panties=1)。
+ * 与 safety_tags.txt 的关系: 覆盖段**永远优先**(levelOfTag 先查段再查这张表),
+ * 用户写 [L0] 可以把其中任何词强行拉回常规。
+ */
+const BUILTIN_FLOOR = {
+  /* L1 擦边 */
+  bow_bikini: 1, shared_bathing: 1, bath: 1,
+  /* 精确键压过 sex 词根误伤(mixed-sex 里的 sex 不是性行为) */
+  'mixed-sex_bathing': 1, 'same-sex_bathing': 1,
+  apron: 1, waist_apron: 1, white_apron: 1, maid_apron: 1, frilled_apron: 1,
+  bodystocking: 1, torn_bodystocking: 1, sexy: 1,
+  /* L2 明显暗示(与 nude / see-through 同级) */
+  naked: 2, nude_filter: 2, nude_insert: 2,
+  'see-through_legwear': 2, see_through_legwear: 2,
+  erect_nipples: 2, puffy_nipples: 2,
+  /* breasts 一族(2026-11-11 改口): 旧口径"画里有胸≠暴露"是为了展示过滤不藏
+   * 93% 的库 —— 但导出口径下它就是用户要剔的词(实测 L0 导出漏 breasts)。
+   * 影响面: 显示上限 L0/L1 会藏掉带胸部标签的图(与 nipples=2 同后果),
+   * 默认上限 L2 不受影响; 统计弹窗会如实报数字。 */
+  breasts: 2, big_breasts: 2, large_breasts: 2, huge_breasts: 2, small_breasts: 2,
+  /* 「扒开/没穿/透出」族 —— 比裸泳装(1)更露一级(2026-11-11 实测 L0 导出漏出) */
+  bikini_bottom_aside: 2, bikini_top_lift: 2, bikini_under_clothes: 2,
+  bikini_under_shorts: 2, unworn_bikini: 2, unworn_bikini_top: 2, unworn_bikini_bottom: 2,
+  swimsuit_aside: 2, bra_lift: 2, bra_peek: 2, bra_visible_through_clothes: 2,
+  panty_lift: 2, pantyhose_pull: 2, apron_lift: 2, male_underwear_pull: 2, male_underwear_peek: 2,
+  /* naked_x = 只穿一件开襟衣物, 接近全裸(nude 同级) */
+  naked_apron: 2, naked_shirt: 2, naked_jacket: 2, naked_kimono: 2, naked_towel: 2,
+  naked_coat: 2, naked_hoodie: 2, naked_capelet: 2, naked_cape: 2, naked_sweater: 2,
+  naked_ribbon: 2, naked_bandage: 2, naked_sheet: 2, naked_scarf: 2, naked_skirt: 2,
+  naked_cloak: 2, naked_shoes: 2, naked_overalls: 2, naked_tabard: 2, nearly_naked_apron: 2,
+  /* 暴露/暗示/审查标记 */
+  clothed_male_nude_female: 2, clothed_female_nude_female: 2, clothed_male_nude_male: 2,
+  topless: 2, topless_female: 2, topless_male: 2, bottomless: 2,
+  assisted_exposure: 2, accidental_exposure: 2, underarms_exposed: 2,
+  sexually_suggestive: 2, implied_sex: 2, implied_after_sex: 2, implied_fellatio: 2,
+  implied_anal: 2, implied_masturbation: 2, implied_pregnancy: 2, pregnancy_test: 2,
+  holding_pregnancy_test: 2,
+  pubic_tattoo: 2, nippleless_clothes: 2, lewd: 2, erotic: 2,
+  /* 词根规则盖不住的零散组合(2026-11-11 实测漏词) */
+  panty_peek: 2, 'side-tie_peek': 2, pelvic_curtain_lift: 2, chest_lifted: 2,
+  knees_pulled_to_the_shoulders: 2, exhibitionism: 2, voyeurism: 2,
+  implied_futanari: 2, ahegao: 2, lifted_by_self: 2, smelling_clothes: 2,
+  midriff_peek: 1,
+  /* L3 露骨(与 sex / vaginal 同级) */
+  small_penis: 3, erect_penis: 3, huge_penis: 3, penile: 3,
+  testicles: 3, balls: 3, vulva: 3, labia: 3,
+  penetration: 3, imminent_penetration: 3, imminent_vaginal: 3,
+  imminent_fellatio: 3, just_the_tip: 3, titjob: 3, fellatio_invitation: 3,
+  doggy_style: 3, doggystyle: 3, cowgirl_position: 3, plugged: 3, precum: 3,
+  'onee-shota': 3, onee_shota: 3, lolicon: 3,
+  crotchless_pants: 3,
+  /* L4 极端(与 threesome / gangbang 同级) */
+  group_sex: 4, orgy: 4, cum_on_face: 4, bestiality: 4, incest: 4,
+  watersport: 4, golden_shower: 4, scat: 4, egg_laying: 4, birth: 4,
+}
+
+/**
+ * 内置词根规则(2026-11-11 查漏补缺): 精确键列不过来的**变体大军**用词边界正则兜。
+ * 起因: 用户给的 10 万行「L0 导出」实测里, bikini/swimsuit 有 40+ 变体
+ * (string/frilled/side-tie/one-piece/highleg...), cum/penis/pussy/nipple 也有几十个
+ * 组合词 —— 逐个列键既写不完也防不住新词。
+ * 口径 = 词边界命中(下划线/串首尾为界), 刻度对齐既有数据:
+ *   cum 族=3(cum 本体) / penis·pussy·nipple·testicle·erection 族=2(本体同级)
+ *   bikini·swimsuit·panties·bra·underwear·fishnet·onsen·bathing 族=1(panties=1)
+ * ⚠️ 正则都带词边界, cumulus/cumulonimbus/analog 这类前缀误伤不命中。
+ * 优先级: 用户覆盖段 > 精确 dict(含 BUILTIN_FLOOR) > 这里的词根规则。
+ */
+const BUILTIN_WORD_RULES = [
+  [/(?:^|_)censor(?:s|ed|ing)?(?=$|[_-])/, 2],                           // bar_censor/uncensored/mosaic_censoring...
+  [/(?:^|_)cum(?:shot|_shot)?(?=$|[_-])/, 3],                            // cum_on_x/internal_cumshot/projectile_cum
+  [/(?:^|_)ejaculat(?:e|ing|ion)(?=$|[_-])/, 3],                         // female_ejaculation/handsfree_ejaculation
+  [/(?:^|_)orgasm(?=$|[_-])/, 3], [/(?:^|_)penetrat(?:e|ed|ion)(?=$|[_-])/, 3],
+  [/(?:^|_)fellatio(?=$|[_-])/, 3], [/(?:^|_)anal(?=$|[_-])/, 3], [/(?:^|_)raped?(?=$|[_-])/, 3],
+  [/(?:^|_)molest(?:e|ed|ion|ation)(?=$|[_-])/, 3], [/(?:^|_)tentacle(?:s)?(?=$|[_-])/, 3],
+  [/(?:^|_)incest(?=$|[_-])/, 3], [/(?:^|_)shota(?=$|[_-])/, 3], [/(?:^|_)inflation(?=$|[_-])/, 3],
+  [/(?:^|_)pussyjob(?=$|[_-])/, 3], [/(?:^|_)cumdump(?=$|[_-])/, 3],
+  [/(?:^|_)sex(?=$|[_-])/, 3],                                           // thigh_sex/stealth_sex/armpit_sex
+  [/(?:^|_)anus(?=$|[_-])/, 3], [/(?:^|_)labia(?=$|[_-])/, 3], [/(?:^|_)vulva(?=$|[_-])/, 3], [/(?:^|_)vagina(?=$|[_-])/, 3],
+  [/(?:^|_)threesome(?=$|[_-])/, 4], [/(?:^|_)futanari(?=$|[_-])/, 3], [/(?:^|_)hump(?:ing)?(?=$|[_-])/, 3],
+  [/(?:^|_)penis(?:es)?(?=$|[_-])/, 2], [/(?:^|_)pussy(?=$|[_-])/, 2], [/(?:^|_)clitor(?:is|al)?(?=$|[_-])/, 2],
+  [/(?:^|_)testicle(?:s)?(?=$|[_-])/, 2], [/(?:^|_)erection(?=$|[_-])/, 2], [/(?:^|_)half-erect(?=$|[_-])/, 2],
+  [/(?:^|_)nipple(?:s)?(?=$|[_-])/, 2], [/(?:^|_)areola(?:e)?(?=$|[_-])/, 2],
+  [/(?:^|_)masturbat(?:e|ion)(?=$|[_-])/, 2], [/(?:^|_)handjob(?=$|[_-])/, 2], [/(?:^|_)titjob(?=$|[_-])/, 2], [/(?:^|_)paizuri(?=$|[_-])/, 2],
+  [/(?:^|_)vibrator(?=$|[_-])/, 2], [/(?:^|_)dildo(?=$|[_-])/, 2], [/(?:^|_)sex_toy(?=$|[_-])/, 2],
+  [/(?:^|_)pubic(?:_hair|_tattoo|_stubble)?(?=$|[_-])/, 2],
+  [/(?:^|_)naked(?=$|[_-])/, 2], [/(?:^|_)nude(?=$|[_-])/, 2], [/(?:^|_)precum(?=$|[_-])/, 2],
+  [/(?:^|_)peeing(?=$|[_-])/, 2], [/(?:^|_)urinat(?:e|ing|ion)(?=$|[_-])/, 2], [/(?:^|_)scat(?=$|[_-])/, 2],
+  [/(?:^|_)bound(?=$|[_-])/, 3], [/(?:^|_)gag(?=$|[_-])/, 3], [/(?:^|_)blindfold(?=$|[_-])/, 2],
+  [/(?:^|_)unworn(?=$|[_-])/, 2], [/(?:^|_)crotch(?=$|[_-])/, 2], [/(?:^|_)aroused(?=$|[_-])/, 2],
+  [/(?:^|_)porn(?:ography)?(?=$|[_-])/, 2],
+  /* 掀衣/扒衣动作族(x_aside/x_lift/x_pull/x_peek) —— 只认衣物词根, hair_lift/leg_lift
+   * /zipper_pull_tab/wind_lift 这类中性组合不命中 */
+  [/(?:clothing|clothes|kimono|leotard|sweater|shirt|shorts|strap|camisole|hoodie|jacket|thighhighs|buruma|thong|vest|sock|glove|fabric|babydoll)(?=_(?:aside|lift|pull|peek))/, 2],
+  /* 动作在前、衣物在尾的变体: lifting_own_clothes / lifting_another's_clothes */
+  [/lift(?:ing|ed)_(?:own_|her_|another'?s_)?(?:clothes|clothing|skirt|dress)(?=$|[_-])/, 2],
+  [/(?:^|_)bikini(?=$|[_-])/, 1], [/(?:^|_)swimsuit(?=$|[_-])/, 1], [/(?:^|_)panties(?=$|[_-])/, 1], [/(?:^|_)panty(?=$|[_-])/, 1],
+  [/(?:^|_)underwear(?=$|[_-])/, 1], [/(?:^|_)lingerie(?=$|[_-])/, 1], [/(?:^|_)fishnet(?:s)?(?=$|[_-])/, 1],
+  [/(?:^|_)garter(?=$|[_-])/, 1], [/(?:^|_)pantyhose(?=$|[_-])/, 1], [/(?:^|_)bra(?=$|[_-])/, 1],
+  [/(?:^|_)onsen(?=$|[_-])/, 1], [/(?:^|_)bath(?:ing|house|room|robe|tub|stool)?(?=$|[_-])/, 1],
+  /* shower=淋浴(1); 负向后顾断言排除 meteor_shower(流星雨)/summer_shower(阵雨) 天气词 */
+  [/(?:^|_)(?<!meteor_)(?<!summer_)shower(?:ing|_head)?(?=$|[_-])/, 1],
+  [/(?:^|_)apron(?=$|[_-])/, 1], [/(?:^|_)bodystocking(?=$|[_-])/, 1], [/(?:^|_)breasts?(?=$|[_-])/, 2],
+]
+
 const cache = {
   tags: { path: '', mtime: -1, value: null },
   state: { path: '', mtime: -1, value: null },
@@ -78,9 +190,6 @@ function defaultText() {
     '# 这里写过的词**覆盖**词典档位; 写 [L0] 可以把词典里的敏感词强制拉回常规。',
     '# 改完保存即生效, 不用重启看板。',
     '#',
-    '# ⚠️ 刻意没收录 breasts / large_breasts 这类"体型"标签: "画里有胸"不等于',
-    '#    暴露, 二次元图里几乎人人都有(实测 breasts 命中 93% 的图), 收进去',
-    '#    等于把整个库藏起来。',
     '',
     '[L4]',
     ...DEFAULT_CORE,
@@ -199,9 +308,14 @@ function dictLevels() {
           const n = Number(rec?.level)
           if (n >= 1 && n <= 2) lv = n
         }
-        if (lv > 0) out[t] = lv
+        if (lv > 0) out[String(t).toLowerCase().replace(/[\s_]+/g, '_')] = lv
       }
     } catch { /* 词典缺失 -> 全部按 0, 只剩覆盖段兜底 */ }
+    // 内置兜底表(2026-11-11): 只补槽位表没收的键, 槽位表显式给的档位优先
+    for (const [t, lv] of Object.entries(BUILTIN_FLOOR)) {
+      const k = String(t).toLowerCase().replace(/[\s_]+/g, '_')
+      if (!(k in out)) out[k] = lv
+    }
     cache.dict = { mtime: mt, value: out }
   }
   return cache.dict.value
@@ -244,10 +358,34 @@ export function safetyMatcher() {
 /** 单标签的敏感等级: 覆盖段(L0 优先) > 词典 > 0 */
 export function levelOfTag(tag, m = null) {
   const mat = m || safetyMatcher()
-  const t = String(tag).toLowerCase()
-  for (const s of SECS) if (hitOne(t, mat.secs[s])) return Number(s.slice(1))
-  // dict 恒为对象(见 dictLevels); 这里再兜一层, 免得将来别的构造路径漏了字段又炸整库
-  return (mat.dict || {})[t] ?? 0
+  // memo(2026-11-11): 词根规则 ~50 条正则逐个试, 中性词最坏全跑完 —— 读库全量
+  // 重算时百万级调用会拖秒。挂 matcher 单例上缓存; 原始串/归一键双键, 热路径
+  // 重复形态直接命中跳过归一。
+  let memo = mat._lvMemo
+  if (!memo) memo = mat._lvMemo = new Map()
+  let hit = memo.get(tag)
+  if (hit !== undefined) return hit
+  // 归一(2026-11-11): 小写 + 下划线/空格等价 —— 导出行产物是空格写法("group sex"),
+  // 库/词典是下划线(group_sex), 不归一的话空格形态整列漏判(实测 L0 漏出)。
+  const t = String(tag).toLowerCase().replace(/[\s_]+/g, '_')
+  hit = memo.get(t)
+  if (hit !== undefined) { memo.set(tag, hit); return hit }
+  let lv
+  let done = false
+  for (const s of SECS) if (hitOne(t, mat.secs[s])) { lv = Number(s.slice(1)); done = true; break }
+  if (!done) {
+    // dict 恒为对象(见 dictLevels); 这里再兜一层, 免得将来别的构造路径漏了字段又炸整库
+    const d = mat.dict || {}
+    if (t in d) lv = d[t]
+    else {
+      // 词根规则兜底(2026-11-11): 变体大军(bikini/cum/penis 系几十个组合词)按词边界判
+      lv = 0
+      for (const [re, r] of BUILTIN_WORD_RULES) if (re.test(t)) { lv = r; break }
+    }
+  }
+  memo.set(t, lv)
+  memo.set(tag, lv)
+  return lv
 }
 
 /**
@@ -296,7 +434,14 @@ export function safetyExportStripper(levelOpt = '') {
     const n = parseInt(raw, 10)
     threshold = Number.isNaN(n) ? globalMax : Math.max(0, Math.min(4, n))
   }
-  return (tag) => levelOfTag(tag) > threshold
+  return (tag) => {
+    // 剥壳(2026-11-11): 库里混有 A1111 直出的加权形态 —— uncensored:2 / {cum...:1.5},
+    // 不剥的话带尾巴的词查表必落空(实测 L0 导出漏 uncensored:2)。
+    const t = String(tag)
+      .replace(/^\{+|\}+$/g, '')                 // 花括号壳 {xxx:1.5}
+      .replace(/[:：]\s*\d+(?:\.\d+)?\s*$/, '')  // 尾部权重 uncensored:2
+    return levelOfTag(t) > threshold
+  }
 }
 
 /* ------------------------------------------------------------ 开关与档位 */

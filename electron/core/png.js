@@ -1,3 +1,5 @@
+import { promptToTags } from './prompt.js'
+
 /**
  * 从图片内嵌元数据里还原 AI 生成提示词
  * ====================================
@@ -290,6 +292,205 @@ function weilinTokensRaw(raw) {
   return out.join(', ')
 }
 
+/** 负面提取用的 WeiLin 解析: 保留 lora 词条(2026-11-10: 有用户把 lora 塞进负面元数据) */
+function weilinTokensKeepLora(raw) {
+  let arr
+  try { arr = JSON.parse(raw) } catch { return '' }
+  if (!Array.isArray(arr)) return ''
+  const out = []
+  for (const it of arr) {
+    if (!it || typeof it !== 'object') continue
+    const t = it.text
+    if (typeof t === 'string' && t.trim()) out.push(t.trim())
+  }
+  return out.join(', ')
+}
+
+// ---------------------------------------------------------------- 负面提示词 + LoRA(2026-11-10)
+
+const LORA_RE = /<lora:([^:<>]+):([+-]?[\d.]+)(?::[^>]*)?>/gi
+
+/** 从正/负面原文里收 <lora:名字:权重>(含可选第三段 block weight); 同名只留首个(正面优先)。
+ *  权重保留原始写法(0.80 不折成 0.8), 复制出去要跟作者写的一字一样。 */
+function collectLoras(texts) {
+  const out = []
+  const seen = new Set()
+  for (const { label, text } of texts) {
+    if (!text) continue
+    for (const m of text.matchAll(LORA_RE)) {
+      const name = m[1].trim()
+      if (!name) continue
+      const key = name.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ name, weight: m[2], src: label })
+    }
+  }
+  return out
+}
+
+/** A1111 parameters 串里的负面段: 'Negative prompt:' 起到设置行(Steps:/Seed: 等)前 */
+function a1111Negative(parameters) {
+  const i = parameters.indexOf('Negative prompt:')
+  if (i < 0) return ''
+  const rest = parameters.slice(i + 'Negative prompt:'.length)
+  const m = rest.match(/\n\s*(?:Steps|Size|Seed|Model|Sampler|CFG scale|Denoising|Clip skip|Version|Hashes|Schedule|Noise Schedule|Eta)\b[^:\n]*:/)
+  return (m ? rest.slice(0, m.index) : rest).trim()
+}
+
+/** 数字权重收敛成短写法: 节点里的 strength 常带浮点尾数(0.7500000000000001), 收敛到 0.75 */
+function fmtNodeWeight(w) {
+  if (typeof w === 'number') return String(+w.toPrecision(6))
+  return String(w)
+}
+
+/** 节点级 LoRA 收集(2026-11-10): ComfyUI 的 lora 常常不写进提示词文本, 而是走加载器节点挂,
+ *  提示词原文里根本搜不到 <lora:...> —— 要认两类节点:
+ *   - LoraLoader 系(LoraLoader / LoraLoaderModelOnly / 其他 *lora* 类): inputs.lora_name + strength_model
+ *   - rgthree Power Lora Loader: inputs.lora_N = {on, lora, strength}, on:false 的没参与生成, 跳过
+ *  API 格式(prompt 块, 对象图)和 UI 格式(workflow 块, nodes 数组 + widgets_values)都认。 */
+function collectNodeLoras(chunks) {
+  const out = []
+  const push = (name, weight) => {
+    if (!name || typeof name !== 'string') return
+    const n = name.replace(/\\/g, '/').split('/').pop().replace(/\.safetensors$/i, '').trim()
+    if (!n) return
+    out.push({ name: n, weight: fmtNodeWeight(weight), src: '节点' })
+  }
+  const grabInputs = (ins) => {
+    if (!ins || typeof ins !== 'object') return
+    if (typeof ins.lora_name === 'string' && ins.lora_name) {
+      push(ins.lora_name, ins.strength_model ?? ins.strength_clip ?? ins.strength)
+      return
+    }
+    for (const [k, v] of Object.entries(ins)) {
+      if (k === 'PowerLoraLoaderHeaderWidget') continue
+      if (v && typeof v === 'object' && typeof v.lora === 'string' && 'strength' in v) {
+        if (v.on === false) continue
+        push(v.lora, v.strength)
+      }
+    }
+  }
+  for (const key of ['prompt', 'workflow']) {
+    const raw = chunks[key]
+    if (!raw) continue
+    let d
+    try { d = JSON.parse(raw) } catch { continue }
+    if (!d || typeof d !== 'object') continue
+    if (Array.isArray(d.nodes)) {
+      for (const n of d.nodes) {
+        if (!n || typeof n !== 'object' || !/lora/i.test(String(n.type || ''))) continue
+        if (/Power\s*Lora/i.test(String(n.type))) {
+          for (const v of n.widgets_values || []) {
+            if (v && typeof v === 'object' && typeof v.lora === 'string' && 'strength' in v) {
+              if (v.on === false) continue
+              push(v.lora, v.strength)
+            }
+          }
+        } else if (typeof (n.widgets_values || [])[0] === 'string') {
+          push(n.widgets_values[0], n.widgets_values[1])   // LoraLoader UI 格式: [lora_name, sm, sc]
+        } else {
+          grabInputs(n.inputs)
+        }
+      }
+    } else {
+      for (const n of Object.values(d)) {
+        if (!n || typeof n !== 'object' || !/lora/i.test(String(n.class_type || ''))) continue
+        grabInputs(n.inputs)
+      }
+    }
+  }
+  return out
+}
+
+/** ComfyUI prompt JSON(API 格式): 找采样器节点, 顺着 negative 链取负面文本 */
+function comfyNegativeFromPromptJson(d) {
+  for (const n of Object.values(d)) {
+    if (!n || typeof n !== 'object') continue
+    if (!/Sampler/i.test(String(n.class_type || ''))) continue
+    const neg = (n.inputs || {}).negative
+    if (!Array.isArray(neg) || !neg.length) continue
+    const target = d[String(neg[0])]
+    if (!target || typeof target !== 'object') continue
+    const ins = target.inputs || {}
+    const ct = String(target.class_type || '')
+    if (typeof ins.text === 'string' || Array.isArray(ins.text)) return resolveText(ins.text, d)
+    if (ct === 'ShowText|pysssss' && typeof ins.text_0 === 'string') return ins.text_0
+    if (/WeiLin/.test(ct) && typeof ins.temp_str === 'string') return weilinTokensKeepLora(ins.temp_str)
+  }
+  return ''
+}
+
+/** ComfyUI 通用兜底: 收全部候选文本, 剔除「内容在正面里出现过」的, 取最长的当负面 */
+function comfyNegativeGeneric(chunks, positive) {
+  const frags = positive ? positive.split(/[,\n]/).map((f) => f.trim()).filter((f) => f.length >= 8) : []
+  const candidates = []
+  const consider = (s) => { if (typeof s === 'string' && s.trim()) candidates.push(s.trim()) }
+  for (const key of ['prompt', 'workflow']) {
+    const raw = chunks[key]
+    if (!raw) continue
+    let d
+    try { d = JSON.parse(raw) } catch { continue }
+    if (!d || typeof d !== 'object') continue
+    if (Array.isArray(d.nodes)) {
+      for (const n of d.nodes) {
+        if (!n || typeof n !== 'object') continue
+        const wv = n.widgets_values || []
+        if (n.type === 'ShowText|pysssss') { for (const v of wv) consider(v) }
+        else if (n.type === 'CLIPTextEncode' && typeof wv[0] === 'string') consider(wv[0])
+        else if (n.type === 'WeiLinPromptUIWithoutLora') {
+          for (const v of wv) {
+            if (typeof v !== 'string' || !v.trim()) continue
+            if (v.trimStart().startsWith('[')) consider(weilinTokensKeepLora(v))
+            else consider(v)
+          }
+        }
+      }
+    } else {
+      for (const n of Object.values(d)) {
+        if (!n || typeof n !== 'object') continue
+        const ct = n.class_type
+        const ins = n.inputs || {}
+        if (ct === 'ShowText|pysssss') consider(ins.text_0)
+        else if (ct === 'CLIPTextEncode' && typeof ins.text === 'string') consider(ins.text)
+        else if (ct === 'WeiLinPromptUIWithoutLora' && typeof ins.temp_str === 'string') consider(weilinTokensKeepLora(ins.temp_str))
+      }
+    }
+  }
+  let best = ''
+  for (const c of candidates) {
+    if (positive && c === positive.trim()) continue
+    if (positive && c.includes(positive.trim())) continue
+    // 正面里 ≥8 字符的片段在候选里占一半以上 = 它就是正面, 跳过
+    if (frags.length) {
+      let hit = 0
+      for (const f of frags) if (c.includes(f)) hit++
+      if (hit >= Math.max(1, Math.floor(frags.length / 2))) continue
+    }
+    if (c.length > best.length) best = c
+  }
+  return best
+}
+
+/** 提示词里各 tag 的权重(2026-11-10 光箱展示用): (tag:1.2) / (tag:1.2:0.8) → '1.2' / '1.2:0.8'。
+ *  名字归一化与 promptToTags 同一套(剥权重括号/还原转义/下划线化), key 直接对上展示层的 tag。
+ *  无权重的词条不进表(展示层权重开关关掉或没有时 pill 照旧)。
+ * @returns {Record<string, string>} tag -> 权重写法(保留作者原样, 0.80 不折 0.8) */
+export function promptTagWeights(prompt) {
+  const out = {}
+  if (typeof prompt !== 'string' || !prompt) return out
+  for (const raw of prompt.split(',')) {
+    const part = raw.trim()
+    const m = /^\((.+?):([\d.]+)(?::([\d.]+))?\)$/.exec(part)
+    if (!m) continue
+    const w = m[3] ? `${m[2]}:${m[3]}` : m[2]
+    // 名字部分走 promptToTags 归一化(它自己会剥外层权重括号/还原转义括号/转下划线)
+    const t = promptToTags(m[1])[0]
+    if (t && !(t in out)) out[t] = w
+  }
+  return out
+}
+
 // ------------------------------------------------------------------ 对外接口
 
 const SOURCE_LABELS = {
@@ -306,9 +507,38 @@ export function sourceLabel(src) { return SOURCE_LABELS[src] || '' }
  * @returns {{ text: string, source: string }} source 为 '' 表示没识别出元数据
  */
 export function extractImagePrompt(filePath) {
-  const chunks = readPngTextChunks(filePath)
-  if (!Object.keys(chunks).length) return { text: '', source: '' }
+  const { text, source } = extractImageMeta(filePath)
+  return { text, source }
+}
 
+/**
+ * 完整元数据提取(2026-11-10): 正面 + 负面 + LoRA 清单, 只读一次 PNG 文本块。
+ * 热路径(扫描 worker)仍用 extractImagePrompt —— 语义同旧版, 零额外成本;
+ * 光箱单图打开才走这里(负面/LoRA 只有详情展示需要)。
+ * 2026-11-10 二版: nl 回译从这撤了(meta_nl 整句匹配退役) —— nl 词的中文/分类
+ * 改由 nl-bank 片段索引供给(translate.js 补中文 + tagcats 归类), 胶囊自己长中文。
+ * @returns {{ text, source, negative, loras: [{name, weight, src}] }}
+ */
+export function extractImageMeta(filePath) {
+  const chunks = readPngTextChunks(filePath)
+  if (!Object.keys(chunks).length) return { text: '', source: '', negative: '', loras: [] }
+
+  const positive = extractPositiveFromChunks(chunks)
+  const negative = extractNegativeFromChunks(chunks, positive.text)
+  // 内联 <lora:...>(文本里写的)优先, 节点级(加载器挂的)兜底 —— 同名只留前者
+  const inline = collectLoras([{ label: '正面', text: positive.text }, { label: '负面', text: negative }])
+  const seen = new Set(inline.map((l) => l.name.toLowerCase()))
+  const loras = [...inline]
+  for (const l of collectNodeLoras(chunks)) {
+    const key = l.name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    loras.push(l)
+  }
+  return { ...positive, negative, loras }
+}
+
+function extractPositiveFromChunks(chunks) {
   // 0) 自建 SaveImageEx 节点写入的「本张实际使用的提示词」—— 最可信, 优先。
   //    与 prompt/workflow 两块不同, 它记的是链路**算出来的结果**而非节点入参,
   //    所以对"提示词随机生成"的工作流也能给出真值。老图没有这个块, 自动落到下面。
@@ -362,4 +592,41 @@ export function extractImagePrompt(filePath) {
   }
 
   return { text: '', source: '' }
+}
+
+function extractNegativeFromChunks(chunks, positiveText) {
+  // 3) A1111 / Forge / SD.Next: parameters 串的负面段
+  const p = chunks.parameters
+  if (p && p.includes('Negative prompt:')) return a1111Negative(p)
+
+  // 4) NovelAI: Comment JSON 的 negative_prompt
+  for (const key of ['Comment']) {
+    const c = (chunks[key] || '').trim()
+    if (!c.startsWith('{')) continue
+    try {
+      const d = JSON.parse(c)
+      if (d && typeof d === 'object' && d.negative_prompt) return String(d.negative_prompt).trim()
+    } catch { /* 继续 */ }
+  }
+
+  // 5) InvokeAI
+  const im = chunks.invokeai_metadata
+  if (im) {
+    try {
+      const d = JSON.parse(im)
+      if (d && typeof d === 'object' && d.negative_prompt) return String(d.negative_prompt).trim()
+    } catch { /* 继续 */ }
+  }
+
+  // 0/1/2) ComfyUI: 先顺采样器 negative 链(最准), 再走候选剔除兜底
+  if (chunks.prompt) {
+    try {
+      const d = JSON.parse(chunks.prompt)
+      if (d && typeof d === 'object' && !Array.isArray(d)) {
+        const neg = comfyNegativeFromPromptJson(d)
+        if (neg) return neg
+      }
+    } catch { /* 落兜底 */ }
+  }
+  return comfyNegativeGeneric(chunks, positiveText)
 }

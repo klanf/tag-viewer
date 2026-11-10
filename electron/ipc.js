@@ -45,7 +45,7 @@ import {
 import { scanFolder, scanCacheStats, purgeScanCachePaths, scanFolderStats } from './core/scan.js'
 import { previewTagEdit, applyTagEdit } from './core/tagedit.js'
 import { openDb } from './core/store.js'
-import { loadCats, reloadCats, catOf } from './core/tagcats.js'
+import { loadCats, reloadCats, catOf, nlCats } from './core/tagcats.js'
 import { BUNDLED_KNOWLEDGE_DIR } from './core/paths.js'
 import { findDuplicateGroups, findIgnoredGroups } from './core/dupcheck.js'
 import {
@@ -72,6 +72,8 @@ import {
 // (安全模式界面要显示"开了会隐藏多少张"), 别拆成两行 import —— ESM 会因重复声明直接报错。
 import { ds, tagPoolSize, recomputeSafety, relocateRecord } from './core/dataset.js'
 import { randomSections, randomSlots, wordInfos } from './core/export-random.js'
+import { advSets, saveAdvSets } from './core/adv-sets.js'
+import { nlBankStats } from './core/nl-bank.js'
 import { searchStats, clearSearchCache } from './core/search.js'
 import { moveFile, copyFile } from './core/fileTransfer.js'
 import { spawnOpenWith, detectPhotoshop, INPAINT_EXE } from './core/externalApp.js'
@@ -804,6 +806,11 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     // 2026-10-28: 叠加用户手动归类(dataDir/tag_slot_overrides.json), 并顺带下发
     // slotMeta(槽位->中文名一览, 给光箱「归类到…」选择器做候选)。
     if (!tagSlotsCache) tagSlotsCache = mergeSlotMap()
+    // 自然语言语料词(2026-11-10): 图内元数据里的 nl 长句不在 tags.db, 上面的
+    // db 遍历盖不到它们 —— 补进映射, 光箱 meta 分类视图才不会全落「其他」。
+    try {
+      for (const [k, c] of Object.entries(nlCats())) if (!(k in out)) out[k] = c
+    } catch { /* 缺知识包时 nlCats 为空, 不致命 */ }
     return { cats: out, slots: tagSlotsCache.m, slotMeta: tagSlotsCache.meta }
   }),
   // 手动归类(2026-10-28 光箱「归类到…」): tag 落到某个槽位小节, slot='' 取消归类
@@ -903,6 +910,12 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     // ---------------- 导出端随机化(大类/槽勾选清单) ----------------
     'random:sections': safe(() => randomSections()),
     'random:slots': safe(() => randomSlots()),
+    // 自然语言语料库概况(2026-11-08): 动作/穿搭/发型各多少条、按档位怎么分。
+    // 前端用它显示"可抽 N 条", 并据此决定要不要给用户开这个开关(空库就不显示)。
+    'random:nlstats': safe(() => nlBankStats()),
+    // 高级替换方案库(2026-11-09): 照替换规则组的模子 —— 多套方案手动命名, 预设里选哪一套
+    'adv:sets': safe(() => advSets()),
+    'adv:sets:save': safe((body) => saveAdvSets(body || {})),
     // 词归属反查(2026-10-30 钉词分类标识): words = 词数组, 返回每个词的槽+大类中文名。
     // 兼容单串入参(前端有时只查一个词)。
     'random:wordinfo': safe((raw) => wordInfos(
@@ -938,13 +951,20 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     }),
     'export:save': safe(async (raw) => {
       const r = await buildExportAsync(raw)
+      // 记住上次导出目录(2026-11-10 用户反馈): 保存对话框默认停在最后一次导出的文件夹,
+      // 没导过(或旧目录已不存在)才回退到 dataDir 旁边 —— 与 scan:pickFolder 的记忆行为对齐,
+      // 但用独立的 lastExportDir 键, 不和「选文件夹」类对话框的记忆互相串台。
+      const lastExportDir = String(getSettings().lastExportDir || '')
       const dlg = await dialog.showSaveDialog(mainWindow(), {
         title: '导出筛选结果',
-        defaultPath: path.join(path.dirname(getWorkspace().dataDir), r.suggestedName),
+        defaultPath: path.join(
+          lastExportDir && fs.existsSync(lastExportDir) ? lastExportDir : path.dirname(getWorkspace().dataDir),
+          r.suggestedName),
         filters: [{ name: '文本文件', extensions: ['txt'] }],
       })
       if (dlg.canceled || !dlg.filePath) return { canceled: true, count: r.count }
       await fs.promises.writeFile(dlg.filePath, r.text, 'utf8')
+      saveSettings({ lastExportDir: path.dirname(dlg.filePath) })
       return { ok: true, path: dlg.filePath, count: r.count, replaced: r.replaced, bytes: Buffer.byteLength(r.text, 'utf8') }
     }),
     'export:text': safe((raw) => buildExportAsync(raw)),
@@ -983,11 +1003,14 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
       if (!save) return r
       const dlg = await dialog.showSaveDialog(mainWindow(), {
         title: '导出购物车角色(wildcard)',
-        defaultPath: path.join(path.dirname(getWorkspace().dataDir), r.suggestedName),
+        defaultPath: path.join(
+          fs.existsSync(String(getSettings().lastExportDir || '')) ? getSettings().lastExportDir : path.dirname(getWorkspace().dataDir),
+          r.suggestedName),
         filters: [{ name: '文本文件', extensions: ['txt'] }],
       })
       if (dlg.canceled || !dlg.filePath) return { canceled: true, count: r.count }
       await fs.promises.writeFile(dlg.filePath, r.text, 'utf8')
+      saveSettings({ lastExportDir: path.dirname(dlg.filePath) })
       return { ok: true, path: dlg.filePath, count: r.count, replaced: r.replaced }
     }),
 

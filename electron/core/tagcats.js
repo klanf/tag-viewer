@@ -24,6 +24,7 @@ import { dataFile, getSettings } from './workspace.js'
 import { PROJECT_ROOT, BUNDLED_TRANSLATIONS_DB } from './paths.js'
 import { resolveWeiLinDirs } from './translate.js'
 import { TAGGER_MODELS, DEFAULT_TAGGER_MODEL, normalizeTaggerModel } from './tagger-models.js'
+import { nlTagIndex } from './nl-bank.js'
 
 /* ------------------------------------------------------------ 段位定义 */
 
@@ -33,7 +34,7 @@ const SEG_RANK = Object.fromEntries(SEGS.map((s, i) => [s, i]))
 
 /** 通用细分的展示顺序 —— 韦林组名(或规则子类名) → 次序 */
 const SUB_ORDER = [
-  '人物', '服饰', '汉服', '表情动作', '物品', '场景', '环境', '画面', '镜头', '魔法系',
+  '人物', '服饰', '汉服', '表情动作', '动作', '服装', '发型', '机位', '物品', '场景', '环境', '画面', '镜头', '魔法系',
 ]
 const SUB_RANK = new Map(SUB_ORDER.map((n, i) => [n, i]))
 
@@ -299,6 +300,20 @@ function loadWd14Chars(csvPathOverride) {
  */
 const RE_WEIGHT = /^\((.+):(\d+(?:\.\d+)?)\)$/
 
+/** nl 语料维度 → 通用细分组名(2026-11-10): 与高级替换弹窗的自然语言分类同口径 */
+const NL_SUB = { pose: '动作', costume: '服装', hair: '发型', view: '机位' }
+
+/**
+ * nl 语料 tag 的分类映射(2026-11-10): {tag: 'general:动作', ...}。
+ * tags:cats 出口把它并进映射 —— 图内元数据里的 nl 词**不在 tags.db 里**,
+ * 没有这份补丁的话光箱 meta 分类视图全落「其他」。
+ */
+export function nlCats() {
+  const out = {}
+  for (const [k, v] of nlTagIndex().entries()) out[k] = `general:${NL_SUB[v.dim] || '动作'}`
+  return out
+}
+
 /** 剥掉 (tag:1.2) 权重壳, 非权重形态原样返回。分类/排序/去重都按剥壳后的裸词算 */
 export function unwrapWeight(tag) {
   const t = String(tag || '').trim()
@@ -331,6 +346,13 @@ export function classify(tag) {
   // 系列名本体(WD14 角色括号内容, 已挡掉普通词) —— 必须排在韦林**之前**:
   // 韦林库里部分系列名(genshin impact 等)被归在画面/场景等组, 语义上它们是系列
   if (state.seriesSet.has(k)) return { seg: 'series', sub: '', series: '' }
+
+  // 自然语言语料 tag(2026-11-10): she_is_kneeling_and_leaning... 这类长句词,
+  // 词典/韦林/WD14 词表全接不住, 只能落「其他」—— 用 nl-bank 的片段索引
+  // 归进 动作/服装/发型/机位(与高级替换弹窗的自然语言分类同一套口径)。
+  // 排在韦林之前: nl 片段不会撞韦林词, 但万一部分片段像普通词, nl 语义更可信。
+  const nlHit = nlTagIndex().get(k)
+  if (nlHit) return { seg: 'general', sub: NL_SUB[nlHit.dim] || '动作', series: '' }
 
   // 韦林人工分类(两个变体都试) —— 按剥壳后的裸词查
   for (const v of variants(bare)) {

@@ -107,17 +107,57 @@ const SLOT_ZH = {
   eyes_color: '瞳色', sleeves: '袖子', weather: '天气', horn: '角', eyewear: '眼镜',
   environment: '环境', pose_base: '基础姿势', hair_acc: '发饰', pose: '姿势',
   hair_color: '发色', emotion: '表情', hair_tie: '发带', viewpoint: '视角',
-  cloth_mat: '服装材质', cloth_state_sfw: '服装状态', clothing_state: '服装状态',
+  cloth_mat: '服装材质', cloth_state_sfw: '服装穿法', clothing_state: '服装撩拨',
   clothing_type: '服装类型', location: '地点', mouth: '嘴部', eye_gaze: '视线',
   figure: '体型', race: '种族', lighting: '光照', hair_len: '发长', wings: '翅膀',
   shot_size: '景别', camera_angle: '机位', camera_fx: '镜头特效', swimwear: '泳装',
+  pose_risque: '挑逗动作',
   n_state: '状态', n_body: '身体', n_exposure: '暴露', n_cum: '体液',
   n_bondage: '束缚', n_pos: '体位', n_sex: '性行为', n_touch: '触碰',
+  // 带命名空间的成人槽(2026-11-08 补): 原来没译文, 界面上直接显示 nsfwcutout 这种 id
+  'nsfw:undressed': '脱衣程度', 'nsfw:see_through': '透视', 'nsfw:nudity': '裸露',
+  'nsfw:cutout': '镂空', 'nsfw:suggestive': '性暗示',
 }
 
 /**
+ * 槽 id -> 大区(2026-11-08 用户要求): 以前 ① 区把 57 个槽按词条数一股脑平铺,
+ * 上装和天气、姿势和道具排在一起 —— 与光箱那套「① 数量与身份 / ② 头发 / …」的分类
+ * 完全对不上。这里补一张槽→大区表, 顺序也按这个来。
+ *
+ * 为什么不直接用 tag_slots.json 的 sec: 「高频补充」那个分区吞了 2560 条(是 catch-all,
+ * 不是真类别), 按它归组会有大半槽落进一个叫"高频补充"的筐里, 等于没分。
+ * 57 个槽全部手工归类, 一个不漏(有测试守着)。
+ */
+const SLOT_SEC = {
+  figure: 'body', feature: 'body', tail: 'body', wings: 'body', horn: 'body', race: 'body',
+  hair_len: 'hair', hair_color: 'hair', hairstyle: 'hair', hair_tie: 'hair', hair_acc: 'hair',
+  eyes_color: 'face', eye_gaze: 'face', emotion: 'face', mouth: 'face',
+  top: 'outfit', bottom: 'outfit', outfit: 'outfit', underwear: 'outfit',
+  legwear: 'outfit', footwear: 'outfit', headwear: 'outfit', handwear: 'outfit',
+  accessory: 'outfit', eyewear: 'outfit', sleeves: 'outfit', swimwear: 'outfit',
+  cloth_mat: 'outfit', cloth_state_sfw: 'outfit', clothing_state: 'outfit',
+  clothing_type: 'outfit',
+  pose: 'pose', pose_base: 'pose', pose_risque: 'pose',
+  viewpoint: 'camera', shot_size: 'camera', camera_angle: 'camera', camera_fx: 'camera',
+  environment: 'scene', location: 'scene', weather: 'scene', furniture: 'scene', prop: 'scene',
+  lighting: 'light',
+  'nsfw:undressed': 'nsfw', 'nsfw:see_through': 'nsfw', 'nsfw:nudity': 'nsfw',
+  'nsfw:cutout': 'nsfw', 'nsfw:suggestive': 'nsfw', n_exposure: 'nsfw',
+  n_bondage: 'nsfw', n_pos: 'nsfw', n_state: 'nsfw', n_touch: 'nsfw',
+  n_body: 'nsfw', n_sex: 'nsfw', n_cum: 'nsfw',
+}
+
+/** 大区展示名 + 展示顺序(与 tag_slots 的分区口径对齐, 去掉序号前缀) */
+const SEC_ZH = {
+  body: '身材与特征', hair: '头发', face: '五官与表情', outfit: '服装',
+  pose: '姿势与动作', camera: '镜头', scene: '场景与环境', light: '光影', nsfw: 'NSFW',
+}
+const SEC_ORDER = ['body', 'hair', 'face', 'outfit', 'pose', 'camera', 'scene', 'light', 'nsfw']
+
+/**
  * 可供勾选的槽清单(懒加载, knowledge 变动后重启生效)。
- * @returns {Array<{id, zh, cnt: number, words: string[]}>} 按词条数降序
+ * @returns {Array<{id, zh, cnt: number, words: string[], sec, secZh}>}
+ *   排序 = 大区顺序(SEC_ORDER) → 区内按词条数降序 —— 前端直接顺序渲染就分好组了。
  *   words = 槽池全部词条(安全池+成人池), 给前端钉词输入框做联想用。
  */
 export function randomSlots() {
@@ -131,9 +171,16 @@ export function randomSlots() {
   }
   for (const [slot, arr] of Object.entries(p.pools)) for (const e of arr) add(slot, e.tag)
   for (const [slot, arr] of Object.entries(p.nsfwPools || {})) for (const e of arr) add(slot, e.tag)
+  const rank = (id) => {
+    const i = SEC_ORDER.indexOf(SLOT_SEC[id])
+    return i < 0 ? SEC_ORDER.length : i          // 没登记的槽排到最后, 不静默丢弃
+  }
   return [...cnt.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([id, n]) => ({ id, zh: SLOT_ZH[id] || id, cnt: n, words: words.get(id) }))
+    .sort((a, b) => (rank(a[0]) - rank(b[0])) || (b[1] - a[1]))
+    .map(([id, n]) => {
+      const sec = SLOT_SEC[id] || 'other'
+      return { id, zh: SLOT_ZH[id] || id, cnt: n, words: words.get(id), sec, secZh: SEC_ZH[sec] || '其他' }
+    })
 }
 
 /**
@@ -207,6 +254,10 @@ function mulberry32(seed) {
  *   pins      钉词表 slot -> 词(该槽必现指定词, 优先于随机)
  *   pinFill   原图缺钉词槽的词条时, 是否把钉词补上去(缺省 true = 补)
  *   rates     换词率表(slot id 或 sec id -> 0~1; 槽优先于大类), 缺省 = 1(必换, 旧行为)
+ *   inserts   插入槽表(2026-11-09): slot id -> 插入率(0~1, 缺词时补上的概率)。
+ *             插入槽的「有词 → 换」由调用方把槽并进 slots/rates 复用随机管线;
+ *             这里只管「整行都没有该槽词」的补词 —— 按率掷骰后从槽池抽一个追加到行尾,
+ *             发牌/查重与随机换词同一套(整批不会都插同一个词)。
  *   nsfw      是否允许从 nsfwPools 抽词(缺省 true = 允许, 旧行为)
  * @returns {{ randomize: (idx:number, tags:string[]) => {tags:string[], replaced:number, bySec: Object<string,number>} }}
  *   randomize 在每条导出行上调用一次; replaced = 实际换掉/钉上的词数;
@@ -225,7 +276,16 @@ export function makeRandomizer(opts = {}) {
     }
   }
   const pinFill = opts.pinFill !== false
-  if (!secs.size && !slotSet.size && !pins.size) {
+  // 插入槽表(2026-11-09): slot -> 插入率; 率只认 0~1, 非法按 1(必补)
+  const inserts = new Map()
+  if (opts.inserts instanceof Map) {
+    for (const [slot, r] of opts.inserts) {
+      const sl2 = String(slot || '').trim()
+      const v = Number(r)
+      if (sl2) inserts.set(sl2, Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1)
+    }
+  }
+  if (!secs.size && !slotSet.size && !pins.size && !inserts.size) {
     return { randomize: (_i, tags) => ({ tags, replaced: 0, bySec: {} }) }
   }
 
@@ -343,6 +403,27 @@ export function makeRandomizer(opts = {}) {
         recordKeys.add(tagKey(fresh))
         return fresh
       })
+      // ---- ③ 插入补词阶段(2026-11-09): 插入槽 = 导出结果必须含该槽 ----
+      // 有词的已经被 ② 换过(调用方把插入槽并进了 slots/rates); 这里只补「整行都没有」的:
+      // 按插入率掷骰, 从槽池抽一个词追加到行尾。钉词槽若 pinFill 已补上, have 里就有, 不会重复。
+      if (inserts.size) {
+        const have = new Set()
+        for (const t of out) {
+          const info = sl[tagKey(t)]
+          if (info?.slot && inserts.has(info.slot)) have.add(info.slot)
+        }
+        for (const [slot, rate] of inserts) {
+          if (have.has(slot)) continue
+          if (rate < 1 && rng() >= rate) continue
+          const fresh = pickFor(slot, null, recordKeys, rng)
+          if (!fresh) continue
+          used.set(fresh, useOf(fresh) + 1)
+          recordKeys.add(tagKey(fresh))
+          replaced++
+          bump(slot)
+          out.push(fresh)
+        }
+      }
       return { tags: out, replaced, bySec }
     },
   }

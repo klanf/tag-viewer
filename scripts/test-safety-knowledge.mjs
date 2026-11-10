@@ -81,9 +81,11 @@ ok('不崩, 且拿到判定结果', () => {
   assert.ok(Number.isFinite(missing.one), `1girl 判定不是数字: ${missing.one}`)
   assert.equal(missing.one, 0)
 })
-ok('dict 是空对象而不是 null', () => {
+ok('dict 是非 null 对象(2026-11-11 起空包时还剩内置兜底表, 不再是 0 条)', () => {
   assert.equal(missing.dictIsNull, false)
-  assert.equal(missing.dictSize, 0)
+  assert.ok(missing.dictSize > 0, `dict 条数 ${missing.dictSize}`)
+  // 内置兜底表条数(~47): 槽位词典缺失时 small_penis 这批仍该有档位
+  assert.ok(missing.dictSize < 200, `空包时 dict 不该有几千条, 实际 ${missing.dictSize}`)
 })
 ok('覆盖段仍生效（nude = L4）', () => assert.equal(missing.nude, 4))
 

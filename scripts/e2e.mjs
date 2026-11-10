@@ -352,6 +352,13 @@ async function main() {
   // 故意不清理内容 —— 断言只看这一轮搬进去的那个文件, 不靠目录是否为空。
   MOVED_DIR = work.movedDest
 
+  // 高级替换方案库(2026-11-09): 方案是**持久化**的, 上一轮 e2e 弹窗里点过的槽
+  // 会被自动落盘进沙箱方案库 —— 这一轮载入后①区就带着残留勾选, rate 行断言
+  // (点 chip → 恰好 1 行滑杆)必然假红。e2e 每轮从全空默认方案开始。
+  for (const f of [path.join(DATA_DIR, 'adv_sets.json'), path.join(DATA_DIR, 'user', 'adv_sets.json')]) {
+    try { fs.rmSync(f, { force: true }) } catch { /* 没有就 pass */ }
+  }
+
   const exe = findElectron()
   if (!PORT) PORT = await freePort()
   console.log('[e2e] electron:', exe)
@@ -717,29 +724,43 @@ async function main() {
     await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '清空后重新搜索', timeout: 30000 })
 
     /* 4a. 「只看 ComfyUI 生成的图」(2026-10-24) —— 按图片内嵌元数据的来源筛。
-       沙箱这批图没读过 img_src(全空), 所以勾上必然 0 张; 空态要说明"为什么是空的",
-       并且取消勾选就能回来(它是筛选, 不是把库改掉)。真实库上的数量核对走只读探针。 */
+       ⚠️ 2026-11-08 改: 原来假设"沙箱这批图没读过 img_src(全空), 勾上必然 0 张"。
+       沙箱库现在就是真实库的 VACUUM INTO 副本(112,295 行; img_src: 空 74,808 /
+       comfyui 27,982 / null 9,427 / novelai 61 / a1111 17), 那个假设早就不成立 ——
+       于是这条恒 FAIL(实测 before=60 / on=true / n=60, 首屏 60 张其实全是真的 comfyui 图)。
+       改成**不依赖库内容**的语义断言: 勾上后总数落在 (0, 勾前) 且网格有卡片;
+       取消后总数**严格回到**勾前值 —— 后者才能抓住"筛选偷偷改了库"这类回归。 */
     const comfyUi = await cdp.eval(`
+      const num = (s) => Number(String(s || '').replace(/[^\\d]/g, '')) || 0
       const cb = [...document.querySelectorAll('.checks .tv-check')].find((el) => /ComfyUI/.test(el.textContent))
       if (!cb) return { none: true }
-      const before = __t.count('.grid .card')
+      const allN = num(__t.text('.result-head b'))
       cb.click()
       await new Promise(r => setTimeout(r, 1800))
-      return { before, on: cb.classList.contains('on'), n: __t.count('.grid .card'), empty: __t.text('.wrap-grid') }
+      return {
+        allN, on: cb.classList.contains('on'),
+        onN: num(__t.text('.result-head b')),
+        cards: __t.count('.grid .card'),
+        empty: __t.text('.wrap-grid').slice(0, 120),
+      }
     `)
-    check('首页: 有「只看 ComfyUI 生成的图」勾选项, 勾上会真的按来源筛(沙箱全空 -> 0 张)',
-      !comfyUi.none && comfyUi.on && comfyUi.n === 0 && comfyUi.before > 0,
+    check('首页: 「只看 ComfyUI」真的按来源筛(总数 > 0 且小于全量)',
+      !comfyUi.none && comfyUi.on && comfyUi.onN > 0 && comfyUi.onN < comfyUi.allN,
       JSON.stringify(comfyUi))
-    check('首页: 来源筛选的空态说清"刚入库、还没读到来源的图暂时不算", 不是笼统的搜不到',
-      /没有 ComfyUI 生成的图/.test(comfyUi.empty), comfyUi.empty)
+    check('首页: 来源筛选要么给网格、要么给"没有 ComfyUI 生成的图"的专门空态',
+      comfyUi.onN > 0 ? comfyUi.cards > 0 : /没有 ComfyUI 生成的图/.test(comfyUi.empty),
+      `onN=${comfyUi.onN} cards=${comfyUi.cards} empty=${comfyUi.empty}`)
     await cdp.eval(`
       const cb = [...document.querySelectorAll('.checks .tv-check')].find((el) => /ComfyUI/.test(el.textContent))
       cb.click()
       return true
     `)
     await waitFor(cdp, `__t.count('.grid .card') > 0`, { label: '取消来源筛选后回来', timeout: 15000 })
-    check('首页: 取消「只看 ComfyUI」后图片回来',
-      (await cdp.eval(`return __t.count('.grid .card')`)) > 0)
+    const comfyBack = await cdp.eval(`
+      return Number(String(__t.text('.result-head b') || '').replace(/[^\\d]/g, '')) || 0
+    `)
+    check('首页: 取消「只看 ComfyUI」后总数严格回到勾前(证明它是筛选, 没改库)',
+      comfyBack === comfyUi.allN, `勾前=${comfyUi.allN} 取消后=${comfyBack}`)
 
     /* ---------------- 4b. 搜索框多词联想(纯文本) + 全选(2026-10-30 二稿: 去胶囊) ----------------
      * multi 模式契约(2026-10-30 用户定稿: 纯文本, 没有胶囊 —— 输入框就是完整字符串
@@ -1435,7 +1456,13 @@ async function main() {
       }
       await new Promise(r => setTimeout(r, 300))
       __t.clickText('.mask .foot .tv-btn', '预览影响')
-      await new Promise(r => setTimeout(r, 1500))
+      /* 等结果而不是死等 1500ms(2026-11-08 修): 预览要在 112k 行的库里数一遍
+         "breasts 命中多少张", 磁盘被别的活占着时轻松超过 1.5 秒 —— 那轮就是
+         pv 还是空串被判红(同一轮里还有 55MB 的导出在写盘)。改成等文案出现,
+         上限给足 12 秒: 真不返回的话一样会红, 只是不再冤枉它。 */
+      for (let i = 0; i < 48 && !/将命中/.test(__t.text('.mask .pv')); i++) {
+        await new Promise(r => setTimeout(r, 250))
+      }
       return {
         title: __t.text('.mask .head'),
         pv: __t.text('.mask .pv'),
@@ -1514,8 +1541,17 @@ async function main() {
      * 原来每 400ms 读一次 42MB —— 既慢, 又让"刚被主进程写完的目标文件"更容易
      * 处在被占用的状态(实测那次 rename 就是 EPERM 挂掉的, 见 exportPresets 里的注释),
      * 等于测试自己给被测代码使绊子。
+     *
+     * **预算 45s**(2026-11-08 从 25s 放宽): 这条预设是 `source: []`(全部来源),
+     * 沙箱库 102,694 行 -> 目标文件 55MB, 每次落盘都是"查全库 + 55MB 文本 + 写临时文件
+     * + 原子改名"。同一份 workloads 实测跨度很大 —— 13.6s / 14.8s / 18.1s / 18.5s
+     * (11-08 前四轮), 而 11-08 两轮(前台/离屏各一次)都到了 27~35s, 触发 25s 假红:
+     * 回执里 n=1、文件内容正确, 只是"没在 25 秒内写完"。差的那部分在机器侧
+     * (55MB 连续写 + 杀毒扫描 + 同时还有一轮 e2e 在读同一文件), 与被测代码无关。
+     * 25s 这个数原本是照 42MB/102k 行凑的, 没有余量; 45s 才是"确认它到底有没有导"
+     * 需要的耐心上限 —— 真不导的话, 回执那份证据会一直是 n=0。
      */
-    const waitExportChange = async (before, timeoutMs = 25000) => {
+    const waitExportChange = async (before, timeoutMs = 45000) => {
       const t0 = Date.now()
       /*
        * ⚠️ 先按**内容**比一次, 再进 stat 轮询(2026-09-29 修)。
@@ -2122,19 +2158,19 @@ async function main() {
     `)
     check('首页动作区: 「导出(带路径)」不再占独立按钮, 已并入下拉',
       homeBtns.pathBtnGone === true, `文字链 = ${(homeBtns.lnk || []).join('、')}`)
-    check('首页动作区: 分裂按钮下拉含两条导出方式 + 六个导出选项',
+    check('首页动作区: 分裂按钮下拉含两条导出方式 + 八个导出选项',
       homeBtns.caret === true && homeBtns.menuOpen === true
       && (homeBtns.items || []).length === 2
       && (homeBtns.items || []).join('').includes('带图片路径')
-      && (homeBtns.checks || []).length === 6 && homeBtns.emptyMenuBtn === true,
+      && (homeBtns.checks || []).length === 8 && homeBtns.emptyMenuBtn === true,
       `项 = ${(homeBtns.items || []).join(' / ')} · 选项 = ${(homeBtns.checks || []).join(' / ')}`)
     check('首页动作区: 下拉与整排同宽且不被侧栏裁切',
       homeBtns.sameWidthAsRow === true && homeBtns.insidePanel === true && homeBtns.inViewport === true,
       `同宽=${homeBtns.sameWidthAsRow} 在侧栏内=${homeBtns.insidePanel} 在视口内=${homeBtns.inViewport}`)
     check('首页动作区: 箭头随展开态翻转(菜单是向下开的)',
       homeBtns.caretRotated === true, `chev.up = ${homeBtns.caretRotated}`)
-    check('首页动作区: 六个导出开关挪进下拉后仍能切换',
-      (homeBtns.cbAfter || []).length === 6
+    check('首页动作区: 八个导出开关挪进下拉后仍能切换',
+      (homeBtns.cbAfter || []).length === 8
       && (homeBtns.cbAfter || []).every((v, i) => v !== (homeBtns.cbBefore || [])[i]),
       `${JSON.stringify(homeBtns.cbBefore)} → ${JSON.stringify(homeBtns.cbAfter)}`)
     check('首页动作区: 替换/预设导出/查重降级为文字链, 且关下拉后不留遮罩',
@@ -2158,16 +2194,31 @@ async function main() {
       if (!mask) return out
       const zones = [...mask.querySelectorAll('.zone')]
       out.zones = zones.length
-      // ① 随机槽 chips(第一区) + 点选出滑杆
-      const chips = [...zones[0].querySelectorAll('.chip')]
+      // 2026-11-09 方案化: 弹窗顶部多了「方案」zone —— ① 区不能再用 zones[0] 定位,
+      // 按标题文本找(否则方案栏插队后, 槽 chips 计成 0, 假回归)。
+      // 2026-11-09 二改: ①随机+③禁用合并成「槽位」区(chip 四态循环), 同样按标题找。
+      const pickZone = zones.find(z => z.querySelector('.zh')?.textContent.includes('槽位'))
+      // 槽位 chips: 点一次 → 随机(滑杆100%), 再点 → 插入(滑杆还在), 再点 → 禁用(滑杆消失), 再点 → 未选
+      const chips = [...(pickZone || { querySelectorAll: () => [] }).querySelectorAll('.chip')]
       out.chips = chips.length
+      const modeOf = (el) => ['m-random', 'm-insert', 'm-ban'].find(c => el.classList.contains(c)) || 'off'
       if (chips[0]) {
-        chips[0].click(); await sleep(250)
-        out.rateRows = zones[0].querySelectorAll('.rate').length
-        const slider = zones[0].querySelector('.rate input[type="range"]')
-        out.rateVal = slider ? slider.value : null
-        chips[0].click(); await sleep(150)      // 还原: 取消勾选, 不留状态
+        out.cycle = []
+        const snap = () => ({
+          mode: modeOf(chips[0]),
+          rates: pickZone.querySelectorAll('.rate').length,
+          val: pickZone.querySelector('.rate input[type="range"]')?.value ?? null,
+        })
+        for (let k = 0; k < 4; k++) {
+          chips[0].click(); await sleep(200)
+          out.cycle.push(snap())
+        }
+        // 第 4 次点击回到未选, 状态已还原(方案自动落盘不会带走残留)
       }
+      // 方案栏(2026-11-09 二改): 左侧栏点选切换 + 四个操作按钮(不再是顶部下拉)
+      out.setSide = !!mask.querySelector('.adv-grid .side')
+      out.setNames = [...mask.querySelectorAll('.adv-grid .side-item .side-name')].map(b => b.textContent.trim()).join(',')
+      out.setBtns = [...mask.querySelectorAll('.side-ops .tv-btn')].map(b => b.textContent.trim()).join(',')
       // ② 钉词行
       const addBtn = [...mask.querySelectorAll('.pin-zone .tv-btn')].find(b => b.textContent.includes('添加钉词'))
       if (addBtn) {
@@ -2176,8 +2227,6 @@ async function main() {
         out.pinRow = { shown: !!row, hasSlot: !!row?.querySelector('.pin-slot'), hasWord: !!row?.querySelector('.pin-word-box input') }
         row?.querySelector('.pin-del')?.click(); await sleep(150)   // 还原
       }
-      // ③ 禁用槽 chips
-      out.banChips = mask.querySelectorAll('.ban-zone .chip').length
       out.enabledBox = [...mask.querySelectorAll('.tv-check')].some(e => e.textContent.includes('启用高级替换'))
       out.nsfwBox = [...mask.querySelectorAll('.tv-check')].some(e => e.textContent.includes('成人词库'))
       out.seed = !!mask.querySelector('.seed')
@@ -2187,12 +2236,20 @@ async function main() {
       out.closed = !document.querySelector('.mask')
       return out
     `)
-    check('高级替换弹窗: 独立入口能打开, 三区(随机槽/钉词/禁用槽)齐全',
-      advModal.opened === true && advModal.zones >= 3 && (advModal.chips || 0) > 0 && (advModal.banChips || 0) > 0,
-      `zones=${advModal.zones} 槽chips=${advModal.chips} 禁用chips=${advModal.banChips} ${advModal.why || ''}`)
-    check('高级替换弹窗: 点槽 chip 立即出现换词率滑杆, 默认 100%(必换)',
-      advModal.rateRows === 1 && advModal.rateVal === '100',
-      `滑杆=${advModal.rateRows} · 值=${advModal.rateVal}`)
+    check('高级替换弹窗: 独立入口能打开, 槽位/钉词/自然语言区齐全(禁用槽已并入槽位区)',
+      advModal.opened === true && advModal.zones >= 3 && (advModal.chips || 0) > 0,
+      `zones=${advModal.zones} 槽chips=${advModal.chips} ${advModal.why || ''}`)
+    check('高级替换弹窗: 左侧方案栏(点选切换 + 新建/复制/改名/删除) —— 2026-11-09 二改对齐替换规则编辑器',
+      advModal.setSide === true && (advModal.setNames || '').length > 0
+      && ['新建', '复制', '改名', '删除'].every(w => advModal.setBtns.includes(w)),
+      `左栏=${advModal.setSide} 方案=${advModal.setNames} 按钮=${advModal.setBtns}`)
+    check('高级替换弹窗: 点槽 chip 循环四态 —— 随机(滑杆100%)→插入(滑杆还在)→禁用(滑杆消失)→未选',
+      advModal.cycle && advModal.cycle.length === 4
+      && advModal.cycle[0].mode === 'm-random' && advModal.cycle[0].rates === 1 && advModal.cycle[0].val === '100'
+      && advModal.cycle[1].mode === 'm-insert' && advModal.cycle[1].rates === 1
+      && advModal.cycle[2].mode === 'm-ban' && advModal.cycle[2].rates === 0
+      && advModal.cycle[3].mode === 'off' && advModal.cycle[3].rates === 0,
+      `cycle=${JSON.stringify(advModal.cycle)}`)
     check('高级替换弹窗: 「添加钉词」出现 槽下拉 + 词条输入, 总开关/成人词库/种子齐全',
       advModal.pinRow && advModal.pinRow.shown === true && advModal.pinRow.hasSlot === true && advModal.pinRow.hasWord === true
       && advModal.enabledBox === true && advModal.nsfwBox === true && advModal.seed === true,
@@ -4925,44 +4982,81 @@ async function main() {
       offCls === false)
 
     /* ④b 整页都被藏光时还能不能往后翻(2026-10-24 用户问到的死路)。
-       speed_lines: 沙箱里 65 张, unsafe 全是 1 -> core 档下第一页 60 张整页被藏。
-       以前这种页面既没有网格、也就没有无限滚动哨兵, 用户连"下一页"都摸不到。 */
+       speed_lines 全是 unsafe=1 -> core 档下第一页整页被藏。
+       以前这种页面既没有网格、也就没有无限滚动哨兵, 用户连"下一页"都摸不到。
+       ⚠️ 2026-11-08: 原来这里写死"65 张"(那批沙箱数据的实际数量), 换了真实库副本后
+       speed_lines 变成 80 张, 三处硬编码一起崩(总闸报"等待超时: 整敏感页搜索(65 张)")。
+       改成搜索后**从界面读**实际总数, 后面的断言都用这个变量对账。 */
     await cdp.eval(`
       __t.setInput('.sug input', 'speed_lines')
       await new Promise(r => setTimeout(r, 300))
       __t.pressEnter('.sug input')
       return true
     `)
-    await waitFor(cdp, `__t.text('.result-head b') === '65'`, { label: '整敏感页搜索(65 张)', timeout: 30000 })
+    await waitFor(cdp, `Number(String(__t.text('.result-head b')).replace(/[^\\d]/g, '')) > 0`,
+      { label: '整敏感页搜索(speed_lines)', timeout: 30000 })
+    const slTotal = await cdp.eval(`
+      return Number(String(__t.text('.result-head b')).replace(/[^\\d]/g, '')) || 0
+    `)
+    check('安全模式: speed_lines 搜到了图(整页藏光的前提)', slTotal > 0, `${slTotal} 张`)
     await cdp.eval(`document.querySelector('.result-head .safe-tog .st-btn').click(); return true`)
     await waitFor(cdp, `!!document.querySelector('.all-hidden')`,
       { label: '整页被藏空态', timeout: 15000 }).catch(() => null)
-    const allHiddenUi = await cdp.eval(`return {
-      cards: __t.count('.grid .card'),
-      txt: __t.text('.all-hidden'),
-      btn: __t.text('.all-hidden .hidden-more .tv-btn'),
-    }`)
-    check('安全模式: 整页被藏时不装死 —— 说明原因 + 给出「继续拉下一批」',
-      allHiddenUi.cards === 0 && /都被安全模式隐藏了/.test(allHiddenUi.txt) && /继续拉下一批/.test(allHiddenUi.btn),
-      `卡片 ${allHiddenUi.cards} · ${allHiddenUi.txt}`)
-    await cdp.shot('11e-safety-all-hidden')
-    await cdp.eval(`document.querySelector('.all-hidden .hidden-more .tv-btn').click(); return true`)
-    await waitFor(cdp, `/已经到底了/.test(__t.text('.all-hidden'))`,
-      { label: '手动拉到尾批', timeout: 15000 }).catch(() => null)
-    const tailUi = await cdp.eval(`return {
-      txt: __t.text('.all-hidden'),
-      btn: __t.count('.all-hidden .hidden-more .tv-btn'),
-    }`)
-    check('安全模式: 「继续拉下一批」真的拉到下一批, 到尾了改成"已经到底了"',
-      /65/.test(tailUi.txt) && /已经到底了/.test(tailUi.txt) && tailUi.btn === 0,
-      `${tailUi.txt} · 按钮 ${tailUi.btn}`)
 
-    /* 还原: 关安全模式 -> 65 张全回来; 清空搜索 -> 回到全量 */
+    /* ⚠️ 2026-11-08: 这里原来是无条件断言"speed_lines 这一页会被整页藏光"。
+       真实库副本里这个标签有 80 张, 其中**混着 1 张安全图**, 于是第一页只是"被藏掉 59 张
+       留下 1 张", 根本不会出现 `.all-hidden` —— 再点 `.all-hidden .hidden-more .tv-btn`
+       就是 null.click() 抛异常, 把整轮 e2e 打断(实测: 卡片 1 · TypeError)。
+       所以按"数据允不允许"分两条支路: 出现了就完整验(这才是这条用例的本体),
+       没出现就显式记一条 SKIP 并说明原因 —— 不静默跳过, 输出里看得见。
+       想把这条稳定跑起来, 需要一个"某标签全部图都敏感且 >60 张"的夹具库(见交接日志)。 */
+    const hasAllHidden = await cdp.eval(`return !!document.querySelector('.all-hidden')`)
+    if (hasAllHidden) {
+      const allHiddenUi = await cdp.eval(`return {
+        cards: __t.count('.grid .card'),
+        txt: __t.text('.all-hidden'),
+        btn: __t.text('.all-hidden .hidden-more .tv-btn'),
+      }`)
+      check('安全模式: 整页被藏时不装死 —— 说明原因 + 给出「继续拉下一批」',
+        allHiddenUi.cards === 0 && /都被安全模式隐藏了/.test(allHiddenUi.txt) && /继续拉下一批/.test(allHiddenUi.btn),
+        `卡片 ${allHiddenUi.cards} · ${allHiddenUi.txt}`)
+      await cdp.shot('11e-safety-all-hidden')
+      await cdp.eval(`document.querySelector('.all-hidden .hidden-more .tv-btn').click(); return true`)
+      await waitFor(cdp, `/已经到底了/.test(__t.text('.all-hidden'))`,
+        { label: '手动拉到尾批', timeout: 15000 }).catch(() => null)
+      const tailUi = await cdp.eval(`return {
+        txt: __t.text('.all-hidden'),
+        btn: __t.count('.all-hidden .hidden-more .tv-btn'),
+        cards: __t.count('.grid .card'),
+        gone: !document.querySelector('.all-hidden'),
+      }`)
+      /* 点完「继续拉下一批」有两种**都正确**的结果(2026-11-08 第一次真实跑到这段才发现):
+       *   ① 新一批里有能显示的图 → allHidden 变 false, .all-hidden 整块消失、网格回来;
+       *   ② 新一批还是全藏且没有更多了 → 面板留着, 文案变「已经到底了…」且按钮消失。
+       * 原来只认 ②, 于是 ① 会被记成失败(实测 txt 为空、按钮 0 —— 面板整个没了)。
+       * 真 bug 的样子是"面板还在、按钮还在"(点了没反应), 那种仍然会红。 */
+      check('安全模式: 「继续拉下一批」真的拉到下一批(拉到图或到底, 不是点了没反应)',
+        tailUi.gone ? tailUi.cards > 0
+          : (/已经到底了/.test(tailUi.txt) && tailUi.btn === 0),
+        tailUi.gone
+          ? `面板已消失 · 拉到 ${tailUi.cards} 张可显示的图`
+          : `面板仍在 · 按钮 ${tailUi.btn} · ${String(tailUi.txt).slice(0, 40)}`)
+    } else {
+      const se = await cdp.eval(`return {
+        cards: __t.count('.grid .card'),
+        on: !!document.querySelector('.result-head .safe-tog.on'),
+      }`)
+      check('安全模式: 整页被藏空态【SKIP: 沙箱这批图里混着安全图, 第一页没有整页藏光】',
+        se.cards > 0 && se.on,
+        `卡片 ${se.cards}(应有残留) · 开关=${se.on} · 总数 ${slTotal}`)
+    }
+
+    /* 还原: 关安全模式 -> 这批图全回来(数量从界面读, 不写死); 清空搜索 -> 回到全量 */
     await cdp.eval(`document.querySelector('.result-head .safe-tog .st-btn').click(); return true`)
-    await waitFor(cdp, `__t.count('.grid .card') === 65`,
+    await waitFor(cdp, `__t.count('.grid .card') === ${slTotal}`,
       { label: '关掉后整页回来', timeout: 15000 }).catch(() => null)
-    check('安全模式: 关掉后这批图全回来(65 张)',
-      (await cdp.eval(`return __t.count('.grid .card')`)) === 65)
+    check(`安全模式: 关掉后这批图全回来(${slTotal} 张)`,
+      (await cdp.eval(`return __t.count('.grid .card')`)) === slTotal)
     await cdp.eval(`
       __t.setInput('.sug input', '')
       await new Promise(r => setTimeout(r, 200))
@@ -5675,6 +5769,74 @@ async function main() {
     check('批量: 勾选框 Shift 区间选(ckbox[0] -> Shift ckbox[2]) = 3', ckShift === 3, `计数 ${ckShift}`)
     await cdp.eval(`__t.click('[data-test="scan-sel-clear"]'); return true`)
 
+    /* 双图对比(2026-11-10 用户反馈「双选图片后支持并排显示和滑动对比」):
+       选中恰好 2 张时工具条亮「🆚 对比」-> 全屏遮罩(并排/滑动/交换/✕)。
+       只看不动状态: 关掉后选择集原样保留。 */
+    const cmpSel = await cdp.eval(`
+      const cks = document.querySelectorAll('.scan-view .grid.imgs .card .ckbox')
+      cks[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 120))
+      const btn1 = document.querySelector('[data-test="scan-batch-compare"]')
+      const disabledAt1 = btn1 ? btn1.disabled : null
+      cks[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await new Promise(r => setTimeout(r, 120))
+      const btn2 = document.querySelector('[data-test="scan-batch-compare"]')
+      return {
+        n: +document.querySelector('[data-test="scan-sel-count"]').textContent,
+        disabledAt1,
+        enabledAt2: btn2 ? !btn2.disabled : false,
+      }
+    `)
+    check('批量对比: 选中 1 张时按钮禁用, 恰好 2 张时可用',
+      cmpSel.n === 2 && cmpSel.disabledAt1 === true && cmpSel.enabledAt2 === true,
+      JSON.stringify(cmpSel))
+    await cdp.eval(`__t.click('[data-test="scan-batch-compare"]'); return true`)
+    await waitFor(cdp, `!!document.querySelector('[data-test="cmp-bar"]')`,
+      { label: '对比遮罩打开(滑动模式默认)', timeout: 8000 })
+    const cmpSlide = await cdp.eval(`
+      return {
+        stage: !!document.querySelector('[data-test="cmp-stage"]'),
+        onSlide: document.querySelector('[data-test="cmp-bar"] .seg button.on')?.textContent?.trim() === '滑动',
+        imgs: document.querySelectorAll('[data-test="cmp-stage"] img').length,
+        divider: !!document.querySelector('.cmp-stage.slide .divider'),
+      }
+    `)
+    check('批量对比: 滑动模式默认(两图叠放 + 分割线)', cmpSlide.stage && cmpSlide.onSlide && cmpSlide.imgs === 2 && cmpSlide.divider,
+      JSON.stringify(cmpSlide))
+    /* 拖动分割线: 在 stage 中间偏左按下拖动, 把手位置应跟着走 */
+    const cmpDrag = await cdp.eval(`
+      const st = document.querySelector('[data-test="cmp-stage"]')
+      const r = st.getBoundingClientRect()
+      const x = r.left + r.width * 0.3
+      const y = r.top + r.height * 0.5
+      st.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: x, clientY: y, button: 0 }))
+      st.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: x, clientY: y }))
+      await new Promise(r2 => setTimeout(r2, 100))
+      const d = document.querySelector('.cmp-stage.slide .divider')
+      const dr = d.getBoundingClientRect()
+      return { leftPct: Math.round(((dr.left + 1) - r.left) / r.width * 100) }
+    `)
+    check('批量对比: 拖到 30% 处分割线跟随(±2%)', Math.abs(cmpDrag.leftPct - 30) <= 2,
+      `分割线 ${cmpDrag.leftPct}%`)
+    /* 切并排 + 交换 + 关闭(选择集保留) */
+    const cmpSide = await cdp.eval(`
+      const btns = document.querySelectorAll('[data-test="cmp-bar"] .seg button')
+      btns[0].click()
+      await new Promise(r => setTimeout(r, 100))
+      const sideImgs = document.querySelectorAll('[data-test="cmp-stage"] img').length
+      document.querySelector('[data-test="cmp-bar"] .swap').click()
+      await new Promise(r => setTimeout(r, 100))
+      return { sideImgs, stillOpen: !!document.querySelector('[data-test="cmp-bar"]') }
+    `)
+    check('批量对比: 并排模式两图各占一半, 交换后不关', cmpSide.sideImgs === 2 && cmpSide.stillOpen,
+      JSON.stringify(cmpSide))
+    await cdp.eval(`document.querySelector('[data-test="cmp-bar"] .x').click(); return true`)
+    await waitFor(cdp, `!document.querySelector('[data-test="cmp-bar"]')`,
+      { label: '对比遮罩关闭', timeout: 8000 })
+    const cmpAfter = await cdp.eval(`return +document.querySelector('[data-test="scan-sel-count"]').textContent`)
+    check('批量对比: 关掉后选择集原样保留(对比只是看)', cmpAfter === 2, `计数 ${cmpAfter}`)
+    await cdp.eval(`__t.click('[data-test="scan-sel-clear"]'); return true`)
+
     /* 「选到在看的那张」(2026-10-22 用户的真实流程: 一张一张看过来, 看到一半想把
      * 第 1 张到当前这张整个搬到别的文件夹)。
      * **必须真跑一遍光箱**: 退出选择模式 -> 点第 2 张开大图 -> 关掉 -> 重进选择模式 -> 点按钮。
@@ -5785,24 +5947,19 @@ async function main() {
       return true
     `)
     await sleep(400)
+    /* 2026-11-10 用户反馈: 移动/复制结束后要自动退出选择模式(工具条收掉), 别让人再手动 Esc。
+       全部成功 -> 工具条消失; 有失败 -> 留在选择模式且失败项仍勾着(可重试)。 */
+    await sleep(600)
     const afterMove = await cdp.eval(`
       return {
-        count: +document.querySelector('[data-test="scan-sel-count"]').textContent,
+        bar: !!document.querySelector('[data-test="scan-batch-bar"]'),
         modal: !!document.querySelector('.mt-body'),
       }
     `)
-    check('批量移动: 选中计数归 0(弹窗由 e2e 手动收掉, 不再测自动关闭)', afterMove.count === 0,
-      `计数 ${afterMove.count} · 弹窗 ${afterMove.modal}`)
+    check('批量移动: 移完自动退出选择模式(工具条自动收掉)',
+      afterMove.bar === false, `工具条 ${afterMove.bar ? '还在' : '已收'} · 弹窗 ${afterMove.modal}`)
 
-    /* 10-01 工具条 ✕ 退出: 此刻在选择模式、网格还有图(sq 未删) -> 点 ✕ -> 操作条消失。
-       ⚠️ 不能放在批量删除之后: 全删空时二级视图切到「没有可显示的图片」空态,
-       连卡片都没了, 勾选框也就没有可点的对象, 回不到选择模式(r13 实锤「重新进入选择模式」超时;
-       第十八轮把入口从顶部按钮改成卡片勾选框之后, 这个前提依然成立)。 */
-    await cdp.eval(`__t.click('[data-test="scan-batch-exit"]'); return true`)
-    await waitFor(cdp, `!document.querySelector('[data-test="scan-batch-bar"]')`,
-      { label: '✕ 退出后操作条消失', timeout: 8000 })
-    check('批量: 工具条 ✕ 退出按钮可退出选择模式', true, '操作条已消失 · 已清空已选')
-    /* 回到选择模式, 继续批量删除段(第十八轮入口: 点卡片勾选框, 勾上的那张随后被全选覆盖) */
+    /* 重新进入选择模式, 继续批量删除段(第十八轮入口: 点卡片勾选框, 勾上的那张随后被全选覆盖) */
     await cdp.eval(`__t.click('.scan-view .grid.imgs .card .ckbox'); return true`)
     await waitFor(cdp, `!!document.querySelector('[data-test="scan-batch-bar"]')`,
       { label: '重新进入选择模式', timeout: 8000 })

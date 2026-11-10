@@ -22,6 +22,7 @@ import TvTabs from '@/components/base/TvTabs.vue'
 import TvTagSuggestInput from '@/components/tag/TvTagSuggestInput.vue'
 import TvSelect from '@/components/base/TvSelect.vue'
 import TvReplaceSetPicker from '@/components/export/TvReplaceSetPicker.vue'
+import TvChip from '@/components/base/TvChip.vue'
 import TvCheckbox from '@/components/base/TvCheckbox.vue'
 import TvInput from '@/components/base/TvInput.vue'
 import TvButton from '@/components/base/TvButton.vue'
@@ -54,7 +55,7 @@ import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
 import { api } from '@/utils/api.js'
-import { advParams, advZh, adv, advPinCount } from '@/utils/advReplace.js'
+import { advParams, advZh, adv, advPinCount, nlActive, ensureAdvLoaded } from '@/utils/advReplace.js'
 import { nfmt } from '@/utils/format.js'
 
 const src = useSourceStore()
@@ -144,8 +145,22 @@ async function toggleExportMenu() {
 const autoPresetCount = ref(0)     // 开了「黑名单变更后自动导出」的预设数(按钮上显示)
 const exporting = ref(0)      // 0=空闲 1=纯标签 2=带路径
 const stripCharExport = ref(true)  // 导出时剔除角色/系列标签(含无括号角色, 走角色库)
-const stripViewExport = ref(false) // 导出时剔除视角/机位标签(词表 data/export_view_tags.txt, 来自随机机位交接文档)
-const safeOnlyExport = ref(false)  // 导出时剔除敏感tag(只导出安全模式的标签, 口径跟随安全模式档位)
+// 只导出安全模式标签(2026-11-10 回归 + 带档位): exporter 认 safe_only + safe_level('0'..'4'=阈值)。
+// 2026-11-10 用户拍板:「跟随全局」这种档也去掉 —— 只给具体档位(初值取当前全局档, 之后就是独立值)
+const safeOnlyExport = ref(false)
+const safeLevelExport = ref(String(safety.maxLevel ?? 2))
+/* 档位 chips 用安全模式设置弹窗(TvSafetyModal)同款可读标签 —— 不裸写 01234(2026-11-10 用户拍板)。
+ * 语义同显示上限: 选 ≤L2 = 剔掉比 L2 更敏感的词(露骨 L3+ 与极端 L4) */
+const SAFE_LEVELS_EXPORT = [
+  { v: '4', label: '≤L4 · 全显示', hint: '阈值 4 = 基本不剔(所有等级的词都留下)' },
+  { v: '3', label: '≤L3 · 藏极端', hint: '阈值 3 = 剔掉极端(L4)的词' },
+  { v: '2', label: '≤L2 · 藏露骨', hint: '阈值 2 = 剔掉露骨(L3+)和极端(L4)的词' },
+  { v: '1', label: '≤L1 · 藏暗示', hint: '阈值 1 = 剔掉明显暗示(L2+)以上的词' },
+  { v: '0', label: '≤L0 · 只留常规', hint: '阈值 0 = 最严, 连擦边(L1)也剔, 只留常规词' },
+]
+const blacklistExport = ref(true)  // 导出时应用黑名单(2026-11-10 收进菜单可关; exporter 认 blacklist=0)
+const spacesExport = ref(true)     // 下划线转空格(与 exporter 旧默认一致; 反推/训练管线要保留下划线就关)
+const segModeExport = ref(false)   // 段位模式(只留内容 tag; 之前只在预设编辑框里能勾, 实时导出走不到)
 // 过滤组(2026-10-28 词条管线): 槽内单选+互斥消解, 仅单人图生效; 主进程 exporter 认 groups=1
 const groupsExport = ref(false)
 // 高级替换(2026-10-30): 独立弹窗 TvAdvancedReplaceModal, 状态在 utils/advReplace.js
@@ -153,20 +168,53 @@ const groupsExport = ref(false)
 // 本页只留: 弹窗开关 + 导出参数取值(advParams()) + 回执文案。
 const showAdvReplace = ref(false)
 function rndZh(id) { return advZh(id) }
+/** 高级替换弹窗里当前方案名(菜单 hint 带上它 —— 方案化后用户得知道导出用的是哪套) */
+const advSetName = computed(() => adv.sets.find((s) => s.id === adv.activeId)?.name || '')
 /** 导出菜单那行状态提示(高级替换已收进独立弹窗, 这里只报当前配置概要) */
 const advSummary = computed(() => {
-  if (!adv.enabled) return '未启用'
   const parts = []
-  if (adv.picked.length) parts.push(`随机 ${adv.picked.length} 槽`)
-  if (advPinCount.value) parts.push(`钉词 ${advPinCount.value}`)
-  if (adv.banned.length) parts.push(`禁用 ${adv.banned.length} 槽`)
-  return parts.length ? `已启用: ${parts.join(' · ')}` : '已启用(未配置任何槽)'
+  if (adv.enabled) {
+    if (adv.picked.length) parts.push(`随机 ${adv.picked.length} 槽`)
+    if (adv.inserts.length) parts.push(`插入 ${adv.inserts.length} 槽`)
+    if (advPinCount.value) parts.push(`钉词 ${advPinCount.value}`)
+    if (adv.banned.length) parts.push(`禁用 ${adv.banned.length} 槽`)
+  }
+  // 自然语言段是独立开关(2026-11-08): 高级替换关着它也能单独生效,
+  // 所以摘要不能只看 adv.enabled —— 否则用户开了自然语言段, 界面一句话都不提。
+  if (nlActive.value) parts.push(`自然语言 ${adv.nl.dims.length} 维`)
+  const tag = advSetName.value ? `(方案「${advSetName.value}」)` : ''
+  if (!parts.length) return adv.enabled ? `已启用${tag}(未配置任何槽)` : '未启用'
+  return `已启用${tag}: ${parts.join(' · ')}`
 })
 
 const replaceExport = ref(true)    // 导出时应用替换规则(默认开; 关了就导原始标签, 主进程 exporter 本来就认 replace=0)
 /* 替换规则组(2026-10-04): 选中哪一套。多套规则时导出时挑一套, 见 🔁 规则编辑器。
  * 列表与"纠正成真实 id"都由 TvReplaceSetPicker 自己干(它挂载时会 emit), 这里只留值。 */
 const replaceSet = ref('')
+
+/* 高级替换(2026-11-10): 菜单里做成与替换同构的「总开关 + 用哪套方案」。
+ * 2026-11-10 用户拍板:「跟随当前方案」这种也去掉 —— 只选已有方案。
+ * 单一事实源 advSetExport: '0'=不启用(连自然语言段一起关) / 其余=方案 id。
+ * 方案库异步加载, 载入后若还没选中就落到当前方案(见下方 watch)。
+ * 方案清单在 adv.sets(方案库, 弹窗与菜单共用同一份 reactive)。 */
+const advSetExport = ref('')
+const advExport = computed({
+  get: () => advSetExport.value !== '0',
+  set: (v) => {
+    if (!v) { advSetExport.value = '0'; return }
+    if (advSetExport.value === '0' || !advSetExport.value) {
+      advSetExport.value = adv.activeId || adv.sets[0]?.id || ''
+    }
+  },
+})
+watch(() => adv.sets.map((s) => s.id).join(','), () => {
+  // 方案库载入/变动后兜底: 开着但没选中(初载) → 落到当前方案; 选中的方案被删了 → 落到第一套
+  const ids = adv.sets.map((s) => s.id)
+  if (advSetExport.value === '0') return
+  if (!advSetExport.value || !ids.includes(advSetExport.value)) {
+    advSetExport.value = adv.activeId && ids.includes(adv.activeId) ? adv.activeId : (ids[0] || '')
+  }
+})
 
 /** 预设弹窗里「新建预设」的初值 = 首页当前筛选条件(建完之后就是快照, 不再联动) */
 const presetSnapshot = computed(() => ({
@@ -177,15 +225,18 @@ const presetSnapshot = computed(() => ({
   exclude: '',
   exclude_char: excludeChar.value,
   img_src: onlyComfy.value ? 'comfyui' : '',
-  spaces: true,
-  blacklist: true,
+  spaces: spacesExport.value,
+  blacklist: blacklistExport.value,
   replace: replaceExport.value,
   bg: prefs.bgAuto,
   strip_char: stripCharExport.value,
-  strip_view: stripViewExport.value,
   safe_only: safeOnlyExport.value,
+  safe_level: safeLevelExport.value,
+  strip_view: false,            // 2026-11-10 菜单已撤「剔视角」: 实时导出恒关, 预设编辑框里仍可按预设配
+  seg_mode: segModeExport.value,
   groups: groupsExport.value,
   ...advParams(),
+  adv_set: advSetExport.value,   // 菜单选的方案(覆盖 advParams 里的缺省值)
   with_path: false,
   replace_set: replaceSet.value,
 }))
@@ -403,19 +454,24 @@ async function doExport(withPath) {
     if (withPath) params.with_path = '1'
     params.bg = prefs.bgAuto ? '1' : '0'
     params.strip_char = stripCharExport.value ? '1' : '0'
-    params.strip_view = stripViewExport.value ? '1' : '0'
     params.safe_only = safeOnlyExport.value ? '1' : '0'
+    params.safe_level = safeLevelExport.value
+    params.blacklist = blacklistExport.value ? '1' : '0'
+    params.spaces = spacesExport.value ? '1' : '0'
+    params.seg_mode = segModeExport.value ? '1' : '0'
     params.groups = groupsExport.value ? '1' : '0'
     // 高级替换(2026-10-30): 参数整体从 advReplace store 取(随机/钉词/禁用槽/率/种子)
     Object.assign(params, advParams())
+    params.adv_set = advSetExport.value   // 2026-11-10: 用哪套方案跟菜单走('0'=不启用 / 方案 id)
     params.replace = replaceExport.value ? '1' : '0'
     params.replace_set = replaceSet.value
     const r = await api.exportSave(params)
     if (r?.canceled) { ui.toast('已取消导出', 'info'); return }
     if (r?.error) { ui.err('导出失败: ' + r.error); return }
     const stripNote = stripCharExport.value && r.stripped ? `(已剔 ${nfmt(r.stripped)} 个角色/系列)` : ''
-    const viewNote = stripViewExport.value && r.viewStripped ? `(已剔 ${nfmt(r.viewStripped)} 个视角/机位)` : ''
-    const safeNote = safeOnlyExport.value && r.safeStripped ? `(已剔 ${nfmt(r.safeStripped)} 个敏感tag)` : ''
+    const safeNote = safeOnlyExport.value && r.safeStripped
+      ? `(安全模式已剔 ${nfmt(r.safeStripped)} 个敏感tag · 上限 L${safeLevelExport.value})`
+      : ''
     const groupsNote = groupsExport.value && r.groupsStripped ? `(过滤组已剔 ${nfmt(r.groupsStripped)} 个冲突tag)` : ''
     const repNote = replaceExport.value && r.replaced ? `(已替换 ${nfmt(r.replaced)} 个)` : ''
     // 禁用槽删除计数(2026-10-30): 与黑名单剔除分开报, 用户才知道是槽级配置干的
@@ -430,7 +486,15 @@ async function doExport(withPath) {
         .map(([id, n]) => `${rndZh(id)} ${nfmt(n)}`)
       rndNote = `(已随机替换 ${nfmt(r.randomized)} 个词${parts.length ? ': ' + parts.join(' · ') : ''})`
     }
-    ui.ok(`✅ 已导出 ${nfmt(r.count)} 行${stripNote}${viewNote}${safeNote}${groupsNote}${repNote}${banNote}${rndNote} → ${r.path}`, 3200)
+    // 自然语言段回执(2026-11-08): 报抽了几段 + 批内重复率 —— 用户最关心的就是"还雷同吗"
+    let nlNote = ''
+    if (r.nl && r.nl.picked) {
+      const dimZh = { pose: '动作', costume: '穿搭', hair: '发型' }
+      const dims = (r.nl.dims || []).map((d) => dimZh[d] || d).join('+')
+      const dup = r.nl.dup?.dup || 0
+      nlNote = `(自然语言段 ${dims} ${nfmt(r.nl.picked)} 行, ${dup ? `重复 ${nfmt(dup)} 行` : '零重复'})`
+    }
+    ui.ok(`✅ 已导出 ${nfmt(r.count)} 行${stripNote}${safeNote}${groupsNote}${repNote}${banNote}${rndNote}${nlNote} → ${r.path}`, 3600)
   } catch (e) {
     ui.err('导出失败: ' + e.message)
   } finally {
@@ -480,6 +544,7 @@ watch(() => route.fullPath, () => { if (route.name === 'home') applyRouteQuery()
 async function initHome() {
   rndSeed.value = Date.now()
   applyRouteQuery()
+  void ensureAdvLoaded()   // 导出菜单的方案 chips 要用 adv.sets, 挂载就拉(失败弹窗打开时会重试)
   await Promise.allSettled([
     src.load().catch((e) => ui.err('来源统计加载失败: ' + e.message)),
     loadStats(),
@@ -642,6 +707,29 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
               <div v-if="replaceExport" class="mopt">
                 <TvReplaceSetPicker v-model="replaceSet" label="用哪套规则" />
               </div>
+              <!-- 高级替换(2026-11-10): 与替换同构 —— 总开关 + 用哪套方案(chips, 与预设编辑框同款交互;
+                   原生 select 在菜单容器里点不开是 2026-10-04 实锤的坑)。方案本体在 🎲 高级替换弹窗里维护。 -->
+              <div class="mopt">
+                <TvCheckbox
+                  v-model="advExport"
+                  label="导出时应用高级替换"
+                  title="按槽随机换词 + 插入 + 钉词必现 + 禁用槽删词 + 自然语言段, 整套配置走方案库; 关掉 = 导出完全不做高级替换处理(连自然语言段一起关)"
+                />
+              </div>
+              <div v-if="advExport" class="mopt">
+                <div class="setpick">
+                  <span class="lb">用哪套方案</span>
+                  <TvChip
+                    v-for="s in adv.sets"
+                    :key="s.id"
+                    :label="s.name"
+                    :active="advSetExport === s.id"
+                    :title="`用方案「${s.name}」(方案在 🎲 高级替换弹窗里维护)`"
+                    @click="advSetExport = s.id"
+                  />
+                  <span v-if="!adv.sets.length" class="lb dim">还没有方案 —— 去 🎲 高级替换弹窗新建一个</span>
+                </div>
+              </div>
               <div class="mopt">
                 <TvCheckbox
                   v-model="stripCharExport"
@@ -649,18 +737,47 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
                   title="导出结果里去掉角色标签(含 higuchi_madoka 这类无括号写法, 由角色库识别)和裸系列标签; 生成提示词通常需要"
                 />
               </div>
-              <div class="mopt">
-                <TvCheckbox
-                  v-model="stripViewExport"
-                  label="导出剔除视角/机位标签"
-                  title="导出结果里去掉视角/机位类标签(from behind、high angle、dutch angle 等), 随机机位工作流会自己随机视角, 不需要图里带的; 词表在 data/export_view_tags.txt, 可自行增删"
-                />
-              </div>
+              <!-- 只导出安全模式标签(2026-11-10 回归): 档位 chips 用安全模式设置弹窗同款可读标签,
+                   不再裸写 0-4, 也没有「跟随全局」—— 只选具体档位(2026-11-10 用户拍板) -->
               <div class="mopt">
                 <TvCheckbox
                   v-model="safeOnlyExport"
                   label="只导出安全模式的标签(剔除敏感tag)"
-                  title="导出结果的每个标签串里去掉敏感标签(nude/sex 等), 行数不变; 敏感口径跟随安全模式的「显示上限」(0-4 级), 词表即 data/safety_tags.txt"
+                  title="导出结果的每个标签串里去掉敏感标签(nude/sex 等), 行数不变; 词表即 data/safety_tags.txt, 敏感等级阈值在下方选"
+                />
+              </div>
+              <div v-if="safeOnlyExport" class="mopt">
+                <div class="setpick">
+                  <span class="lb">敏感档位</span>
+                  <TvChip
+                    v-for="lv in SAFE_LEVELS_EXPORT"
+                    :key="lv.v"
+                    :label="lv.label"
+                    :active="safeLevelExport === lv.v"
+                    :title="lv.hint"
+                    @click="safeLevelExport = lv.v"
+                  />
+                </div>
+              </div>
+              <div class="mopt">
+                <TvCheckbox
+                  v-model="blacklistExport"
+                  label="导出时应用黑名单"
+                  title="导出结果先过一遍黑名单(黑名单编辑器里配的); 想导一份原始全量标签做对比就关掉"
+                />
+              </div>
+              <div class="mopt">
+                <TvCheckbox
+                  v-model="spacesExport"
+                  label="下划线转空格"
+                  title="导出结果里 tag 的下划线换成空格(white_thighhighs → white thighhighs), 与旧默认一致; 反推/训练管线要保留下划线就关掉"
+                />
+              </div>
+              <div class="mopt">
+                <TvCheckbox
+                  v-model="segModeExport"
+                  label="段位模式(只留内容 tag)"
+                  title="过滤画师/角色/系列/meta, 人数排最前, 通用按大类归堆 —— 给绘图管线随机抽注入用; 关掉则保持原始顺序"
                 />
               </div>
               <div class="mopt">
@@ -668,19 +785,6 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
                   v-model="groupsExport"
                   label="过滤组去冲突(槽内单选+互斥)"
                   title="导出前按槽位词典做消解: 同槽位只留本地图片量最多的一个(景别/腿袜/表情/家具等), 并消解裸足×无鞋这类互斥对; 仅对单人图生效, 群像原样保留"
-                />
-              </div>
-              <!-- 高级替换(2026-10-30): 整体搬去独立弹窗(动作区「🎲 高级替换」入口),
-                   导出菜单只留一行状态提示 —— 配置太多塞菜单里太挤了 -->
-              <div class="mopt adv-hint">
-                <span class="faint">🎲 高级替换: {{ advSummary }}</span>
-                <TvButton size="xs" variant="ghost" @click="showAdvReplace = true">去配置…</TvButton>
-              </div>
-              <div class="mopt">
-                <TvCheckbox
-                  v-model="prefs.bgAuto"
-                  label="缺背景时补背景标签"
-                  title="标签组合里没有背景/场景标签时, 自动追加 scenery 等背景标签, 防止 AI 生图画出白底"
                 />
               </div>
             </div>
@@ -697,10 +801,10 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
               variant="ghost"
               size="sm"
               :title="advSummary === '未启用'
-                ? '高级替换: 按槽随机换词 + 钉词必现 + 禁用槽删词, 独立弹窗配置, 导出时生效'
+                ? '高级替换: 按槽随机换词 + 钉词必现 + 禁用槽删词 + 自然语言动作/穿搭/发型段, 独立弹窗配置, 导出时生效'
                 : `高级替换(${advSummary.replace('已启用: ', '').replace('已启用', '未配置')}) — 点击调整`"
               @click="showAdvReplace = true"
-            >🎲 高级替换<span v-if="adv.enabled" class="lnk-dot" /></TvButton>
+            >🎲 高级替换<span v-if="adv.enabled || nlActive" class="lnk-dot" /></TvButton>
             <TvButton variant="ghost" size="sm" :title="presetTitle" @click="showPresets = true">📤 预设导出</TvButton>
             <TvButton
               variant="ghost"
@@ -949,9 +1053,9 @@ watch(pageSize, (v) => { feed.setPageSize(v); doSearch() })
 .msep { height: 1px; margin: 4px 0; background: var(--border); }
 .mopt { padding: 4px 8px; }
 
-/* 导出菜单 · 高级替换状态行(2026-10-30: 配置搬进独立弹窗, 菜单里只剩概要 + 入口) */
-.adv-hint { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.adv-hint .faint { font-size: 11px; color: var(--faint); }
+/* 导出菜单 · 高级替换方案 chips(2026-11-10: 与替换的 TvReplaceSetPicker 同款交互, 样式对齐它的 scoped 版) */
+.setpick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.setpick .lb { font-size: 12px; color: var(--muted); }
 
 /* 第三层: 配置入口的文字链 */
 .lnk { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px; }

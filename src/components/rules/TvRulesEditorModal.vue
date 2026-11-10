@@ -793,14 +793,17 @@ async function save() {
 .editor.tall { min-height: 52vh; }
 .loading { color: var(--muted); font-size: 12px; padding: 20px 0; }
 
-/* ============ 网格: 左组栏 + 右主区 ============ */
-.grid { display: flex; gap: 0; min-height: 60vh; align-items: stretch; }
+/* ============ 网格: 左组栏 + 右主区 ============
+ * 2026-11-09: 高度封顶(面板 90vh - 头/脚/内边距 ≈ 130), 两列各自滚 ——
+ * 之前只给 min-height, body 是滚动容器, 规则一多组栏跟着主区一起跑(高级替换
+ * 侧栏同款问题, 用户实锤后两边一起修)。 */
+.grid { display: flex; gap: 0; height: calc(90vh - 130px); min-height: 380px; align-items: stretch; }
 .side {
-  flex: 0 0 200px; display: flex; flex-direction: column;
+  flex: 0 0 200px; display: flex; flex-direction: column; overflow: hidden;
   border-right: 1px solid var(--border); padding-right: 12px; margin-right: 14px;
 }
-.side-cap { font-size: 11px; color: var(--faint); padding: 2px 6px 8px; }
-.side-list { flex: 1 1 auto; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.side-cap { font-size: 11px; color: var(--faint); padding: 2px 6px 8px; flex: 0 0 auto; }
+.side-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .side-item { border-radius: var(--r-sm); padding: 7px 10px; cursor: pointer; border: 1px solid transparent; }
 .side-item:hover { background: var(--panel2); }
 .side-item.on { background: var(--panel2); border-color: var(--accent); }
@@ -811,7 +814,7 @@ async function save() {
 .side-ops-row { display: flex; gap: 4px; width: 100%; }
 .side-ops :deep(.btn) { padding-left: 6px; padding-right: 6px; }
 
-.main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.main { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 
 /* ---- 工具栏 ---- */
 .bar {

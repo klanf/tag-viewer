@@ -15,6 +15,8 @@ import { safetyExportStripper } from './safety.js'
 import { exportSegSort, sortTags, unwrapWeight } from './tagcats.js'
 import { applyFilterGroups } from './tagfilter.mjs'
 import { makeRandomizer, filterBannedSlots } from './export-random.js'
+import { advSets } from './adv-sets.js'
+import { makeNlPicker, nlDupReport, NL_DIMS, NL_LEVELS } from './nl-bank.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BUNDLED_KNOWLEDGE_DIR } from './paths.js'
@@ -25,6 +27,47 @@ import { openDb } from './store.js'
  * 库里存的是 best_quality, 用户在追加框里手打成 best quality, 其实是同一个标签。
  */
 const tagKey = (t) => t.toLowerCase().replace(/[\s_]+/g, '_')
+
+/**
+ * 方案 cfg -> 与首页 advParams() 同形的参数对象(2026-11-09)。
+ * exporter 的 rnd/nl 参数解析只认参数串形态, 方案选出来先摊平成同样的串,
+ * 后续管线一行都不用动。rates 库里存 0~1, 串里也是 0~1(1 省略 = 必换, 老格式)。
+ */
+function advSetParams(cfg = {}) {
+  const slots = (Array.isArray(cfg.picked) ? cfg.picked : []).map((id) => {
+    const r = Number(cfg.rates?.[id])
+    return (Number.isFinite(r) && r >= 0 && r < 1) ? `${id}:${r.toFixed(2)}` : id
+  }).join(',')
+  // 插入槽(2026-11-09): 有词→换 复用 randomize_slots(率表同一份), 这里只发补词清单
+  const inserts = (Array.isArray(cfg.inserts) ? cfg.inserts : []).map((id) => {
+    const r = Number(cfg.rates?.[id])
+    return (Number.isFinite(r) && r >= 0 && r < 1) ? `${id}:${r.toFixed(2)}` : id
+  }).join(',')
+  const slotsAll = [slots, inserts].filter(Boolean).join(',')
+  const pins = (Array.isArray(cfg.pins) ? cfg.pins : [])
+    .map((pt) => `${pt.slot}:${String(pt.word).toLowerCase().replace(/\s+/g, '_')}`)
+    .join(',')
+  const ban = (Array.isArray(cfg.banned) ? cfg.banned : []).join(',')
+  const nl = cfg.nl || {}
+  const hasCfg = (cfg.picked?.length || cfg.inserts?.length || pins || ban)
+  return {
+    randomize: (cfg.enabled === true && hasCfg) ? '1' : '0',
+    randomize_slots: slotsAll,
+    insert_slots: inserts,
+    pin_slots: pins,
+    pin_fill: cfg.pinFill !== false ? '1' : '0',
+    ban_slots: ban,
+    randomize_nsfw: cfg.nsfw !== false ? '1' : '0',
+    randomize_seed: String(cfg.seed || ''),
+    nl_dims: (nl.enabled === true && Array.isArray(nl.dims) && nl.dims.length) ? nl.dims.join(',') : '',
+    nl_level: ['sfw', 'soft', 'nsfw'].includes(nl.level) ? nl.level : 'sfw',
+    nl_strip_pose: nl.stripPose !== false ? '1' : '0',
+    nl_pose_view: nl.poseView !== false ? '1' : '0',
+    nl_strip_costume: nl.stripCostume !== false ? '1' : '0',
+    nl_strip_hair: nl.stripHair !== false ? '1' : '0',
+    nl_seed: String(nl.seed || ''),
+  }
+}
 
 function exportCore(raw = {}) {
   const t0 = Date.now()
@@ -61,7 +104,24 @@ function exportCore(raw = {}) {
   //                      只勾禁用不勾随机/钉词也生效 —— 所以它不走 rnd 变量, 独立判断。
   //   randomize_nsfw     '1'/'0' 是否允许从成人词库(nsfwPools)抽词; 缺省 = '1'(旧行为)
   //   randomize_seed     留空 = 每次导出都不同; 填了 = 同筛选结果可复现
-  const rndOn = raw.randomize === '1' || raw.randomize === true
+  /* 高级替换方案(2026-11-09): adv_set 指定用哪一套方案(user/adv_sets.json)。
+   *   '@active' = 跟随当前方案(首页导出默认); '0' = 不启用(连 NL 段一起关);
+   *   方案 id   = 指定方案; 空/方案不存在 = 走老快照参数(老预设兼容, 行为不变)。
+   * 方案 cfg 覆盖 randomize/pin/ban/nl 全部同形参数 —— 预设页不再手输这些串。 */
+  const advSetId = String(raw.adv_set || '').trim()
+  let advRaw = raw
+  if (advSetId === '0') {
+    advRaw = { ...raw, randomize: '0', randomize_slots: '', pin_slots: '', ban_slots: '',
+      randomize_seed: '', nl_dims: '' }
+  } else if (advSetId) {
+    const { active, sets } = advSets()
+    const set = advSetId === '@active'
+      ? (sets.find((s) => s.id === active) || null)
+      : (sets.find((s) => s.id === advSetId) || null)
+    if (set) advRaw = { ...raw, ...advSetParams(set.cfg) }
+    // 方案不存在(被删了?) → 不动, 走快照参数 —— 与"预设引用的替换规则组被删"同一处理
+  }
+  const rndOn = advRaw.randomize === '1' || advRaw.randomize === true
   const rndSecs = new Set()
   const rndSlots = new Set()
   const rndRates = new Map()
@@ -81,11 +141,22 @@ function exportCore(raw = {}) {
       }
     }
   }
-  parseIdRate(raw.randomize_sections, rndSecs)
-  parseIdRate(raw.randomize_slots, rndSlots)
+  parseIdRate(advRaw.randomize_sections, rndSecs)
+  parseIdRate(advRaw.randomize_slots, rndSlots)
+  // 插入槽串(2026-11-09): 与 randomize_slots 同格式(id 或 id:率), 率 = 缺词时补上的概率。
+  // 插入槽同时并进 rndSlots/rndRates —— 「有词 → 换」复用同一条随机管线, 不另写一份。
+  const rndInserts = new Map()
+  {
+    const insSet = new Set()
+    parseIdRate(advRaw.insert_slots, insSet)
+    for (const id of insSet) {
+      rndSlots.add(id)
+      rndInserts.set(id, rndRates.get(id) ?? 1)   // 没写率 = 必补
+    }
+  }
   // 钉词串: "槽:词" —— indexOf(':') 而不是正则, 词本身可以带冒号以外的任何字符
   const rndPins = new Map()
-  for (const part of String(raw.pin_slots || '').split(',')) {
+  for (const part of String(advRaw.pin_slots || '').split(',')) {
     const t = part.trim()
     if (!t) continue
     const i = t.indexOf(':')
@@ -94,19 +165,91 @@ function exportCore(raw = {}) {
     const w = t.slice(i + 1).trim()
     if (slot && w) rndPins.set(slot, w)
   }
-  const rndPinFill = !(raw.pin_fill === '0' || raw.pin_fill === false)
+  const rndPinFill = !(advRaw.pin_fill === '0' || advRaw.pin_fill === false)
   // 禁用槽串: 纯槽 id 列表, 没有率段
   const rndBan = new Set()
-  for (const part of String(raw.ban_slots || '').split(',')) {
+  for (const part of String(advRaw.ban_slots || '').split(',')) {
     const t = part.trim()
     if (t) rndBan.add(t)
   }
-  const rndSeed = raw.randomize_seed != null ? String(raw.randomize_seed).trim() : ''
-  const rndNsfw = !(raw.randomize_nsfw === '0' || raw.randomize_nsfw === false)
-  const rnd = rndOn && (rndSecs.size || rndSlots.size || rndPins.size)
+  const rndSeed = advRaw.randomize_seed != null ? String(advRaw.randomize_seed).trim() : ''
+  const rndNsfw = !(advRaw.randomize_nsfw === '0' || advRaw.randomize_nsfw === false)
+
+  /* 自然语言段(2026-11-08): 从 knowledge/nl-bank.json 抽「动作/穿搭/发型」短句,
+   * 追加在 tag 串后面。tag 只能表达粗粒度姿势(池子里就 25 个词), 而这两个开源
+   * 图库给的是几百条具体动作的自然语言描述 —— Anima 这类模型直接吃得下。
+   *   nl_dims      "pose,costume,hair" 的任意组合; 空 = 不启用
+   *   nl_level     sfw(默认) | soft | nsfw —— 档位闸门在池子构建期收敛
+   *   nl_pos       after(默认) | before —— 自然语言段放 tag 串后面还是前面
+   *   nl_lang      en(默认) | zh —— 句子语言; 语料每条自带手工中文译文, zh 只是选用
+   *   nl_strip_pose '0' 可关: 抽了动作句 → 剔原图**全部动作槽**
+   *                (pose/pose_base/pose_risque/n_pos), 否则 "standing" 会和
+   *                "lying on her side" 打架(默认开)
+   *   nl_pose_view '0' 可关: 动作句是否带机位。机位**不是独立维度**, 它取该动作在
+   *                源库里真实拍过的那几个(对齐原项目 _build_pose_prompts 的
+   *                「{角度}视角，动作：{名称}」成套口径)。带机位时剔
+   *                viewpoint/camera_angle —— 同一件事两个说法; 景别(shot_size)不动
+   *   nl_strip_costume '0' 可关: 抽了穿搭句 → 剔原图全部**单品槽**(13 个, 见下),
+   *                否则 "school uniform" 会和 "she is wearing gym clothes" 打架(默认开)
+   *   nl_strip_hair '0' 可关: 抽了发型句 → 剔 hair_len/hair_color/hairstyle,
+   *                否则 "long hair" 会和 "her hair is a short bob" 打架(默认开)
+   *   nl_seed      留空 = 每次不同(与 randomize_seed 独立, 免得只想换动作却把换词也锁死)
+   * 抽法是**发牌**不是掷骰(见 nl-bank.js): 同一批里前 N 条动作两两不同。 */
+  const nlDims = String(advRaw.nl_dims || '')
+    .split(',').map((s) => s.trim()).filter((d) => NL_DIMS.includes(d))
+  const nlOn = nlDims.length > 0
+  const nlLevel = NL_LEVELS.includes(String(advRaw.nl_level || '')) ? String(advRaw.nl_level) : 'sfw'
+  const nlPos = String(raw.nl_pos || 'after') === 'before' ? 'before' : 'after'
+  // 句子语言(2026-11-10): 'en'(默认) | 'zh' —— 语料每条自带手工中文译文, 这里只是选用哪个
+  const nlLang = String(advRaw.nl_lang || '') === 'zh' ? 'zh' : 'en'
+  const nlStripPose = !(advRaw.nl_strip_pose === '0' || advRaw.nl_strip_pose === false)
+  const nlPoseView = !(advRaw.nl_pose_view === '0' || advRaw.nl_pose_view === false)
+  const nlStripCostume = !(advRaw.nl_strip_costume === '0' || advRaw.nl_strip_costume === false)
+  const nlStripHair = !(advRaw.nl_strip_hair === '0' || advRaw.nl_strip_hair === false)
+
+  /* 抽了自然语言句 → 把原图**同一语义面的槽整批剔掉**, 不是只剔一个词。
+   * 以前只剔 pose/pose_base(2 个), 实际动作类槽有 4 个, pose_risque 与 n_pos 会漏网,
+   * 于是 prompt 里同时出现 "standing" 和 "she is lying on her side" —— 用户 2026-11-08 指出。
+   * 机位同理: "seen from above" 与 viewpoint/camera_angle 是同一件事;
+   * shot_size(景别) 不算 —— 景别与机位正交, 由相机插件管。
+   * 穿搭(2026-11-09): NL 句是「从头到脚一整套」(上衣+裙+外套+袜+鞋+配饰),
+   * 与原图单品槽同语义面, 整批剔(含 clothing_type 这种整体类型词);
+   * **保留** cloth_mat / cloth_state_sfw / clothing_state —— 材质与穿着状态
+   * ("partially unbuttoned")句子不提, 是互补信息不是重复面, 剔了反而丢内容。
+   * 发型: NL 句描述长度+造型+发色, 剔 hair_len/hair_color/hairstyle 三个形状槽;
+   * **保留** hair_tie / hair_acc(发绳发卡) —— 句子基本不提配件, 同为互补信息。 */
+  const NL_STRIP_SLOTS = {
+    pose: ['pose', 'pose_base', 'pose_risque', 'n_pos'],
+    view: ['viewpoint', 'camera_angle'],
+    costume: ['top', 'bottom', 'outfit', 'underwear', 'legwear', 'footwear',
+      'headwear', 'handwear', 'accessory', 'eyewear', 'sleeves', 'swimwear', 'clothing_type'],
+    hair: ['hair_len', 'hair_color', 'hairstyle'],
+  }
+  if (nlOn) {
+    if (nlDims.includes('pose')) {
+      if (nlStripPose) for (const slot of NL_STRIP_SLOTS.pose) rndBan.add(slot)
+      // 机位是 pose 的附属: 出了机位半句就得剔视角槽, 关掉机位则视角 tag 保留
+      if (nlPoseView) for (const slot of NL_STRIP_SLOTS.view) rndBan.add(slot)
+    }
+    if (nlDims.includes('costume') && nlStripCostume) {
+      for (const slot of NL_STRIP_SLOTS.costume) rndBan.add(slot)
+    }
+    if (nlDims.includes('hair') && nlStripHair) {
+      for (const slot of NL_STRIP_SLOTS.hair) rndBan.add(slot)
+    }
+  }
+  const nlp = nlOn
+    ? makeNlPicker({ dims: nlDims, maxLevel: nlLevel, seed: advRaw.nl_seed || null, poseView: nlPoseView, lang: nlLang })
+    : null
+
+  // 插入槽 × 禁用/NL 剔槽的兜底(UI 冲突检查已拦, 这里再挡一层): 被剔的槽不补词,
+  // 否则 NL 把动作词删干净、插入又从池里塞一个回来, 等于绕过了剔除。
+  for (const s of rndBan) rndInserts.delete(s)
+
+  const rnd = rndOn && (rndSecs.size || rndSlots.size || rndPins.size || rndInserts.size)
     ? makeRandomizer({
         sections: rndSecs, slots: rndSlots, pins: rndPins, pinFill: rndPinFill,
-        seed: rndSeed || null, rates: rndRates, nsfw: rndNsfw,
+        seed: rndSeed || null, rates: rndRates, nsfw: rndNsfw, inserts: rndInserts,
       })
     : null
   /* 追加标签 —— **UI 已于 2026-10-04 移除**(看板筛选区与预设编辑页的输入框都删了,
@@ -131,6 +274,13 @@ function exportCore(raw = {}) {
   if (nameQ) results = results.filter((r) => r.path.toLowerCase().indexOf(nameQ) >= 0)
   const imgSrc = String(raw.img_src || '').trim().toLowerCase()
   if (imgSrc) results = results.filter((r) => String(r.imgSrc || '').toLowerCase() === imgSrc)
+
+  /* 条数上限(2026-11-08): 老版没有这个参数 —— 导出永远全量。
+   * 参数名特意叫 max_rows 而不是 limit: 前端 buildQuery() 带的是列表分页的
+   * limit(一页 60 条), doExport 直接把它铺进导出参数 —— 若这里认 limit,
+   * 「导出」会静默变成「只导当前一页」。改名隔离, 不碰老调用链。 */
+  const expLimit = Number(raw.max_rows) > 0 ? Math.floor(Number(raw.max_rows)) : 0
+  if (expLimit && results.length > expLimit) results = results.slice(0, expLimit)
 
   const bl = useBl ? blacklistMatcher() : null
   // 替换规则组(2026-10-04): raw.replace_set 指定用哪一套, 空 = 当前默认组。
@@ -158,6 +308,7 @@ function exportCore(raw = {}) {
   let slotBanned = 0    // 禁用槽删除的词数(2026-10-30), 回执展示用
   const slotBannedBy = {}
   let recIdx = 0          // 随机替换的派生种子序号(按导出行计, 与异步分片无关)
+  const nlRows = []       // 自然语言段的抽取记录, 给 finish() 算批内雷同体检
 
   /** 单条记录 -> 一行文本(副作用: 顺带累加各类计数)。
    *  抽成闭包是给同步/分片异步两个包装共用同一套管线(2026-10-20) ——
@@ -217,8 +368,10 @@ function exportCore(raw = {}) {
 
     // 禁用槽(2026-10-30): 黑名单之后、替换规则之前 —— 被禁的词不参与替换,
     // 不会被替换规则改写成别的词留下来。钉了的槽豁免(前端保存前拦冲突, 这里只防御)。
-    // 只勾禁用、不勾随机/钉词也要生效 —— 所以判断的是 rndOn && rndBan.size, 不看 rnd。
-    if (rndOn && rndBan.size) {
+    // 只勾禁用、不勾随机/钉词也要生效 —— 所以判断的是 rndBan.size, 不看 rnd
+    // (2026-11-08: 自然语言段抽动作句时会自动往 rndBan 里塞 pose/pose_base,
+    //  那条路径同样没有开随机, 所以这里不能再用 rndOn 门控)。
+    if (rndBan.size) {
       const res = filterBannedSlots(tags, rndBan, new Set(rndPins.keys()))
       if (res.banned) {
         slotBanned += res.banned
@@ -288,11 +441,22 @@ function exportCore(raw = {}) {
     // 随机出的新词不会再被这些过滤步误伤; 排在 segMode 之前, 产物仍能归堆排序。
     // 1:1 语义: 原图该大类有 N 个词就换 N 个(同槽同量), prompt 结构不动。
     if (rnd) {
-      const res = rnd.randomize(recIdx++, tags)
+      const res = rnd.randomize(recIdx, tags)
       randomized += res.replaced
       for (const [sec, n] of Object.entries(res.bySec || {})) rndBySec[sec] = (rndBySec[sec] || 0) + n
       tags = res.tags
     }
+
+    // 自然语言段: 抽在随机换词之后 —— 换词已经把 tag 侧收敛完, 这里的动作句才是最终描述。
+    // 发牌式抽样见 nl-bank.js: 同一批里前 N 条动作互不相同。
+    let nlText = ''
+    let nlParts = null
+    if (nlp) {
+      const got = nlp.pick(recIdx, nlLang)
+      nlText = got.text
+      if (got.parts.length) nlParts = got.parts
+    }
+    recIdx++
 
     if (segMode) {
       const before = tags.length
@@ -302,7 +466,11 @@ function exportCore(raw = {}) {
 
     if (spaces) tags = tags.map((t) => t.replace(/_/g, ' '))
     const s = tags.join(', ')
-    return withPath ? `${r.path}: ${s}` : s
+    const body = nlText
+      ? (nlPos === 'before' ? `${nlText}, ${s}` : (s ? `${s}, ${nlText}` : nlText))
+      : s
+    if (nlParts) nlRows.push({ nlParts, tags })
+    return withPath ? `${r.path}: ${body}` : body
   }
 
   const nameCore = p.searchTags.length
@@ -323,6 +491,16 @@ function exportCore(raw = {}) {
     randomizedBy: rndBySec,
     slotBanned,
     slotBannedBy,
+    // 自然语言段回执: 抽了几个维度、批内重复率多少(发牌式抽样下应为 0, 超过池子才 >0)
+    nl: nlOn
+      ? {
+          dims: nlp.active,
+          level: nlLevel,
+          picked: nlRows.length,
+          dup: nlDupReport(nlRows),
+          dealt: nlp.stats(),
+        }
+      : null,
     ms: Date.now() - t0,
     suggestedName: `筛选_${nameCore}.txt`,
   })

@@ -407,6 +407,11 @@ function createWindow() {
     title: 'WD14 标签看板',
     icon: path.join(__dirname, 'build', 'icon.ico'),   // 窗口/任务栏图标
     autoHideMenuBar: false,
+    /* e2e 静默模式: 不进任务栏/Alt-Tab/任务视图(2026-11-10) —— showInactive 离屏
+     * 显示虽然不抢焦点, 但任务栏照样挂图标; 用户点那个图标只会聚焦到一个
+     * 屏幕外的窗口(什么都不显示), 还挡住了他打开真正的应用。
+     * WS_EX_TOOLWINDOW 三处全隐藏, 渲染/CDP 不受影响。 */
+    skipTaskbar: e2eNoFocus,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

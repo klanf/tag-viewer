@@ -58,6 +58,8 @@ const props = defineProps({
    * 命中与否的分流在调用方 @click 里做(这里只管外观与 title)。
    */
   hitMap: { type: Object, default: null },
+  /** 权重表(2026-11-10 光箱 meta 模式): key=tag, value='1.2'/'1.2:0.8'; null=不显示权重 */
+  weightMap: { type: Object, default: null },
   gap: { type: String, default: '5px' },
   /** 每行高度上限, 超出滚动 */
   maxHeight: { type: String, default: '' },
@@ -166,6 +168,7 @@ const groups = computed(() => {
           :tag="it.tag"
           :zh="it.zh"
           :count="it.count"
+          :weight="weightMap ? (weightMap[it.tag] || '') : ''"
           :banned="it.banned"
           :ban-rule="it.banRule"
           :cat="it.cat"
@@ -199,6 +202,7 @@ const groups = computed(() => {
         :tag="it.tag"
         :zh="it.zh"
         :count="it.count"
+        :weight="weightMap ? (weightMap[it.tag] || '') : ''"
         :banned="it.banned"
         :ban-rule="it.banRule"
         :show-ban="showBan"
