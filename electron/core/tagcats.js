@@ -152,6 +152,7 @@ export function reloadCats(opts = {}) {
   state.copyrightSet = new Set()
   state.info = { weilin: 0, chars: 0, series: 0, bare: 0, copyright: 0, source: 'none' }
   charSeriesCache = new Map()
+  sortKeyMemo.clear()          // 分类数据换了, 排序键缓存必须一起作废
   return loadCats(opts)
 }
 
@@ -317,6 +318,10 @@ export function nlCats() {
 /** 剥掉 (tag:1.2) 权重壳, 非权重形态原样返回。分类/排序/去重都按剥壳后的裸词算 */
 export function unwrapWeight(tag) {
   const t = String(tag || '').trim()
+  // 快速通道(2026-11-11): RE_WEIGHT 要求以 '(' 开头, 所以不以括号开头的串直接返回。
+  // 导出时每个标签都要过这一步(十万图 × 60 标签 = 650 万次), 免掉一次正则匹配
+  // 就能省一秒以上 —— 「ban 完自动导出卡主进程」的另一小块。
+  if (t.charCodeAt(0) !== 40 /* ( */) return t
   const m = RE_WEIGHT.exec(t)
   return m ? m[1] : t
 }
@@ -402,10 +407,24 @@ export function isCharOrSeries(tag) {
 }
 
 /** 一个 tag 的完整排序键: [段位, 子类序(仅 general), 原顺序] —— 数值越小越靠前 */
+/**
+ * 排序键缓存(2026-11-11)。
+ * classify() 每次都做括号正则、nl 索引查询、韦林变体查找 —— 单次几十微秒,
+ * 但导出要跑「十万图 × 每图 40 标签」= 400 万次, 实测光这一项就占 17 秒
+ * (那是「ban 完自动导出卡主进程」的另一半)。而不同标签其实只有一万来个,
+ * 键只由 tag 文本决定(reloadCats 时整表清空), 缓存得住。
+ */
+const sortKeyMemo = new Map()
+
 function sortKeyOf(tag) {
+  let k = sortKeyMemo.get(tag)
+  if (k !== undefined) return k
   const c = classify(tag)
-  if (c.seg === 'general') return [SEG_RANK.general, SUB_RANK.get(c.sub) ?? SUB_ORDER.length]
-  return [SEG_RANK[c.seg], 0]
+  k = c.seg === 'general'
+    ? [SEG_RANK.general, SUB_RANK.get(c.sub) ?? SUB_ORDER.length]
+    : [SEG_RANK[c.seg], 0]
+  sortKeyMemo.set(tag, k)
+  return k
 }
 
 /**

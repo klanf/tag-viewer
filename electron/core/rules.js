@@ -139,7 +139,29 @@ function wildHit(s, pat) {
 
 /** '@xxx@' = "整段"匹配: 按 _ 切段逐段比, 段内还能用 * (但不能跨段)。# 是注释前缀, 故用 @ 当界符 */
 function isSegPat(pat) { return pat.length > 2 && pat.charAt(0) === '@' && pat.endsWith('@') }
-function segHit(lowerTag, inner) { return lowerTag.split('_').some((seg) => wildHit(seg, inner)) }
+
+/**
+ * 段内无 * 时的命中判断: 等价于 "某个 _ 分隔段恰等于 inner", 但**不切段**。
+ * 2026-11-11: 老实现 `split('_').some(...)` 每次调用分配一个数组 —— 导出里
+ * 6 张×… 实测 600 万标签 × 4 条段规则 = 2400 万次 split, CPU profile 里
+ * segHit 独占 **70%**(8.6s / 12.3s)。现在只做一次 indexOf 扫描 + 边界比较。
+ */
+function segEq(lowerTag, inner) {
+  let i = lowerTag.indexOf(inner)
+  while (i >= 0) {
+    const end = i + inner.length
+    if ((i === 0 || lowerTag.charCodeAt(i - 1) === 95 /* _ */)
+      && (end === lowerTag.length || lowerTag.charCodeAt(end) === 95)) return true
+    i = lowerTag.indexOf(inner, i + 1)
+  }
+  return false
+}
+
+function segHit(lowerTag, inner) {
+  // 99% 的段模式没有 *, 走无分配的等式判断; 带 * 的少数才切段
+  if (!inner.includes('*')) return segEq(lowerTag, inner)
+  return lowerTag.split('_').some((seg) => wildHit(seg, inner))
+}
 
 /** 段模式转正则片段: @boy@ -> (?:^|_)boy(?:_|$); 段内的 * 不能跨段, 用 [^_]* */
 function segRe(inner) { return '(?:^|_)' + inner.split('*').map(escapeRe).join('[^_]*') + '(?:_|$)' }
@@ -154,10 +176,26 @@ function fastHit(t, m) {
   return false
 }
 
+/**
+ * 单标签命中缓存的容器(2026-11-11)。
+ * 导出管线里每个标签要查**两次**黑名单(原样串 + 剥壳归一键), 十万图 × 60 标签
+ * = 1300 万次 fastHit; 而不同标签只有一万来个, 纯函数结果缓存得住。
+ * 用 WeakMap 挂到 matcher 对象上 —— 黑名单文件一改, matcher 就是新对象, 缓存自动作废。
+ */
+const blockMemo = new WeakMap()
+
 /** 用 blacklistMatcher() 的结果快速判断单条标签是否被 ban */
 export function isBlockedFast(tag, bl) {
   if (!bl) return false
-  return fastHit(String(tag).toLowerCase(), bl)
+  let memo = blockMemo.get(bl)
+  if (!memo) { memo = new Map(); blockMemo.set(bl, memo) }
+  const t = String(tag).toLowerCase()
+  let v = memo.get(t)
+  if (v === undefined) {
+    v = fastHit(t, bl)
+    if (memo.size < 300000) memo.set(t, v)   // 上限: 异常数据下不把内存撑爆
+  }
+  return v
 }
 
 // ---------------------------------------------------------------- 视角/机位词表
@@ -455,34 +493,49 @@ const TAG_PLACEHOLDER = /\{tag\}/gi
  *
  * 不写 {tag} 时是纯替换(原标签被丢掉), 与旧行为完全一致。
  */
-/** 单个模式对单标签的命中判断(replaceTag 与规则测试器共用, 保证口径一致) */
-function patHit(tag, pat) {
-  if (isSegPat(pat)) return segHit(tag.toLowerCase(), pat.slice(1, -1))
-  if (pat.startsWith('*') && pat.endsWith('*') && pat.length > 2) return tag.toLowerCase().includes(pat.slice(1, -1))
-  if (pat.startsWith('*')) return tag.toLowerCase().endsWith(pat.slice(1))
-  if (pat.endsWith('*')) return tag.toLowerCase().startsWith(pat.slice(0, -1))
-  return tag.toLowerCase() === pat
+/** 单个模式对单标签的命中判断(replaceTag 与规则测试器共用, 保证口径一致)
+ *  @param {string} [low] 已经算好的小写形态 —— 热路径(replaceTag)一条规则传一次,
+ *  免得 N 条规则把同一个小写算 N 遍(650 万次调用 × 9 条规则 = 5800 万次 toLowerCase) */
+function patHit(tag, pat, low) {
+  const l = low === undefined ? tag.toLowerCase() : low
+  if (isSegPat(pat)) return segHit(l, pat.slice(1, -1))
+  if (pat.startsWith('*') && pat.endsWith('*') && pat.length > 2) return l.includes(pat.slice(1, -1))
+  if (pat.startsWith('*')) return l.endsWith(pat.slice(1))
+  if (pat.endsWith('*')) return l.startsWith(pat.slice(0, -1))
+  return l === pat
 }
 
+/**
+ * 对单个标签套用替换规则, 返回替换后的标签数组(未命中则原样返回它)
+ *
+ * 分配策略(2026-11-11): **没命中就一个对象都不建**。
+ * 这条路径在导出里是「十万图 × 每图 60 来个标签 = 650 万次调用」(实测), 而真实
+ * 命中率不到 1%; 老实现每次调用都先 new Set() + new Array(), 650 万个 Set
+ * 直接把一次预设导出拖成 10 秒 —— 界面上的表现就是「ban 完自动导出卡住」。
+ * 现在 Set/数组都等第一次命中才建, 未命中只花几次字符串比较。
+ */
 export function replaceTag(tag, rules) {
-  const out = []
-  // 去重按剥权重壳归一(2026-10-19): 替换侧同时写 (uncensored:2) 与 uncensored
-  // 只出先到的那个 —— 与导出管线的去重口径一致
-  const seenOut = new Set()
+  let out = null          // 懒建: 有命中才有它
+  let seenOut = null
   let del = false
+  let low = null
   for (const { pat, replTags } of rules) {
-    if (!patHit(tag, pat)) continue
+    if (low === null) low = typeof tag === 'string' ? tag.toLowerCase() : String(tag).toLowerCase()
+    if (!patHit(tag, pat, low)) continue
     // 删除规则(替换侧为空): 命中即整个删掉, 后面的规则不再看
     if (!replTags.length) { del = true; break }
+    if (!out) { out = []; seenOut = new Set() }
     for (const r of replTags) {
       // 用函数式替换, 免得原标签里的 $& / $1 被当成替换模式吃掉
       const v = r.replace(TAG_PLACEHOLDER, () => tag)
+      // 去重按剥权重壳归一(2026-10-19): 替换侧同时写 (uncensored:2) 与 uncensored
+      // 只出先到的那个 —— 与导出管线的去重口径一致
       const dk = unwrapWeight(v).toLowerCase()
       if (!seenOut.has(dk)) { seenOut.add(dk); out.push(v) }
     }
   }
   if (del) return []
-  return out.length ? out : [tag]
+  return out && out.length ? out : [tag]
 }
 
 /** 兼容旧调用点: 读/写**当前默认组**的规则正文(等价于单份规则时代的语义) */

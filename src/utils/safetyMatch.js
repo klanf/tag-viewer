@@ -46,18 +46,44 @@ export function hitOne(tag, part) {
 }
 
 /**
- * 单标签的敏感等级(0-4) —— 与主进程 `levelOfTag` 等价。
- * matcher = { secs: {0..4: compiled}, dict: {tag: level} }:
- *   覆盖段(检查顺序 L0->L4, 先命中先算) > 词典表 > 0。
- * dict 只收 >0 的词(主进程下发), 查不到按 0。
+ * 词根规则：主进程把 `BUILTIN_WORD_RULES` 的**正则源码**下发（`safety:get` 的 wordRules），
+ * 这里重建 RegExp。**不要手抄一份规则表** —— 抄了下次改主进程必忘改这里，
+ * 两侧一分叉，"隐藏 N 张"的数字就会骗人（2026-11-11 实测发生：主进程词根规则
+ * 已上线，前端镜像还只有 secs+dict，penetration_test 主进程判 3、前端判 0）。
+ * @param {Array<[string, number]>} list [[patternSource, level], ...]
+ * @returns {Array<[RegExp, number]>}
+ */
+export function compileWordRules(list) {
+  if (!Array.isArray(list)) return []
+  const out = []
+  for (const it of list) {
+    if (!Array.isArray(it) || it.length < 2) continue
+    try { out.push([new RegExp(it[0]), Number(it[1]) || 0]) } catch { /* 坏规则跳过, 不炸整页 */ }
+  }
+  return out
+}
+
+/**
+ * 单标签的敏感等级(0-4) —— 与主进程 `levelOfTag` **逐字等价**。
+ * matcher = { secs: {0..4: compiled}, dict: {tag: level}, wordRules: [[RegExp, lv]] }:
+ *   覆盖段(检查顺序 L0->L4, 先命中先算) > 词典表 > 词根规则 > 0。
+ *
+ * ⚠️ 归一(`[\\s_]` -> `_`)必须与主进程一致：PNG 元数据里是空格写法
+ * ("group sex")，库与词典是下划线，不归一会整列漏判。
  */
 export function tagLevelOf(tag, matcher) {
-  const t = String(tag).toLowerCase()
+  const t = String(tag).toLowerCase().replace(/[\s_]+/g, '_')
   for (let lv = 0; lv <= 4; lv++) {
     const part = matcher?.secs?.[lv]
     if (part && hitOne(t, part)) return lv
   }
-  return matcher?.dict?.[t] ?? 0
+  const d = matcher?.dict
+  if (d && Object.prototype.hasOwnProperty.call(d, t)) return d[t]
+  const wr = matcher?.wordRules
+  if (Array.isArray(wr)) {
+    for (let i = 0; i < wr.length; i++) if (wr[i][0].test(t)) return wr[i][1]
+  }
+  return 0
 }
 
 /**

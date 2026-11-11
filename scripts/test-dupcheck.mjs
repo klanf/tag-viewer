@@ -36,7 +36,7 @@ const KA = 'kazusa_(blue_archive)', MI = 'miko_(blue_archive)', BA = 'blue_archi
 const base5 = [KA, BA, SU, SM, ONE].join(',')
 const rows = [
   ['a.png', base5, 0, 2000, 2000, 900],
-  ['b.png', base5 + ',outdoors', 0, 1000, 1000, 500],
+  ['b.png', base5 + ',blue_sky', 0, 1000, 1000, 500],
   ['c.png', base5 + ',classroom', 0, 500, 500, 300],
   ['d.png', [MI, BA, SU, SM, ONE].join(','), 0, 3000, 3000, 800],
   ['e.png', 'holo,wolf,tail', 0, 800, 600, 100],
@@ -159,15 +159,20 @@ ok('不传 blockedPairs 时同一对仍按普通忽略计数', () => {
   assert.equal(r.blockedPairs, 0)
 })
 
+const safetyCore = await import('../electron/core/safety.js')
 console.log('⑥ 安全模式标记: 每张图带 unsafe(2026-10-17 用户补充)')
 // 在此前断言跑完后再插敏感图, 免得动前面所有 scanned 计数
 ins.run(P('s1.png'), 'nude,silver_hair,long_hair', 0, 500, 500, 100)
 ins.run(P('s2.png'), 'nude,silver_hair,long_hair', 0, 500, 500, 100)
 r = dupcheck.findDuplicateGroups({ threshold: 0.65 })
-ok('s1/s2 成组且 unsafe=1(nude 命中默认 core 段)', () => {
+ok('s1/s2 成组且 unsafe 与判定口径同源(nude)', () => {
   const g = groupOf(r, 's1.png')
   assert.ok(g, '应成组')
-  assert.deepEqual(g.items.map((it) => it.unsafe).sort(), [1, 1])
+  /* 不写死数值: 等级制改过两轮(core/edge -> L0..L4), nude 从 1 升到 4。
+   * 期望值从 safety 现算 —— 判级口径再改, 这条也不会假红。 */
+  const want = safetyCore.unsafeLevelOf(['nude', 'silver_hair', 'long_hair'])
+  assert.ok(want > 0, `nude 应该被判敏感, 实际 ${want}`)
+  assert.deepEqual(g.items.map((it) => it.unsafe).sort(), [want, want])
 })
 ok('干净图 unsafe=0', () => {
   const g = groupOf(r, 'a.png')

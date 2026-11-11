@@ -75,11 +75,9 @@ const BUILTIN_FLOOR = {
   naked: 2, nude_filter: 2, nude_insert: 2,
   'see-through_legwear': 2, see_through_legwear: 2,
   erect_nipples: 2, puffy_nipples: 2,
-  /* breasts 一族(2026-11-11 改口): 旧口径"画里有胸≠暴露"是为了展示过滤不藏
-   * 93% 的库 —— 但导出口径下它就是用户要剔的词(实测 L0 导出漏 breasts)。
-   * 影响面: 显示上限 L0/L1 会藏掉带胸部标签的图(与 nipples=2 同后果),
-   * 默认上限 L2 不受影响; 统计弹窗会如实报数字。 */
-  breasts: 2, big_breasts: 2, large_breasts: 2, huge_breasts: 2, small_breasts: 2,
+  /* breasts 一族**刻意不算敏感**(2026-11-11 定案, 不许再改回去):
+   * 它是体型描述, 命中 93% 的图 —— 收进敏感集等于把整个库藏起来。
+   * 判断"露不露"看的是 nipples / topless / exposure 那些词, 不是胸围描述。 */
   /* 「扒开/没穿/透出」族 —— 比裸泳装(1)更露一级(2026-11-11 实测 L0 导出漏出) */
   bikini_bottom_aside: 2, bikini_top_lift: 2, bikini_under_clothes: 2,
   bikini_under_shorts: 2, unworn_bikini: 2, unworn_bikini_top: 2, unworn_bikini_bottom: 2,
@@ -161,8 +159,20 @@ const BUILTIN_WORD_RULES = [
   [/(?:^|_)onsen(?=$|[_-])/, 1], [/(?:^|_)bath(?:ing|house|room|robe|tub|stool)?(?=$|[_-])/, 1],
   /* shower=淋浴(1); 负向后顾断言排除 meteor_shower(流星雨)/summer_shower(阵雨) 天气词 */
   [/(?:^|_)(?<!meteor_)(?<!summer_)shower(?:ing|_head)?(?=$|[_-])/, 1],
-  [/(?:^|_)apron(?=$|[_-])/, 1], [/(?:^|_)bodystocking(?=$|[_-])/, 1], [/(?:^|_)breasts?(?=$|[_-])/, 2],
+  [/(?:^|_)apron(?=$|[_-])/, 1], [/(?:^|_)bodystocking(?=$|[_-])/, 1],
 ]
+
+/**
+ * 词根规则的**源码形态**, 供前端镜像重建 RegExp(2026-11-11 修分叉)。
+ * 用 `re.source` 反射而不是手抄字符串: 手抄一份 = 下一次改规则必然忘改另一半。
+ * 前端 `compileWordRules()` 拿它 new RegExp, 两侧逐字同源。
+ */
+const BUILTIN_WORD_RULE_SRC = BUILTIN_WORD_RULES.map(([re, lv]) => [re.source, lv])
+
+/** 词根规则源码表(IPC 下发给渲染层做镜像, 见 utils/safetyMatch.js) */
+export function builtinWordRules() {
+  return BUILTIN_WORD_RULE_SRC
+}
 
 const cache = {
   tags: { path: '', mtime: -1, value: null },
@@ -434,13 +444,18 @@ export function safetyExportStripper(levelOpt = '') {
     const n = parseInt(raw, 10)
     threshold = Number.isNaN(n) ? globalMax : Math.max(0, Math.min(4, n))
   }
+  /* 匹配器**只取一次**(2026-11-11): safetyMatcher() 里带 fs.statSync 检查文件 mtime,
+   * 放进逐标签的闭包里等于每张图每个标签都 stat 一次 —— 十万行 × 40 标签 = 400 万次
+   * stat, 实测把一次预设导出从 6s 拖到 97s("ban 完自动导出卡死主进程"的真凶)。
+   * 导出期间文件被改属于极端情况, 拿创建时的快照是可接受的(档位阈值本来也是快照)。 */
+  const mat = safetyMatcher()
   return (tag) => {
     // 剥壳(2026-11-11): 库里混有 A1111 直出的加权形态 —— uncensored:2 / {cum...:1.5},
     // 不剥的话带尾巴的词查表必落空(实测 L0 导出漏 uncensored:2)。
     const t = String(tag)
       .replace(/^\{+|\}+$/g, '')                 // 花括号壳 {xxx:1.5}
       .replace(/[:：]\s*\d+(?:\.\d+)?\s*$/, '')  // 尾部权重 uncensored:2
-    return levelOfTag(t) > threshold
+    return levelOfTag(t, mat) > threshold
   }
 }
 
@@ -577,6 +592,9 @@ export function safetySummary() {
     counts: { ...m.counts },
     words: Object.fromEntries(SECS.map((s) => [s, [...m.secs[s].raw]])),
     dictLevels: m.dict,
+    // 词根规则(源码形态): 渲染层镜像必须与主进程同一套, 否则库外图(扫描页)
+    // 的过滤结果和"隐藏 N 张"的数字会两边对不上(2026-11-11 修)。
+    wordRules: BUILTIN_WORD_RULE_SRC,
     file: dataFile(TAGS_NAME),
   }
 }

@@ -172,9 +172,13 @@ eq('L2 段条数 = 内置默认', m0.counts.L2, safety.DEFAULT_EDGE.length)
 eq('命中 L4 段 -> 4', safety.unsafeLevelOf(['1girl', 'nude', 'smile']), 4)
 eq('只命中 L2 段 -> 2', safety.unsafeLevelOf(['1girl', 'underwear']), 2)
 eq('干净标签 -> 0', safety.unsafeLevelOf(['1girl', 'looking_at_viewer']), 0)
-/* 这条是要害: breasts 命中 93% 的图, 收进集合等于把整个库藏起来
- * (词典里 breasts 是 body_part 无档, 不进档位表 —— 老坑不许复活) */
+/* breasts 的口径(2026-11-11 用户定案): **不算敏感, 恒为 0**。
+ * 它是体型描述, 命中 93% 的图 —— 收进敏感集等于把整个库藏起来。
+ * 第 34 轮曾把它升到 2(= 用户要剔这个词), 后续用户明确否掉, 已回退。
+ * ⚠️ 这条断言与 safety.js 的 dict 表 / 词根规则必须同进退: 只改一边就会出现
+ *    "主进程判 2、断言期望 0" 的分叉(本轮 359 行那条就是这么抓出来的)。 */
 eq('breasts 这种"体型"标签刻意不算敏感', safety.unsafeLevelOf(['1girl', 'breasts']), 0)
+eq('big_breasts 同样不算敏感(体型族一并回退)', safety.unsafeLevelOf(['big_breasts']), 0)
 /* ANIMA tag_levels 的 count 段副产品(1girl=4)不许漏进安全等级 */
 eq('count 段的词典档位副产品(1girl=4)被过滤掉', safety.unsafeLevelOf(['1girl']), 0)
 /* 词典档位兜底: NSFW 槽词不靠覆盖段也至少 2(presenting 不在默认段, 纯词典兜底) */
@@ -315,12 +319,15 @@ const rowW = (r) => r.cells.reduce((a, c) => a + c.w, 0) + GAP * (r.cells.length
  * (src/utils/safetyMatch.js)。两份实现一旦分叉, 就会出现"库内页面藏了、扫描页没藏"
  * 这种最难查的不一致 —— 这里用同一批标签把两边钉在一起。
  */
-const { compileRules, unsafeOfTags } = await load('src/utils/safetyMatch.js')
+const { compileRules, compileWordRules, unsafeOfTags } = await load('src/utils/safetyMatch.js')
 /* 镜像结构(2026-10-28 等级制): { secs: {0..4: compiled}, dict } 与主进程同构 */
+/* 模拟 IPC 真实路径: 主进程 safetySummary() 下发 wordRules(正则源码),
+ * 渲染层 compileWordRules 重建。少了这一步, 镜像退回到"只有 secs+dict"的旧口径,
+ * penetration_test 这类词根词会两侧不一致(2026-11-11 实锤)。 */
 const mirrorOf = (m) => {
   const secs = {}
   for (let lv = 0; lv <= 4; lv++) secs[lv] = compileRules(m.secs[`L${lv}`].raw)
-  return { secs, dict: m.dict }
+  return { secs, dict: m.dict, wordRules: compileWordRules(safety.builtinWordRules()) }
 }
 
 {
@@ -355,8 +362,13 @@ const mirrorOf = (m) => {
   eq('旧段名迁移: edge 段通配在主进程 -> L2', safety.unsafeLevelOf(['white_lingerie_set'], m), 2)
   eq('通配(后缀): 前端镜像', unsafeOfTags(['x_penetration'], mi), 4)
   eq('通配(包含): 前端镜像', unsafeOfTags(['white_lingerie_set'], mi), 2)
-  eq('通配不误伤(前缀不同)', unsafeOfTags(['penetration_test'], mi), 0)
+  /* *_penetration 是**后缀**通配, penetration_test 结尾不是 _penetration -> 不该被抓走。
+   * 但词根规则(2026-11-11)的 /penetrat(e|ed|ion)/ 会词边界命中它 -> 判 3。
+   * 所以这里分两层钉: ① 通配没误伤(值 < 4) ② 两侧仍然一致。
+   * 纯通配的误伤用 *_lingerie* 验(lingerieish 不带 _lingerie 前缀)。 */
+  eq('通配不误伤: *_penetration 没抓走 penetration_test', unsafeOfTags(['penetration_test'], mi) < 4, true)
   eq('同一标签两侧一致(不误伤也是两边一致)', safety.unsafeLevelOf(['penetration_test'], m), unsafeOfTags(['penetration_test'], mi))
+  eq('通配不误伤: *_lingerie* 不命中 lingerieish', unsafeOfTags(['lingerieish'], mi), 0)
   eq('迁移写回: 文件里段名已换成 [L4]/[L2]', fs.readFileSync(dataFile('safety_tags.txt'), 'utf8').includes('[L4]'), true)
 }
 

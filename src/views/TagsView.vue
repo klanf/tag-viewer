@@ -28,6 +28,7 @@ import TvChip from '@/components/base/TvChip.vue'
 import TvState from '@/components/base/TvState.vue'
 import TvSourceScanBar from '@/components/filter/TvSourceScanBar.vue'
 import TvSafetyToggle from '@/components/safety/TvSafetyToggle.vue'
+import TvNlBankModal from '@/components/tag/TvNlBankModal.vue'
 import { useUiStore } from '@/stores/useUiStore.js'
 import { useSafetyStore } from '@/stores/useSafetyStore.js'
 import { useTagFavStore } from '@/stores/useTagFavStore.js'
@@ -46,6 +47,9 @@ const tagFav = useTagFavStore()
 usePagePath('tags', computed(() => [{ label: '全部标签' }]))
 
 const kw = ref('')
+/* 自然语言语料管理弹窗(2026-11-11): 出口放在标签页工具栏 —— 用户的原话
+   "在 tag 页面里面加一个入口管理"。管的是导出用的动作/穿搭/发型语料, 全局生效。 */
+const nlOpen = ref(false)
 const BATCH = 300
 const total = ref(0)          // 服务端可见总数(已按 hide_banned 过滤)
 const bannedHidden = ref(0)   // 服务端报的被滤掉的已 ban 数
@@ -264,6 +268,12 @@ onMounted(() => {
           :class="{ dim: scanMode }"
           @click="!scanMode && (favOnly = !favOnly)"
         />
+        <TvChip
+          :label="'📝 自然语言语料'"
+          :title="'管理导出时追加的动作/穿搭/发型短句: 搜索、单条禁用、按关键词批量禁用(全局生效, 与导出方案无关)'"
+          data-test="nl-manage"
+          @click="nlOpen = true"
+        />
         <span class="hint">共 {{ nfmt(shownTotal) }} 个标签</span>
         <span v-if="hideBanned && bannedHidden > 0" class="hint faint banned-hint">已隐藏 {{ nfmt(bannedHidden) }} 个已 ban</span>
         <span v-if="safetyHidden > 0" class="hint faint safety-hint">
@@ -305,6 +315,7 @@ onMounted(() => {
       </div>
     </div>
 
+    <TvNlBankModal v-model="nlOpen" />
   </div>
 </template>
 

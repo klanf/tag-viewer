@@ -24,7 +24,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { call } from '@/utils/api.js'
 import { hiddenBySafety } from '@/utils/format.js'
-import { compileRules, unsafeOfTags, countHits as countHitsOf } from '@/utils/safetyMatch.js'
+import { compileRules, compileWordRules, unsafeOfTags, countHits as countHitsOf } from '@/utils/safetyMatch.js'
 import { useAppStore } from './useAppStore.js'
 
 const EMPTY_HIST = [0, 0, 0, 0, 0]
@@ -48,6 +48,8 @@ export const useSafetyStore = defineStore('safety', () => {
   /** 词典档位表(主进程下发, {tag: 1..4}) —— 覆盖段管不到的词按它兜底 */
   const dict = ref({})
   const loaded = ref(false)
+  /** 词根规则正则(主进程下发源码, 这里编译) —— 与主进程 BUILTIN_WORD_RULES 同源 */
+  const wordRules = ref([])
 
   /** 编译后的规则(库外图现算用) + 代次(规则一变, 记忆就作废) */
   const matcher = computed(() => {
@@ -56,11 +58,11 @@ export const useSafetyStore = defineStore('safety', () => {
       const list = secs.value[`L${lv}`] || []
       secsC[lv] = compileRules(list)
     }
-    return { secs: secsC, dict: dict.value }
+    return { secs: secsC, dict: dict.value, wordRules: wordRules.value }
   })
   let gen = 0
   let tagsMemo = new WeakMap()
-  watch([secs, dict], () => { gen++; tagsMemo = new WeakMap() })
+  watch([secs, dict, wordRules], () => { gen++; tagsMemo = new WeakMap() })
 
   function apply(d) {
     if (!d) return
@@ -77,6 +79,8 @@ export const useSafetyStore = defineStore('safety', () => {
       secs.value = next
     }
     if (d.dictLevels && typeof d.dictLevels === 'object') dict.value = d.dictLevels
+    // 词根规则: 只在主进程给了才覆盖(老版本主进程没这个字段 -> 保持空, 退化成旧口径)
+    if (Array.isArray(d.wordRules)) wordRules.value = compileWordRules(d.wordRules)
   }
 
   async function load() {

@@ -153,6 +153,54 @@ export function charShortName(tag) {
   return tag.replace(/_\([^)]*\)$/, '')
 }
 
+/**
+ * 从一组标签里挑出**角色标签**(口径与 isCharacterTag 同一把尺: 角色库 + 括号写法,
+ * 排除道具/概念/分类组)。去重保序, 保留原写法。
+ *
+ * 用途: ① ingest 把图内元数据的角色单独存一列(images.meta_chars);
+ *       ② 展示/索引层把"元数据角色"当权威口径。两处必须同尺, 否则存进去的
+ *       和比出来的不是一回事。
+ */
+export function charsOnly(tags) {
+  const out = []
+  const seen = new Set()
+  for (const t of tags || []) {
+    if (!isCharacterTag(t)) continue
+    const k = String(t).toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(String(t))
+  }
+  return out
+}
+
+/**
+ * 元数据角色优先(2026-11-11, 用户拍板)
+ * ======================================
+ * 反推(WD14)会把角色认歪: 实测 ComfyUI 图抽 40 张, 16 张的角色集合与提示词不符
+ * —— 漏认、把同作品的别的人物一起认上(菲伦的图上多出「芙莉莲 / 斯塔克」)、
+ * 把服装形态认成角色。而 ComfyUI 的提示词是**作者写的真值**。
+ *
+ * 所以: 元数据里有角色 -> 反推出的角色标签整批剔掉, 只留元数据点名的那些;
+ * 元数据点名但反推没认出来的, 补在**原来第一个角色标签的位置**(导出/展示里
+ * 角色仍落在角色段, 不会跑到行尾)。元数据没有角色 -> 原样(回落反推)。
+ *
+ * @param {string[]} tags 记录的完整标签(反推产物)
+ * @param {string[]} metaChars 元数据角色(非空才会调到这里)
+ */
+function applyMetaChars(tags, metaChars) {
+  const keep = new Set(metaChars.map((t) => String(t).toLowerCase()))
+  const out = []
+  let placed = false
+  for (const t of tags) {
+    if (!isCharacterTag(t)) { out.push(t); continue }
+    if (!placed) { for (const c of metaChars) out.push(c); placed = true }
+    if (keep.has(String(t).toLowerCase())) continue   // 已在上面那批里, 别重复
+  }
+  if (!placed) for (const c of metaChars) out.push(c)
+  return out
+}
+
 /** 系列分类的兜底推断: 先查手动/默认表, 再按前缀猜(game/anime/vtb) */
 const PREFIX_CATEGORIES = [
   ['hololive', 'vtb'], ['nijisanji', 'vtb'], ['vocaloid', 'anime'],
@@ -243,11 +291,17 @@ export function recomputeSafety() {
  * @param {string} srcName 来源名
  * @param {{w:number,h:number}|null} [dims] 像素尺寸; 从 txt 建库时没有(留 0)
  * @param {string} [tagsSrc] 标签来源(meta=自带 / wd14=反推 / meta+wd14=历史合并 / legacy=手工)
- * @param {string} [imgSrc] 图内元数据来源(comfyui/a1111/...); 卡片生成器徽章用 */
-function pushRecord(p, rawTags, srcName, dims = null, tagsSrc = '', imgSrc = '') {
+ * @param {string} [imgSrc] 图内元数据来源(comfyui/a1111/...); 卡片生成器徽章用
+ * @param {string[]} [metaChars] 图内元数据里的角色标签(2026-11-11): 非空 = 角色以它为准 */
+function pushRecord(p, rawTags, srcName, dims = null, tagsSrc = '', imgSrc = '', metaChars = null) {
+  /* 角色口径(2026-11-11): 元数据点名了角色就只认它, 反推认歪的角色整批剔掉。
+   * 在这一层做而不是在索引层做, 是为了让**所有消费方一次对齐** —— 标签计数、
+   * 系列/角色索引、光箱角色胶囊、导出、搜索全都读同一份 tags。 */
+  const mc = Array.isArray(metaChars) ? metaChars.filter(Boolean) : []
+  const src = mc.length ? applyMetaChars(rawTags, mc) : rawTags
   const tags = []
   const ltags = []
-  for (const raw of rawTags) {
+  for (const raw of src) {
     const t = intern(raw)
     tags.push(t)
     ltags.push(intern(t.toLowerCase()))
@@ -357,6 +411,10 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
      syncSources 只在 txt 指纹变了时才真的读 txt; 平时这一步是空转。
      读回后得到的记录顺序与解析 txt 完全一致(images.id 自增 = 插入顺序)。 */
   let routeAFail = ''
+  // 角色库要在**读记录之前**就位(2026-11-11): pushRecord 现在要按角色口径
+  // 剔掉反推认歪的角色标签, isCharacterTag 依赖角色库。老位置在 buildStats 之前,
+  // 那时记录早已入表 —— 缺少库会让括号写法的角色漏判。
+  loadCharLib()
   try {
     onProgress({ phase: 'db-sync', done: 0, total: totalBytes })
     fresh.dbSync = await syncSources(dataFiles, (p) => {
@@ -367,7 +425,7 @@ async function buildDatasetInto(fresh, dataFiles, onProgress, t0) {
     let last = 0
     // readRecords 现在是 async(每块让出事件循环, 后台重载不再卡死光箱翻页) —— 必须 await
     await readRecords((rec) => {
-      pushRecord(rec.path, rec.tags, rec.source, { w: rec.px_w, h: rec.px_h }, rec.tagsSrc, rec.imgSrc)
+      pushRecord(rec.path, rec.tags, rec.source, { w: rec.px_w, h: rec.px_h }, rec.tagsSrc, rec.imgSrc, rec.metaChars)
       const n = W.records.length
       if (n - last >= 5000) {
         last = n

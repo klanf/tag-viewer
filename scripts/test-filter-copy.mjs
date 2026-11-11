@@ -16,7 +16,7 @@ fs.writeFileSync(path.join(DATA, 'export_view_tags.txt'), '# 视角\nfrom above\
 fs.writeFileSync(path.join(DATA, 'safety_tags.txt'), '[core]\nnude\nnipples\n[edge]\nlingerie\nswimsuit\n')
 fs.writeFileSync(path.join(DATA, 'replace_sets.json'), JSON.stringify({
   active: 'g1',
-  sets: [{ id: 'g1', name: '测试组', text: 'blue_hair -> red_hair\nwet ->\n@multi@ -> a, b\n@w1@ -> (red_hair:1.2)\n@w2@ -> red_hair\n' }],
+  sets: [{ id: 'g1', name: '测试组', text: 'blue_hair -> red_hair\nold_tag ->\n@multi@ -> a, b\n@w1@ -> (red_hair:1.2)\n@w2@ -> red_hair\n' }],
 }))
 
 import { initWorkspace } from '../electron/core/workspace.js'
@@ -29,12 +29,12 @@ function ok(name, fn) {
   try { fn(); console.log(`  ✅ ${name}`) } catch (e) { console.error(`  ❌ ${name}\n     ${e.message}`); process.exitCode = 1 }
 }
 
-const T = ['1girl', 'blue_hair', 'standing', 'from above', 'wet', 'nude', 'swimsuit', 'multi']
+const T = ['1girl', 'blue_hair', 'standing', 'from above', 'old_tag', 'nude', 'swimsuit', 'multi']
 
 ok('全关 = 原样返回(不排序不重排)', () => {
   const r = filterTagsLikeExport(['b', 'a'], {})
   assert.deepEqual(r.tags, ['b', 'a'])
-  assert.deepEqual(r.counts, { view: 0, safe: 0, replaced: 0 })
+  assert.deepEqual(r.counts, { view: 0, safe: 0, replaced: 0, groups: 0 })
 })
 
 ok('视角剔除: 空格形态与下划线形态都命中', () => {
@@ -61,10 +61,10 @@ ok('安全档缺省(follow)走全局默认档(core): nude 剔, edge 词留', () 
   assert.equal(r.counts.safe, 1)
 })
 
-ok('替换规则: 改写 + 删除语义(wet ->) + 一变多(集合断言, 顺序交给 sortTags 测)', () => {
+ok('替换规则: 改写 + 删除语义(old_tag ->) + 一变多(集合断言, 顺序交给 sortTags 测)', () => {
   const r = filterTagsLikeExport(T, { replace: true, replace_set: 'g1' })
-  assert.equal(r.counts.replaced, 4)   // blue_hair 改写 + wet 删 + multi 变两条(计 2)
-  assert.equal(r.tags.includes('wet'), false)
+  assert.equal(r.counts.replaced, 4)   // blue_hair 改写 + old_tag 删 + multi 变两条(计 2)
+  assert.equal(r.tags.includes('old_tag'), false)
   for (const t of ['1girl', 'red_hair', 'a', 'b', 'standing', 'from above', 'nude', 'swimsuit']) {
     assert.ok(r.tags.includes(t), `缺 ${t}`)
   }
@@ -82,7 +82,7 @@ ok('组合: 视角 -> 安全 -> 替换 按序生效, 计数分账', () => {
   assert.deepEqual(r.tags.slice().sort(), ['1girl', 'a', 'b', 'red_hair'])
   assert.equal(r.counts.view, 2)       // standing + from above
   assert.equal(r.counts.safe, 2)       // nude + swimsuit
-  assert.equal(r.counts.replaced, 4)   // blue_hair + wet + multi 变两条
+  assert.equal(r.counts.replaced, 4)   // blue_hair + old_tag + multi 变两条
 })
 
 ok('replace=false 整体关(与缺省区分留给调用方)', () => {

@@ -2,9 +2,12 @@
  * 安全档位内置兜底表回归测试(2026-11-11)
  * ========================================
  * 守的是用户实测撞上的漏词事故: 「≤L0 导出」漏出 small_penis / group_sex /
- * imminent_vaginal / breasts 这批 —— 槽位词典要么没收要么挂在 count/body_part
+ * imminent_vaginal 这批 —— 槽位词典要么没收要么挂在 count/body_part
  * 槽 level=null(展示口径刻意不收), levelOfTag 兜底 0 = 常规, L0 阈值拦不住。
  * 摸底 80 个常见 danbooru NSFW 词, 修复前 39 个为 0。
+ *
+ * ⚠️ breasts 一族**不在此列**(2026-11-11 用户定案): 它是体型描述, 命中 93% 的图,
+ *    收进敏感集等于把整个库藏起来。判断"露不露"看 nipples / topless / exposure。
  *
  * 断言:
  *   1. 之前漏的 39 个词现在全部 level > 0(内置兜底表生效);
@@ -34,7 +37,6 @@ const WERE_LEAKING = [
   'fellatio_invitation', 'doggy_style', 'cowgirl_position', 'penetration',
   'penile', 'vulva', 'erect_nipples', 'puffy_nipples', 'see-through_legwear',
   'nude_filter', 'nude_insert', 'plugged', 'golden_shower', 'watersport', 'scat',
-  'breasts',
 ]
 const NEUTRAL = [
   '1girl', '1boy', '2boys', 'multiple_boys', 'solo', 'hetero', 'feet', 'navel',
@@ -42,6 +44,8 @@ const NEUTRAL = [
   'indoors', 'room', 'moon', 'in_water', 'petals', 'rock', 'highres',
   'scenery', 'ai-generated', 'japanese_clothes', 'looking_at_viewer',
   'open_mouth', 'collarbone', 'low_twintails', 'hanging_light', 'big_belly',
+  /* 体型描述族: 刻意不判敏感(2026-11-11 定案, 见文件头) */
+  'breasts', 'big_breasts', 'small_breasts', 'large_breasts',
   /* 词边界防误伤守卫(2026-11-11 查漏补缺轮) */
   'cumulonimbus_cloud', 'big_cumulus_clouds', 'analog_clock', 'unisex',
   'meteor_shower', 'summer_shower', 'zipper_pull_tab', 'hair_lift', 'leg_lift',
@@ -52,10 +56,11 @@ ok('摸底名单: 修复前漏的词现在全部有档位', () => {
   assert.deepEqual(still, [], `仍是 0(会漏)的词: ${still.join(', ')}`)
 })
 
-ok('档位刻度对齐(small_penis=3 / group_sex=4 / breasts=2 / bow_bikini=1)', () => {
+ok('档位刻度对齐(small_penis=3 / group_sex=4 / breasts=0 / bow_bikini=1)', () => {
   assert.equal(levelOfTag('small_penis'), 3)
   assert.equal(levelOfTag('group_sex'), 4)
-  assert.equal(levelOfTag('breasts'), 2)
+  // breasts = 0 是**有意为之**(体型词不算敏感), 不是漏判 —— 别把它加回兜底表
+  assert.equal(levelOfTag('breasts'), 0)
   assert.equal(levelOfTag('bow_bikini'), 1)
 })
 

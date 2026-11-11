@@ -39,9 +39,10 @@
  * 扫描页自己有增量缓存, 它不该被追平进标签库。
  */
 import fs from 'node:fs'
-import { openDb, normalizeImagePath, rebuildTags } from './store.js'
+import { openDb, normalizeImagePath, rebuildTags, metaCharsJson } from './store.js'
 import { sortTagString } from './tagcats.js'
 import { listImages, statAll, parseInWorker, sizeInWorker } from './scan.js'
+import { charsOnly } from './dataset.js'
 import { flog } from './filelog.js'
 
 /** 单轮同步的运行状态(IPC 与启动日志都读它) */
@@ -73,6 +74,12 @@ const DIM_FILL_MAX = 30000
  *  「补过但读不到」写成 ''(空串), 不会每轮反复重试。 */
 const SRC_FILL_MAX = 20000
 
+/** 每轮最多补多少张「元数据角色」(meta_chars, 2026-11-11)。
+ *  同一趟 worker 顺便算(与 img_src 回填合并成一次读图), 只是候选集更大:
+ *  本机有 2.9 万张 comfyui 图, 每张要读 tEXt 块(~11ms 冷读), 一次补完约 5 分钟。
+ *  上限定成能一次覆盖大多数机器, 补过的行写成 '[]'(= 读过了、没角色), 不反复重试。 */
+const META_FILL_MAX = 30000
+
 function emptyStats() {
   return {
     folders: 0,        // 参与同步的目录数
@@ -88,6 +95,7 @@ function emptyStats() {
     dimsBackfilled: 0, // 本轮补上的像素尺寸(只读文件头, 不算 readImages)
     dimsPending: 0,    // 还没补尺寸的行数(下轮同步接着补)
     srcBackfilled: 0,  // 本轮补上的 img_src 行数(同上, 只读文件头)
+    metaCharsBackfilled: 0, // 本轮补上 meta_chars 的行数(与 src 同一趟读图, 2026-11-11)
     ms: 0,
   }
 }
@@ -333,7 +341,7 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
 
   // ---- 2. 读库内现状(按 folder_id, 迁移已保证无孤立行) ----
   const rows = db.prepare(
-    'SELECT id, path, tags, mtime_ms, size, tags_src, gone, px_w, img_src FROM images WHERE folder_id = ?',
+    'SELECT id, path, tags, mtime_ms, size, tags_src, gone, px_w, img_src, meta_chars FROM images WHERE folder_id = ?',
   ).all(f.id)
   const dbByPath = new Map(rows.map((r) => [r.path, r]))
   const queued = new Map(
@@ -347,8 +355,21 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
   const goneClr = []      // id —— 磁盘又出现
   const toRead = []       // { path, kind:'new'|'changed', id?, m, s }
   const dimFill = []      // [id, path] —— 「规则 1 真跳过」但还没尺寸的行(懒回填)
-  const srcFill = []      // [id, path] —— 同上, img_src 还没回填过的行(懒回填, 2026-10-20)
+  /* [id, path, needSrc] —— 元数据派生的两列(img_src / meta_chars)还没补的老行。
+   * 2026-11-11 起两件事合并成一趟: 同一张图读一次 tEXt 就够, 分开读等于白读一遍。
+   *   needSrc = 1 时 img_src 还是 NULL(从没试过); meta_chars 只要不是 NULL 就跳过。 */
+  const metaFill = []
   let skipped = 0
+
+  /** 元数据派生的列要不要补: img_src(NULL=没试过) / meta_chars(NULL=没试过)。
+   *  img_src='' 表示"读过、图里没有元数据" —— 那种行 meta_chars 必然是空, 不必再读。*/
+  const needBackfill = (r) => r.img_src === null || r.img_src === undefined
+    || (r.img_src !== '' && (r.meta_chars === null || r.meta_chars === undefined))
+  /* 每个路径在一轮里只会走到一个分支(disk 是 Map, 一行一次), 所以不用去重。 */
+  const pushMetaFill = (r, npath) => {
+    if (metaFill.length >= META_FILL_MAX) return
+    metaFill.push([r.id, npath, r.img_src === null || r.img_src === undefined ? 1 : 0])
+  }
 
   for (const [npath, d] of disk) {
     const r = dbByPath.get(npath)
@@ -379,11 +400,9 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
         stats.dimsPending++
         if (dimFill.length < DIM_FILL_MAX) dimFill.push([r.id, npath])
       }
-      // img_src 懒回填: 老行( NULL = 从没试过)分批补, 看板徽章用。
-      // px_w 已补齐的老行也可能缺 img_src —— 两件事补的批次/时间不同。
-      if (r.img_src === null || r.img_src === undefined) {
-        if (srcFill.length < SRC_FILL_MAX) srcFill.push([r.id, npath])
-      }
+      // img_src / meta_chars 懒回填: 老行(NULL = 从没试过)分批补。
+      // px_w 已补齐的老行也可能缺这两列 —— 三件事补的批次/时间不同。
+      if (needBackfill(r)) pushMetaFill(r, npath)
       continue
     }
     if (!hadGone && !hasFp) {
@@ -392,9 +411,7 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
         stats.dimsPending++
         if (dimFill.length < DIM_FILL_MAX) dimFill.push([r.id, npath])
       }
-      if (r.img_src === null || r.img_src === undefined) {
-        if (srcFill.length < SRC_FILL_MAX) srcFill.push([r.id, npath])
-      }
+      if (needBackfill(r)) pushMetaFill(r, npath)
       stats.statBackfilled++
       skipped++
       continue
@@ -446,21 +463,28 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
     stats.dimsBackfilled += dimRows.length
   }
 
-  // ---- 4.6 懒回填图内元数据来源(img_src, 2026-10-20) ----
+  // ---- 4.6 懒回填图内元数据派生列(img_src 2026-10-20 / meta_chars 2026-11-11) ----
   // 与 dims 同理: 只处理「老行、这轮又没被重读」的, 新读的行走上面的落库计划自带。
-  // 用的是 meta 解析 worker(读 tEXt/iTXt, IDAT 即停), 拿到 source 就够, tags 不用。
-  const srcRows = []      // [img_src, id]
-  if (!dryRun && srcFill.length) {
-    emit(onProgress, { phase: 'imgsrc', done: 0, total: srcFill.length, note: `补图片元数据来源 ${srcFill.length} 张` })
-    const res = await parseInWorker(srcFill.map((x) => x[1]), (p) => {
-      if (p?.type === 'progress') emit(onProgress, { phase: 'imgsrc', done: p.done, total: p.total })
+  // 用 meta 解析 worker 一趟拿齐: img_src 要的是 source, meta_chars 要的是 tags ——
+  // 同一张图读一次 tEXt 就够, 分成两趟等于把文件读两遍。
+  const metaRows = []     // [img_src, meta_chars(JSON), needSrc, id]
+  if (!dryRun && metaFill.length) {
+    emit(onProgress, {
+      phase: 'metachars', done: 0, total: metaFill.length,
+      note: `补元数据来源/角色 ${metaFill.length} 张`,
     })
-    for (let i = 0; i < srcFill.length; i++) {
+    const res = await parseInWorker(metaFill.map((x) => x[1]), (p) => {
+      if (p?.type === 'progress') emit(onProgress, { phase: 'metachars', done: p.done, total: p.total })
+    })
+    for (let i = 0; i < metaFill.length; i++) {
       const r = res[i]
-      // 读不到就写 ''(="试过了, 没有"), 不留 NULL —— 留 NULL 会让它每轮都被重收进来
-      srcRows.push([String(r?.source || ''), srcFill[i][0]])
+      const [id, , needSrc] = metaFill[i]
+      // 读不到就写 ''/'[]'(="试过了, 没有"), 不留 NULL —— 留 NULL 会让它每轮被重收进来
+      const src = String(r?.source || '')
+      const chars = charsOnly(Array.isArray(r?.tags) ? r.tags : [])
+      metaRows.push([src, metaCharsJson(chars), needSrc, id])
     }
-    stats.srcBackfilled += srcRows.length
+    stats.metaCharsBackfilled += metaRows.length
   }
 
   // ---- 5. 先算出落库计划(预演模式下就到此为止) ----
@@ -476,8 +500,11 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
        * 分类器不可用时原样返回, 不挡入库。 */
       const tags = sortTagString(p.tags.join(','))
       const isrc = String(p.source || '')
-      if (item.kind === 'new') plan.inserts.push({ path: item.path, tags, m: item.m, s: item.s, dim, isrc })
-      else plan.metaUpdates.push({ id: item.id, path: item.path, tags, m: item.m, s: item.s, dim, isrc })
+      /* 元数据角色单独存一列(2026-11-11): 反推会覆盖 tags, 角色真值只能在这里留住。
+       * 写 '[]' 而不是不写 —— NULL 的语义是"还没读过", 会被懒回填反复重读。 */
+      const mchars = metaCharsJson(charsOnly(p.tags))
+      if (item.kind === 'new') plan.inserts.push({ path: item.path, tags, m: item.m, s: item.s, dim, isrc, mchars })
+      else plan.metaUpdates.push({ id: item.id, path: item.path, tags, m: item.m, s: item.s, dim, isrc, mchars })
     } else if (item.kind === 'changed') {
       // 裸图: 不动已有标签(legacy 值可能是世上唯一一份), 只更新指纹
       plan.fpUpdates.push({ id: item.id, m: item.m, s: item.s, dim })
@@ -509,20 +536,20 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
       for (const id of goneUpd) goneStmt.run(id)
 
       const insStmt = db.prepare(`
-        INSERT INTO images (path, src_id, tags, folder_id, mtime_ms, size, tags_src, gone, tagged_at, px_w, px_h, img_src)
-        VALUES (?, ?, ?, ?, ?, ?, 'meta', 0, ?, ?, ?, ?)
+        INSERT INTO images (path, src_id, tags, folder_id, mtime_ms, size, tags_src, gone, tagged_at, px_w, px_h, img_src, meta_chars)
+        VALUES (?, ?, ?, ?, ?, ?, 'meta', 0, ?, ?, ?, ?, ?)
       `)
       // 尺寸拿不到就写 0(=未知): 卡片回落到 9/16 默认比例, 但不会被当成
       // "还没补过"每轮重读一遍。
       for (const x of plan.inserts) {
-        insStmt.run(x.path, srcId, x.tags, f.id, x.m, x.s, now, x.dim?.w || 0, x.dim?.h || 0, x.isrc || '')
+        insStmt.run(x.path, srcId, x.tags, f.id, x.m, x.s, now, x.dim?.w || 0, x.dim?.h || 0, x.isrc || '', x.mchars || '[]')
       }
 
       // 全新裸图占位行(2026-10-18 v3): tags 空、tags_src 空、tagged_at NULL
       // ("已反推"口数按 tagged_at IS NOT NULL 算, 占位行不会混进去)
       const bareStmt = db.prepare(`
-        INSERT INTO images (path, src_id, tags, folder_id, mtime_ms, size, tags_src, gone, tagged_at, px_w, px_h, img_src)
-        VALUES (?, ?, '', ?, ?, ?, '', 0, NULL, ?, ?, '')
+        INSERT INTO images (path, src_id, tags, folder_id, mtime_ms, size, tags_src, gone, tagged_at, px_w, px_h, img_src, meta_chars)
+        VALUES (?, ?, '', ?, ?, ?, '', 0, NULL, ?, ?, '', '[]')
       `)
       for (const x of plan.bareInserts) {
         bareStmt.run(x.path, srcId, f.id, x.m, x.s, x.dim?.w || 0, x.dim?.h || 0)
@@ -531,16 +558,17 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
       // 重读到了元数据 -> 覆盖(图内原生提示词永远优先)。
       const metaStmt = db.prepare(`
         UPDATE images SET tags = ?, tags_src = 'meta', mtime_ms = ?, size = ?, gone = 0,
-                          tagged_at = ?, px_w = ?, px_h = ?, img_src = ?
+                          tagged_at = ?, px_w = ?, px_h = ?, img_src = ?, meta_chars = ?
         WHERE id = ?
       `)
       for (const x of plan.metaUpdates) {
-        metaStmt.run(x.tags, x.m, x.s, now, x.dim?.w || 0, x.dim?.h || 0, x.isrc || '', x.id)
+        metaStmt.run(x.tags, x.m, x.s, now, x.dim?.w || 0, x.dim?.h || 0, x.isrc || '', x.mchars || '[]', x.id)
       }
 
       // 重读**没**读到元数据 -> 只更新指纹 + 确认它还在磁盘上
+      // (meta_chars 一起清空: 图换过了, 老角色不能留着当"元数据真值")
       const fpStmt = db.prepare(
-        'UPDATE images SET mtime_ms = ?, size = ?, gone = 0, px_w = ?, px_h = ?, img_src = \'\' WHERE id = ?',
+        "UPDATE images SET mtime_ms = ?, size = ?, gone = 0, px_w = ?, px_h = ?, img_src = '', meta_chars = '[]' WHERE id = ?",
       )
       for (const x of plan.fpUpdates) fpStmt.run(x.m, x.s, x.dim?.w || 0, x.dim?.h || 0, x.id)
 
@@ -548,9 +576,13 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
       const dimStmt = db.prepare('UPDATE images SET px_w = ?, px_h = ? WHERE id = ?')
       for (const [w, h, id] of dimRows) dimStmt.run(w, h, id)
 
-      // img_src 懒回填的老行: 只补来源, 别的字段一个字都不动(2026-10-20)
-      const srcStmt = db.prepare('UPDATE images SET img_src = ? WHERE id = ?')
-      for (const [isrc, id] of srcRows) srcStmt.run(isrc, id)
+      /* img_src / meta_chars 懒回填的老行(2026-10-20 / 2026-11-11): 只补这两列,
+       * 别的字段一个字都不动。img_src 只在"从没试过"(needSrc=1)时才写 ——
+       * 重读失败不能把已知的来源徽章抹成空。 */
+      const metaStmt2 = db.prepare(`
+        UPDATE images SET img_src = CASE WHEN ? THEN ? ELSE img_src END, meta_chars = ? WHERE id = ?
+      `)
+      for (const [isrc, mchars, needSrc, id] of metaRows) metaStmt2.run(needSrc, isrc, mchars, id)
 
       // (2026-10-02 起 meta 图也入队, 不再有"有元数据就从队列里划掉"这回事 ——
       //  之前这行 qDel 是防"图被换成带元数据的版本后队列残留旧裸图记录",
@@ -581,7 +613,8 @@ async function syncOneFolder(db, f, stats, onProgress, index, total, dryRun = fa
   emit(onProgress, {
     phase: 'folder-done', folderIndex: index, folderTotal: total,
     note: `${f.label || f.path}: 新增 ${ins + bareIns} · 更新 ${metaUpd} · 入队 ${qn} · 消失 ${goneUpd.length}`
-      + (dimRows.length ? ` · 补尺寸 ${dimRows.length}` : ''),
+      + (dimRows.length ? ` · 补尺寸 ${dimRows.length}` : '')
+      + (metaRows.length ? ` · 补元数据 ${metaRows.length}` : ''),
   })
 }
 

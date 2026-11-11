@@ -62,9 +62,20 @@ console.log('\n[1] 路由表: 登记的名字都进了正确的子目录')
 
 console.log('\n[2] 刻意留根的文件不許被搬走')
 {
-  for (const name of ['tags.db', 'tags.db-wal', 'tags.db-shm', 'tag_viewer_config.json']) {
+  /* tags.db 一族 2026-10-30 从"刻意留根"改成进 db/ 子目录（data/db 整目录
+   * junction 到 C 盘 SSD，冷启动不再吃 HDD 的 6s）。这条期望留在旧口径上，
+   * 于是 test-data-layout 一直红 —— 见下面 [2b] 的新口径。 */
+  for (const name of ['tag_viewer_config.json']) {
     eq(`${name} 留在根`, dataRelPath(name), name)
     eq(`${name} isRouted=false`, isRouted(name), false)
+  }
+}
+
+console.log('\n[2b] 库文件进 db/ 子目录(2026-10-30 SSD 路由)')
+{
+  for (const name of ['tags.db', 'tags.db-wal', 'tags.db-shm']) {
+    eq(`${name} 路由到 db/`, dataRelPath(name), `db/${name}`)
+    eq(`${name} isRouted=true`, isRouted(name), true)
   }
 }
 
@@ -101,7 +112,8 @@ console.log('\n[5] dataFile() 兼容期回退(核心)')
   eq('两边都有 -> 新位置优先', dataFile('user_meta.json'), path.join(dataDir, 'user', 'user_meta.json'))
 
   // 5.4 未登记的名字永远在根, 且不因上面任何事受影响
-  eq('tags.db 永远在根', dataFile('tags.db'), path.join(dataDir, 'tags.db'))
+  eq('未登记的名字永远在根', dataFile('tag_viewer_config.json'), path.join(dataDir, 'tag_viewer_config.json'))
+  eq('库文件进 db/ 子目录', dataFile('tags.db'), path.join(dataDir, 'db', 'tags.db'))
 
   // 5.5 返回值不能含混写分隔符 —— 这次迁移要修的正是这个
   const p = dataFile('user_meta.json')

@@ -11,7 +11,7 @@ process.env.TV_DATA_DIR = tmp
 
 // ⚠️ 必须先 initWorkspace: workspace.js 的 dataDir 由它裁决, 不初始化 dataDir=''
 //    -> dataFile('tags.db') 落成相对路径 -> 在 CWD 里静默建了个空库(踩过)。
-const { initWorkspace } = await import('../electron/core/workspace.js')
+const { initWorkspace, dataFile } = await import('../electron/core/workspace.js')
 initWorkspace(tmp, {})
 
 // schema 一律用 store 自己的 openDb 建(完整 SCHEMA + 迁移), 测试里别手写最小表 ——
@@ -40,7 +40,10 @@ function check(name, cond, extra = '') {
 }
 /** 只读探针: 每次新开连接(前面踩过: 旧闭包拿着已 close 的连接 -> database is not open) */
 const { DatabaseSync } = await import('node:sqlite')
-const probe = () => new DatabaseSync(path.join(tmp, 'tags.db'), { readOnly: true })
+/* 库路径不能硬编码 <dataDir>/tags.db —— 2026-09 起 tags.db 被 paths.DATA_ROUTE
+ * 路由到 <dataDir>/db/ 子目录。写死旧路径 -> probe 打开一个不存在的文件 ->
+ * 'unable to open database file'（这条基线红挂了好几轮）。走 dataFile() 才对。 */
+const probe = () => new DatabaseSync(dataFile('tags.db'), { readOnly: true })
 const row = (p, con) => con.prepare('SELECT tags FROM images WHERE path = ?').get(p)?.tags
 
 // 1) 预览

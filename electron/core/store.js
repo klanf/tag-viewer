@@ -147,6 +147,13 @@ const ADDITIVE_COLS = [
   //   NULL = 还没回填过(老行, 每轮同步分批补); '' = 读过了、图内确实没有。
   //   注意与 tags_src(标签来源)和 records.source(看板「来源名」)都不是一回事。
   ['images', 'img_src', 'TEXT'],
+  // images 表: 图内元数据里的**角色标签**(JSON 数组, 2026-11-11)。
+  //   起因: 反推(WD14)会把角色认歪 —— 实测 ComfyUI 图抽样 40 张里 16 张的
+  //   角色集合与提示词不一致(漏认、把同作品别的人物也认上、把服装形态当角色)。
+  //   所以角色口径改成**元数据优先**: 本列非空 -> 只认它; 空 -> 回落到 tags 里的角色。
+  //   NULL = 还没读过(老行, 同步时懒回填); '[]' = 读过了、提示词里没有角色标签。
+  //   与 tags_src 不是一回事: 反推覆盖 tags 时**不动**这一列(靠它留住元数据角色)。
+  ['images', 'meta_chars', 'TEXT'],
 ]
 
 /** v2 给 images 补的列: [列名, 定义]。缺哪个补哪个, 已有则跳过(幂等)。
@@ -906,6 +913,21 @@ export function ensureTagCats(db = null) {
 /** 测试用: 重置进程级 memo, 让下一次 ensureTagCats 真正执行 */
 export function _resetTagCatsMemo() { _catsEnsured = false }
 
+/** images.meta_chars 列 <-> 数组。存 JSON(标签本身可能含括号/空格), 坏数据当空。 */
+export function parseMetaChars(raw) {
+  const s = String(raw || '').trim()
+  if (!s) return []
+  try {
+    const a = JSON.parse(s)
+    return Array.isArray(a) ? a.map((t) => String(t || '').trim()).filter(Boolean) : []
+  } catch { return [] }
+}
+
+/** 数组 -> meta_chars 列的写法('[]' 明确表示"读过、没有角色", 与 NULL 不同) */
+export function metaCharsJson(tags) {
+  return JSON.stringify(Array.isArray(tags) ? tags : [])
+}
+
 /**
  * 分块顺序读出所有记录(按 images.id = 插入顺序)。
  * @param {(rec: {path: string, source: string, tags: string[]}) => void} onRecord
@@ -937,7 +959,7 @@ export async function readRecords(onRecord, onProgress = () => {}) {
   const chunk = db.prepare(`
     SELECT i.id AS id, i.path AS path, i.src_id AS src_id, i.folder_id AS folder_id,
            i.tags AS tags, i.tags_src AS tags_src, i.px_w AS px_w, i.px_h AS px_h,
-           i.img_src AS img_src
+           i.img_src AS img_src, i.meta_chars AS meta_chars
     FROM images i WHERE i.id > ? AND i.gone = 0${vis} ORDER BY i.id LIMIT ?
   `)
   let lastId = 0
@@ -976,6 +998,9 @@ export async function readRecords(onRecord, onProgress = () => {}) {
         // 图内元数据来源('comfyui' 等): 卡片生成器徽章。NULL(还没回填)与 ''(读过、
         // 没有)都给空串 —— 前端只认"非空才显示徽章"。
         imgSrc: String(r.img_src || ''),
+        // 元数据里的角色(2026-11-11): 角色口径以它为准, 空数组 = 回落到 tags。
+        // 存的是 JSON 数组; 老行 NULL / 坏数据一律当"没有", 不给上层制造脏状态。
+        metaChars: parseMetaChars(r.meta_chars),
       })
       n++
     }
