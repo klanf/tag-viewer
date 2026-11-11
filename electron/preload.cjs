@@ -90,6 +90,10 @@ const CHANNELS = new Set([
   'random:sections', 'random:slots', 'random:wordinfo',
   // 自然语言语料库概况(动作/穿搭/发型条数, 2026-11-08)
   'random:nlstats',
+  // 图库组合池概况(char-db 动作/穿搭整串条数, 2026-11-11)
+  'random:cdstats',
+  // 自然语言语料管理(标签页入口, 2026-11-11): 列表 / 全局覆盖读写
+  'nl:list', 'nl:overrides:get', 'nl:overrides:patch',
   // 高级替换方案库(多套方案, 2026-11-09)
   'adv:sets', 'adv:sets:save',
 ])

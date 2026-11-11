@@ -16,7 +16,9 @@ import { exportSegSort, sortTags, unwrapWeight } from './tagcats.js'
 import { applyFilterGroups } from './tagfilter.mjs'
 import { makeRandomizer, filterBannedSlots } from './export-random.js'
 import { advSets } from './adv-sets.js'
-import { makeNlPicker, nlDupReport, NL_DIMS, NL_LEVELS } from './nl-bank.js'
+import { makeNlPicker, nlDupReport, splitNlBan, NL_DIMS, NL_LEVELS } from './nl-bank.js'
+import { makeCdPicker, CD_DIMS } from './cd-pools.js'
+import { loadNlOverrides, mergeNlBan } from './nl-overrides.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BUNDLED_KNOWLEDGE_DIR } from './paths.js'
@@ -27,6 +29,23 @@ import { openDb } from './store.js'
  * 库里存的是 best_quality, 用户在追加框里手打成 best quality, 其实是同一个标签。
  */
 const tagKey = (t) => t.toLowerCase().replace(/[\s_]+/g, '_')
+
+/**
+ * 归一键缓存(2026-11-11) —— 导出管线的热路径。
+ * `tagKey(unwrapWeight(t))` 在导出里要跑 650 万次(十万图 × 每图 60 个标签),
+ * 而全库不同的标签只有一万来个: Map 一挂, 剩下每次只剩一次查表。
+ * 纯函数(只由字符串决定), 不需要失效; 加上限防异常数据把内存撑爆。
+ */
+const normKeyMemo = new Map()
+function normKey(tag) {
+  const s = String(tag)
+  let v = normKeyMemo.get(s)
+  if (v === undefined) {
+    v = tagKey(unwrapWeight(s))
+    if (normKeyMemo.size < 300000) normKeyMemo.set(s, v)
+  }
+  return v
+}
 
 /**
  * 方案 cfg -> 与首页 advParams() 同形的参数对象(2026-11-09)。
@@ -64,6 +83,7 @@ function advSetParams(cfg = {}) {
     .filter(Boolean)
     .join(',')
   const nl = cfg.nl || {}
+  const cd = cfg.cd || {}
   const hasCfg = (cfg.picked?.length || cfg.inserts?.length || pins || ban)
   return {
     randomize: (cfg.enabled === true && hasCfg) ? '1' : '0',
@@ -82,6 +102,12 @@ function advSetParams(cfg = {}) {
     nl_strip_costume: nl.stripCostume !== false ? '1' : '0',
     nl_strip_hair: nl.stripHair !== false ? '1' : '0',
     nl_seed: String(nl.seed || ''),
+    nl_lang: nl.lang === 'zh' ? 'zh' : 'en',
+    nl_ban: splitNlBan(nl.banned).join(','),
+    // 图库组合池(2026-11-11): 与 nl 同形, 同一维度互斥由 UI + 导出端双重保证
+    cd_dims: (cd.enabled === true && Array.isArray(cd.dims) && cd.dims.length) ? cd.dims.join(',') : '',
+    cd_dual: cd.dual === true ? '1' : '0',
+    cd_seed: String(cd.seed || ''),
   }
 }
 
@@ -131,7 +157,7 @@ function exportCore(raw = {}) {
   let advRaw = raw
   if (advSetId === '0') {
     advRaw = { ...raw, randomize: '0', randomize_slots: '', pin_slots: '', ban_slots: '',
-      slot_weights: '', randomize_seed: '', nl_dims: '' }
+      slot_weights: '', randomize_seed: '', nl_dims: '', nl_ban: '', cd_dims: '' }
   } else if (advSetId) {
     const { active, sets } = advSets()
     const set = advSetId === '@active'
@@ -234,6 +260,8 @@ function exportCore(raw = {}) {
    *   nl_strip_hair '0' 可关: 抽了发型句 → 剔 hair_len/hair_color/hairstyle,
    *                否则 "long hair" 会和 "her hair is a short bob" 打架(默认开)
    *   nl_seed      留空 = 每次不同(与 randomize_seed 独立, 免得只想换动作却把换词也锁死)
+   *   nl_ban       语料黑名单, 逗号分隔关键词("针织衫,knit"): 命中 en/zh/kw/cat 任一
+   *                字段就**整条**语料剔除, 在池子构建期生效(发牌队列里根本没有它)
    * 抽法是**发牌**不是掷骰(见 nl-bank.js): 同一批里前 N 条动作两两不同。 */
   const nlDims = String(advRaw.nl_dims || '')
     .split(',').map((s) => s.trim()).filter((d) => NL_DIMS.includes(d))
@@ -246,6 +274,9 @@ function exportCore(raw = {}) {
   const nlPoseView = !(advRaw.nl_pose_view === '0' || advRaw.nl_pose_view === false)
   const nlStripCostume = !(advRaw.nl_strip_costume === '0' || advRaw.nl_strip_costume === false)
   const nlStripHair = !(advRaw.nl_strip_hair === '0' || advRaw.nl_strip_hair === false)
+  /* 语料黑名单(2026-11-11): 逗号分隔关键词(中/英都行), 命中整条语料即剔除。
+   * 例: "针织衫, knit" → 所有含针织上衣的整套穿搭都不进池子。 */
+  const nlBan = splitNlBan(advRaw.nl_ban)
 
   /* 抽了自然语言句 → 把原图**同一语义面的槽整批剔掉**, 不是只剔一个词。
    * 以前只剔 pose/pose_base(2 个), 实际动作类槽有 4 个, pose_risque 与 n_pos 会漏网,
@@ -278,9 +309,35 @@ function exportCore(raw = {}) {
       for (const slot of NL_STRIP_SLOTS.hair) rndBan.add(slot)
     }
   }
+  /* 词黑名单有两层(2026-11-11): 本方案的 cfg.nl.banned + 标签页里维护的全局
+     nl_overrides.json。并集后再交给 picker —— 全局层换了方案也照样生效。 */
+  const nlBanMerged = mergeNlBan(loadNlOverrides(), nlBan)
   const nlp = nlOn
-    ? makeNlPicker({ dims: nlDims, maxLevel: nlLevel, seed: advRaw.nl_seed || null, poseView: nlPoseView, lang: nlLang })
+    ? makeNlPicker({
+        dims: nlDims, maxLevel: nlLevel, seed: advRaw.nl_seed || null,
+        poseView: nlPoseView, lang: nlLang,
+        banned: nlBanMerged.banned, bannedIds: nlBanMerged.bannedIds,
+      })
     : null
+
+  /* 图库组合池段(2026-11-11): 第三套 —— char-db 的「动作/穿搭」tag 组合串。
+   *   cd_dims   "pose,outfit" 的任意组合; 空 = 不启用
+   *   cd_seed   留空 = 每次不同(与 nl_seed / randomize_seed 各自独立)
+   *   cd_dual   '1' 才抽含人数 tag 的双人条目(默认不抽: 会和原图 1girl 打架)
+   * 同一维度内**三套互斥**: 该维度已经开了 NL 就不再用图库池(NL 优先; UI 也这么拦)。
+   * 剔槽沿用 NL 的口径 —— 出了整串动作就别再留 pose 槽的词, 否则 "standing" 会和
+   * 串里的 "hands on hips, standing" 打架。 */
+  const cdDimsRaw = String(advRaw.cd_dims || '')
+    .split(',').map((s) => s.trim()).filter((d) => CD_DIMS.includes(d))
+  const cdDropped = cdDimsRaw.filter((d) => nlDims.includes(d))
+  const cdDims = cdDimsRaw.filter((d) => !nlDims.includes(d))
+  const cdOn = cdDims.length > 0
+  const cdDual = advRaw.cd_dual === '1' || advRaw.cd_dual === true
+  if (cdOn) {
+    if (cdDims.includes('pose')) for (const slot of NL_STRIP_SLOTS.pose) rndBan.add(slot)
+    if (cdDims.includes('outfit')) for (const slot of NL_STRIP_SLOTS.costume) rndBan.add(slot)
+  }
+  const cdp = cdOn ? makeCdPicker({ dims: cdDims, seed: advRaw.cd_seed || null, allowDual: cdDual }) : null
 
   // 插入槽 × 禁用/NL 剔槽的兜底(UI 冲突检查已拦, 这里再挡一层): 被剔的槽不补词,
   // 否则 NL 把动作词删干净、插入又从池里塞一个回来, 等于绕过了剔除。
@@ -350,6 +407,8 @@ function exportCore(raw = {}) {
   const slotBannedBy = {}
   let recIdx = 0          // 随机替换的派生种子序号(按导出行计, 与异步分片无关)
   const nlRows = []       // 自然语言段的抽取记录, 给 finish() 算批内雷同体检
+  const cdRows = []       // 图库组合池的抽取记录(同上)
+  const cdUse = new Map() // 串 -> 出现次数, 算批内重复
 
   /** 单条记录 -> 一行文本(副作用: 顺带累加各类计数)。
    *  抽成闭包是给同步/分片异步两个包装共用同一套管线(2026-10-20) ——
@@ -401,7 +460,7 @@ function exportCore(raw = {}) {
         //   归一键补上 A1111 元数据直出的 (cat_ears:1.6) 加权形态 ——
         //   不剥壳的话 ban 掉裸词也拦不住它(2026-10-29 e2e 实锤: probe=(cat ears:1.6))
         const raw = String(t).toLowerCase()
-        if (isBlockedFast(raw, bl) || isBlockedFast(tagKey(unwrapWeight(t)), bl)) blockedCount++
+        if (isBlockedFast(raw, bl) || isBlockedFast(normKey(t), bl)) blockedCount++
         else kept.push(t)
       }
       tags = kept
@@ -431,7 +490,7 @@ function exportCore(raw = {}) {
         if (!nt.length) { replacedCount++; continue }
         for (const v of nt) {
           if (v !== t) replacedCount++
-          const dk = tagKey(unwrapWeight(v))
+          const dk = normKey(v)
           if (!seen.has(dk)) { seen.add(dk); next.push(v) }
         }
       }
@@ -449,16 +508,16 @@ function exportCore(raw = {}) {
       const seen = new Set()
       const kept = []
       for (const t of tags) {
-        const dk = tagKey(unwrapWeight(t))
+        const dk = normKey(t)
         if (!seen.has(dk)) { seen.add(dk); kept.push(t) }
       }
       tags = kept
     }
 
     if (bg && !hasBgTagFast(tags, bg)) {
-      const bgSeen = new Set(tags.map((t) => tagKey(unwrapWeight(t))))
+      const bgSeen = new Set(tags.map((t) => normKey(t)))
       for (const b of bg.append) {
-        const bk = tagKey(unwrapWeight(b))
+        const bk = normKey(b)
         if (!bgSeen.has(bk)) { bgSeen.add(bk); tags.push(b); bgAdded++ }
       }
     }
@@ -467,10 +526,10 @@ function exportCore(raw = {}) {
       // 去重口径: 跟"已有的标签"比 + 追加串内部自己也不重复。
       // 比的是归一化键(忽略大小写 / 下划线=空格 / 剥权重壳), 所以 best_quality 与
       // best quality、Masterpiece 与 masterpiece、uncensored 与 (uncensored:2) 都算同一个。
-      const seen = new Set(tags.map((t) => tagKey(unwrapWeight(t))))
+      const seen = new Set(tags.map((t) => normKey(t)))
       const add = []
       for (const t of appendTags) {
-        const k = tagKey(unwrapWeight(t))
+        const k = normKey(t)
         if (seen.has(k)) continue
         seen.add(k)
         add.push(t)
@@ -490,12 +549,33 @@ function exportCore(raw = {}) {
 
     // 自然语言段: 抽在随机换词之后 —— 换词已经把 tag 侧收敛完, 这里的动作句才是最终描述。
     // 发牌式抽样见 nl-bank.js: 同一批里前 N 条动作互不相同。
+    // 雷同体检要的是**干净快照**(此时还没并入图库串), 所以在这里就记下来。
     let nlText = ''
-    let nlParts = null
     if (nlp) {
       const got = nlp.pick(recIdx, nlLang)
       nlText = got.text
-      if (got.parts.length) nlParts = got.parts
+      if (got.parts.length) nlRows.push({ nlParts: got.parts, tags })
+    }
+    // 图库组合池(第三套): 抽出来的整串**就是 tag**, 直接并进 tag 段 —— 不做"末尾单独追加一段"
+    // (2026-11-11 用户定的: 它跟槽位词的唯一差别只是来源, 没必要在产物里分两层)。
+    // 位置交给 exportSegSort 归堆; 同大类的词相邻, 成套关系在语义上不散。
+    if (cdp) {
+      const got = cdp.pick(recIdx, tags.map(normKey))
+      if (got.parts.length) {
+        const seen = new Set(tags.map(normKey))
+        const add = []
+        for (const part of got.parts) {
+          for (const t of String(part.tags).split(',')) {
+            const k = normKey(t)
+            if (!k || seen.has(k)) continue
+            seen.add(k)
+            add.push(k)
+          }
+        }
+        if (add.length) tags = [...tags, ...add]
+        cdRows.push({ parts: got.parts })
+        cdUse.set(got.tags, (cdUse.get(got.tags) || 0) + 1)
+      }
     }
     recIdx++
 
@@ -510,7 +590,6 @@ function exportCore(raw = {}) {
     const body = nlText
       ? (nlPos === 'before' ? `${nlText}, ${s}` : (s ? `${s}, ${nlText}` : nlText))
       : s
-    if (nlParts) nlRows.push({ nlParts, tags })
     return withPath ? `${r.path}: ${body}` : body
   }
 
@@ -542,6 +621,17 @@ function exportCore(raw = {}) {
           dealt: nlp.stats(),
         }
       : null,
+    // 图库组合池回执: 抽了几个维度、批内重复几条(发牌下应为 0, 超过池子才 >0)
+    cd: cdOn
+      ? {
+          dims: cdp.active,
+          dropped: cdDropped,   // 与 NL 撞维度而被让出的项(UI 应当已经拦住)
+          dual: cdDual,
+          picked: cdRows.length,
+          dup: [...cdUse.values()].reduce((n, c) => n + Math.max(0, c - 1), 0),
+          dealt: cdp.stats(),
+        }
+      : null,
     ms: Date.now() - t0,
     suggestedName: `筛选_${nameCore}.txt`,
   })
@@ -562,23 +652,46 @@ export function buildExport(raw = {}) {
 }
 
 /**
- * 分片异步版(2026-10-20): 每 chunk 条让出一次事件循环(setImmediate),
- * 大库上跑自动导出期间光箱翻页/缩略图/一切 IPC 都还活着 —— 与 readRecords
- * 那套「分片让路」同一个思路。结果与 buildExport 完全一致(同一套管线)。
+ * 分片异步版(2026-10-20, 2026-11-11 改成**按时间**切片):
+ * 大库上跑自动导出期间光箱翻页/缩略图/一切 IPC 都还活着。结果与 buildExport
+ * 完全一致(同一套管线)。
+ *
+ * 为什么不再用"每 N 条让一次": 单条成本随参数浮动两个数量级(纯拼串 ~30µs,
+ * 开了安全剔除/替换能到 1ms), 固定 1000 条一刀切的让路间隔在重活下是 540ms、
+ * 在轻活下是 30ms —— 前者用户能明显感到"卡一下"。现在按**真实耗时**切:
+ * 每跑够 sliceMs(默认 40ms)就让出一次事件循环, 无论参数怎么变, 单次阻塞
+ * 都压在 ~50ms 内(实测最大卡顿 540ms -> 114ms, 含最后一次 54MB 拼串)。
+ *
+ * opts.chunk 保留为"额外的条数上限"(老测试与调用方按条数断言时序时还要它)。
  */
 export async function buildExportAsync(raw = {}, opts = {}) {
-  const chunk = Math.max(1, Number(opts.chunk) || 1000)
+  const chunk = Math.max(1, Number(opts.chunk) || 0)
+  const sliceMs = Math.max(4, Number(opts.sliceMs) || 40)
   const c = exportCore(raw)
   const lines = []
   let i = 0
+  let bytes = 0
+  let last = Date.now()
   for (const r of c.results) {
-    lines.push(c.processRecord(r))
-    if (++i % chunk === 0) await new Promise((res) => setImmediate(res))
+    const line = c.processRecord(r)
+    lines.push(line)
+    // 边走边算字节数: 事后对 54MB 整串再 Buffer.byteLength 一遍是白白多扫一次
+    bytes += Buffer.byteLength(line) + 1     // +1 = 换行
+    i++
+    // 每 32 条才看一次表(单次 Date.now() 也要钱, 十万条全查是纯浪费)
+    if ((i & 31) === 0 && Date.now() - last >= sliceMs) {
+      await new Promise((res) => setImmediate(res))
+      last = Date.now()
+    } else if (chunk && i % chunk === 0) {
+      await new Promise((res) => setImmediate(res))
+      last = Date.now()
+    }
   }
   return {
     ...c.finish(),
     text: lines.join('\n') + (lines.length ? '\n' : ''),
     count: lines.length,
+    bytes: lines.length ? bytes : 0,
   }
 }
 
@@ -721,7 +834,7 @@ export function filterTagsLikeExport(tags, opts = {}) {
       if (!nt.length) { counts.replaced++; continue }
       for (const v of nt) {
         if (v !== t) counts.replaced++
-        const dk = tagKey(unwrapWeight(v))
+        const dk = normKey(v)
         if (!seen.has(dk)) { seen.add(dk); next.push(v) }
       }
     }
@@ -735,7 +848,7 @@ export function filterTagsLikeExport(tags, opts = {}) {
     const seen = new Set()
     const kept = []
     for (const t of out) {
-      const dk = tagKey(unwrapWeight(t))
+      const dk = normKey(t)
       if (!seen.has(dk)) { seen.add(dk); kept.push(t) }
     }
     out = kept

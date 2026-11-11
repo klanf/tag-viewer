@@ -205,6 +205,9 @@ function blankParams() {
     nl_strip_costume: s.nl_strip_costume !== false,
     nl_strip_hair: s.nl_strip_hair !== false,
     nl_seed: typeof s.nl_seed === 'string' ? s.nl_seed : '',
+    // 语言与语料黑名单(2026-11-11): 之前漏了 nl_lang, 预设里选的中文导出会被静默丢掉
+    nl_lang: s.nl_lang === 'zh' ? 'zh' : 'en',
+    nl_ban: typeof s.nl_ban === 'string' ? s.nl_ban : '',
   }
 }
 

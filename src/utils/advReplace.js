@@ -40,8 +40,21 @@ export const adv = reactive({
     stripCostume: true,  // 抽了穿搭句 → 剔原图全部单品槽(13 个, 见 exporter.js NL_STRIP_SLOTS)
     stripHair: true,     // 抽了发型句 → 剔 hair_len/hair_color/hairstyle
     seed: '',
+    // 语料黑名单(2026-11-11): 逗号分隔关键词(中/英), 命中整条语料即剔除。
+    // 例: "针织衫, knit" —— 不想让"她穿着针织衫"这类整套穿搭进池子。
+    banned: '',
   },
   nlStats: null,         // 主进程下发的语料库概况 {dims, totals, empty}
+  // 图库组合池(2026-11-11): 第三套来源 —— char-db 的「动作/穿搭」tag 组合串
+  // (一条 = 一套完整写法, 如 "standing, hands on hips")。不拆单词、不进随机引擎,
+  // 与 NL 一样在导出末尾整段追加。**同一维度内与 NL 互斥**(点这个自动关那个)。
+  cd: {
+    enabled: false,
+    dims: [],            // pose 动作 / outfit 穿搭
+    dual: false,         // 是否抽含 2girls 等人数 tag 的双人条目
+    seed: '',
+  },
+  cdStats: null,         // {dims:[{id, zh, total, dual, available}], empty}
   slots: [],             // 槽清单 [{id, zh, cnt, words}] —— 主进程下发
   sections: [],          // 大类清单(给老回执的 sec id 做中文映射)
   loaded: false,
@@ -97,6 +110,13 @@ function cfgFromAdv() {
       stripCostume: adv.nl.stripCostume !== false,
       stripHair: adv.nl.stripHair !== false,
       seed: String(adv.nl.seed || ''),
+      banned: String(adv.nl.banned || ''),
+    },
+    cd: {
+      enabled: adv.cd.enabled === true && adv.cd.dims.length > 0,
+      dims: [...adv.cd.dims],
+      dual: adv.cd.dual === true,
+      seed: String(adv.cd.seed || ''),
     },
   }
 }
@@ -145,6 +165,19 @@ function applyCfgToAdv(cfg = {}) {
     adv.nl.stripCostume = n.stripCostume !== false
     adv.nl.stripHair = n.stripHair !== false
     adv.nl.seed = String(n.seed || '')
+    adv.nl.banned = typeof n.banned === 'string'
+      ? n.banned
+      : (Array.isArray(n.banned) ? n.banned.join(',') : '')
+    const c = cfg.cd || {}
+    adv.cd.enabled = c.enabled === true && Array.isArray(c.dims) && c.dims.length > 0
+    adv.cd.dims = Array.isArray(c.dims) ? c.dims.filter((x) => ['pose', 'outfit'].includes(x)) : []
+    adv.cd.dual = c.dual === true
+    adv.cd.seed = String(c.seed || '')
+    // 手改 json 的兜底: 同一维度被 NL 占了就让给 NL(UI 点选时也会互斥)
+    if (adv.cd.enabled && adv.nl.enabled && adv.nl.dims.length) {
+      adv.cd.dims = adv.cd.dims.filter((x) => !adv.nl.dims.includes(x))
+      if (!adv.cd.dims.length) adv.cd.enabled = false
+    }
   } finally { loading = false }
 }
 
@@ -176,17 +209,28 @@ watch(
 export async function ensureAdvLoaded() {
   const my = ++loadSeq
   const jobs = []
+  /* 语料统计**每次打开都重拉**(2026-11-11): 标签页里可能刚禁了几条句子,
+     缓存的分母/可抽数就偏大。读 JSON + 遍历 1600 条, 毫秒级, 不值得做失效判断。 */
+  jobs.push(
+    api.random.nlstats(String(adv.nl.banned || ''))
+      .then((nl) => { if (my === loadSeq && nl) adv.nlStats = nl })
+      .catch(() => {}),
+  )
+  // 图库组合池条数(静态文件, 每次打开重拉也无所谓: 读 74KB JSON)
+  jobs.push(
+    api.random.cdstats()
+      .then((cd) => { if (my === loadSeq && cd) adv.cdStats = cd })
+      .catch(() => {}),
+  )
   if (!adv.loaded) {
     jobs.push(
-      Promise.all([
-        api.random.slots(), api.random.sections(), api.random.nlstats().catch(() => null),
-      ]).then(([slots, secs, nl]) => {
-        if (my !== loadSeq) return
-        adv.slots = slots || []
-        adv.sections = secs || []
-        adv.nlStats = nl
-        adv.loaded = true
-      }),
+      Promise.all([api.random.slots(), api.random.sections()])
+        .then(([slots, secs]) => {
+          if (my !== loadSeq) return
+          adv.slots = slots || []
+          adv.sections = secs || []
+          adv.loaded = true
+        }),
     )
   }
   if (!adv.setsLoaded) {
@@ -202,6 +246,18 @@ export async function ensureAdvLoaded() {
   }
   await Promise.all(jobs).catch(() => {})
 }
+
+/* 语料黑名单改了 → 让主进程重算「可抽 / 已剔」条数(400ms 防抖: 输入框逐字敲不该刷 IPC)。
+ * 初次 ensureAdvLoaded 拉的 stats 不带 ban(那时方案还没载入), 由这里补一次。 */
+let nlStatsTimer = null
+watch(() => adv.nl.banned, () => {
+  clearTimeout(nlStatsTimer)
+  nlStatsTimer = setTimeout(() => {
+    api.random.nlstats(String(adv.nl.banned || ''))
+      .then((s) => { if (s) adv.nlStats = s })
+      .catch(() => {})
+  }, 400)
+})
 
 /** 切换方案: 先把当前编辑写回旧方案落盘, 再载入新方案 */
 export async function switchAdvSet(id) {
@@ -372,7 +428,7 @@ export const advConflicts = computed(() => {
  * 于是「钉 pose 词 + NL 勾动作」= 原图动作词留着、又追加 NL 动作句 —— 打架。
  * 保存前必须把这类组合拦下, 所以这里复算一份清单给冲突检查用。
  */
-const NL_STRIP_MAP = {
+export const NL_STRIP_MAP = {
   pose: ['pose', 'pose_base', 'pose_risque', 'n_pos'],
   view: ['viewpoint', 'camera_angle'],
   costume: ['top', 'bottom', 'outfit', 'underwear', 'legwear', 'footwear',
@@ -380,17 +436,24 @@ const NL_STRIP_MAP = {
   hair: ['hair_len', 'hair_color', 'hairstyle'],
 }
 export function nlStripSlots() {
-  if (!nlActive.value) return []
   const out = new Set()
-  if (adv.nl.dims.includes('pose')) {
-    if (adv.nl.stripPose) for (const s of NL_STRIP_MAP.pose) out.add(s)
-    if (adv.nl.poseView) for (const s of NL_STRIP_MAP.view) out.add(s)
+  if (nlActive.value) {
+    if (adv.nl.dims.includes('pose')) {
+      if (adv.nl.stripPose) for (const s of NL_STRIP_MAP.pose) out.add(s)
+      if (adv.nl.poseView) for (const s of NL_STRIP_MAP.view) out.add(s)
+    }
+    if (adv.nl.dims.includes('costume') && adv.nl.stripCostume) {
+      for (const s of NL_STRIP_MAP.costume) out.add(s)
+    }
+    if (adv.nl.dims.includes('hair') && adv.nl.stripHair) {
+      for (const s of NL_STRIP_MAP.hair) out.add(s)
+    }
   }
-  if (adv.nl.dims.includes('costume') && adv.nl.stripCostume) {
-    for (const s of NL_STRIP_MAP.costume) out.add(s)
-  }
-  if (adv.nl.dims.includes('hair') && adv.nl.stripHair) {
-    for (const s of NL_STRIP_MAP.hair) out.add(s)
+  /* 图库组合池(第三套)接管的是**同一批槽**(导出端也是同一张表), 所以并进这里 ——
+     界面上的灰槽、钉词/插入的软提示都跟着一起准。 */
+  if (adv.cd.enabled) {
+    if (adv.cd.dims.includes('pose')) for (const s of NL_STRIP_MAP.pose) out.add(s)
+    if (adv.cd.dims.includes('outfit')) for (const s of NL_STRIP_MAP.costume) out.add(s)
   }
   return [...out]
 }
@@ -433,13 +496,28 @@ export const advActive = computed(() => adv.picked.length > 0 || adv.inserts.len
 export const nlActive = computed(() => adv.nl.dims.length > 0
   && Array.isArray(adv.nlStats?.dims) && !adv.nlStats.empty)
 
-/** 某个维度在当前档位下有多少条可抽(界面显示"可抽 N 条") */
+/** 某个维度在当前档位下有多少条可抽(界面显示"可抽 N 条")。
+ *  扣的是 **disabled**(关键词黑名单 + 标签页里的单条禁用) —— 只用 banned 会漏算后者。 */
 export function nlPoolSize(dim) {
   const d = (adv.nlStats?.dims || []).find((x) => x.id === dim)
   if (!d) return 0
   const order = ['sfw', 'soft', 'nsfw']
   const upto = order.indexOf(adv.nl.level)
-  return order.slice(0, upto + 1).reduce((n, lv) => n + (d.byLevel[lv] || 0), 0)
+  const inLevel = (lv) => order.slice(0, upto + 1).includes(lv)
+  const all = Object.entries(d.byLevel || {}).reduce((n, [lv, c]) => n + (inLevel(lv) ? c : 0), 0)
+  const cut = Object.entries(d.disabledByLevel || d.bannedByLevel || {})
+    .reduce((n, [lv, c]) => n + (inLevel(lv) ? c : 0), 0)
+  return Math.max(0, all - cut)
+}
+
+/** 某个维度在当前档位下被禁用(关键词 + 单条)剔掉了多少条(界面显示"已剔 N 条") */
+export function nlBannedSize(dim) {
+  const d = (adv.nlStats?.dims || []).find((x) => x.id === dim)
+  if (!d) return 0
+  const order = ['sfw', 'soft', 'nsfw']
+  const upto = order.indexOf(adv.nl.level)
+  const src = d.disabledByLevel || d.bannedByLevel || {}
+  return order.slice(0, upto + 1).reduce((n, lv) => n + (src[lv] || 0), 0)
 }
 
 /**
@@ -451,6 +529,45 @@ export function nlPoolSize(dim) {
 export function nlTotalSize(dim) {
   const d = (adv.nlStats?.dims || []).find((x) => x.id === dim)
   return d ? (d.total || 0) : 0
+}
+
+/* ================= 图库组合池(2026-11-11, 第三套) ================= */
+
+/** 有维度勾选且池子非空 —— 与 nlActive 同形, UI 用它决定 chip 亮不亮 */
+export const cdActive = computed(() => adv.cd.dims.length > 0
+  && Array.isArray(adv.cdStats?.dims) && !adv.cdStats.empty)
+
+/** 某维度当前**可抽**条数(不含双人条目, 除非开了 dual) */
+export function cdPoolSize(dim) {
+  const d = (adv.cdStats?.dims || []).find((x) => x.id === dim)
+  if (!d) return 0
+  return adv.cd.dual ? (d.total || 0) : (d.available || 0)
+}
+
+/** 某维度**全量**条数(界面分母, 同 nlTotalSize 的理由: 只显示可抽会被读成"就这么多") */
+export function cdTotalSize(dim) {
+  const d = (adv.cdStats?.dims || []).find((x) => x.id === dim)
+  return d ? (d.total || 0) : 0
+}
+
+/**
+ * 切换某维度的图库池开关 —— **同一维度内三套互斥**: 开了图库就把 NL 里同维度关掉
+ * (反过来 NL 那边关图库), 因为两者都是"整段接管", 同时开会写出两套动作/穿搭。
+ */
+export function toggleCdDim(dim) {
+  if (!['pose', 'outfit'].includes(dim)) return
+  const on = adv.cd.dims.includes(dim)
+  if (on) {
+    adv.cd.dims = adv.cd.dims.filter((x) => x !== dim)
+    if (!adv.cd.dims.length) adv.cd.enabled = false
+    return
+  }
+  adv.cd.dims = [...adv.cd.dims, dim]
+  adv.cd.enabled = true
+  if (adv.nl.dims.includes(dim)) {
+    adv.nl.dims = adv.nl.dims.filter((x) => x !== dim)
+    if (!adv.nl.dims.length) adv.nl.enabled = false
+  }
 }
 
 /**
@@ -533,5 +650,10 @@ export function advParams() {
     nl_strip_costume: adv.nl.stripCostume ? '1' : '0',
     nl_strip_hair: adv.nl.stripHair ? '1' : '0',
     nl_seed: adv.nl.seed.trim(),
+    nl_ban: adv.nl.banned.trim(),
+    // 图库组合池段(第三套): 同一维度与 NL 互斥, 导出端还会再让一次
+    cd_dims: cdActive.value ? adv.cd.dims.join(',') : '',
+    cd_dual: adv.cd.dual ? '1' : '0',
+    cd_seed: adv.cd.seed.trim(),
   }
 }

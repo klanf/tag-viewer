@@ -175,7 +175,10 @@ const PARAM_STRS = ['q', 'exclude', 'sort', 'append', 'replace_set',
   // 槽位权重(2026-11-10): "legwear:1.2" —— 换/补出来的词套 (tag:w) 壳。
   // 与 pin_slots 同批进白名单, 漏了会被 normParams 静默剥掉(老坑)。
   'randomize_sections', 'randomize_slots', 'insert_slots', 'pin_slots', 'ban_slots', 'slot_weights', 'randomize_seed',
-  'nl_dims', 'nl_level', 'nl_seed',
+  'nl_dims', 'nl_level', 'nl_lang', 'nl_seed', 'nl_ban',
+  // 图库组合池(2026-11-11): 第三套动作/穿搭来源, 参数与 nl_* 同形。
+  // 同样必须进白名单 —— 漏一个键就被 normParams 静默剥掉(这个坑已经踩过三次)。
+  'cd_dims', 'cd_seed', 'cd_dual',
   // 高级替换方案(2026-11-09): '@active'=跟随当前方案 / '0'=不启用 / 方案 id / 空=旧版快照参数。
   // 预设选了方案后, exporter 以方案库 cfg 为准, 上面的 randomize_*/nl_* 快照参数被覆盖。
   'adv_set']
@@ -352,7 +355,8 @@ async function runPresetOnce(id, { trigger = 'manual' } = {}) {
     // 走 replaceFileWithRetry —— Windows 上刚写出的文件可能被扫描器/索引器短暂占住,
     // 一次 EPERM 就把整次导出丢掉(详见上面那个函数的注释)。
     await replaceFileWithRetry(tmp, full)
-    const bytes = Buffer.byteLength(r.text, 'utf8')
+    // 字节数由 buildExportAsync 边走边算好(老版本这里对 54MB 整串再扫一遍)
+    const bytes = Number(r.bytes) || Buffer.byteLength(r.text, 'utf8')
     patchRun(id, {
       lastRunAt: Date.now(), lastCount: r.count, lastBytes: bytes,
       lastPath: full, lastTrigger: trigger, lastError: '',

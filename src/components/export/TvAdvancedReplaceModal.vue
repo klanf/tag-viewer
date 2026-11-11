@@ -31,7 +31,8 @@ import {
   adv, ensureAdvLoaded, advZh, slotMode, cycleSlotMode,
   addAdvPin, removeAdvPin, advPinCount, advConflicts, advPinConflicts, advStripSoftNotes,
   slotWeightOf, setSlotWeight, pinWeightOf,
-  nlActive, nlPoolSize, nlTotalSize,
+  nlActive, nlPoolSize, nlTotalSize, nlBannedSize, nlStripSlots, NL_STRIP_MAP,
+  cdActive, cdPoolSize, cdTotalSize, toggleCdDim,
   switchAdvSet, addAdvSet, renameAdvSet, deleteAdvSet,
 } from '@/utils/advReplace.js'
 
@@ -62,15 +63,27 @@ const NL_LEVELS_UI = [
   { id: 'nsfw', zh: '全开', hint: '再加体位类(立位/正常位/后入位等)' },
 ]
 const nlEmpty = computed(() => !adv.nlStats || adv.nlStats.empty)
-const nlDimCnt = computed(() => {
-  const d = (adv.nlStats?.dims || []).find((x) => x.id === 'pose')
-  return d ? d.total : 0
+/* 维度的勾选搬到了 ① 槽位面板(📝 行), 这里只保留文案表(save/状态行/hover 说明都要用) */
+
+/* ---------- 语料黑名单(2026-11-11) ----------
+ * 「不想让针织衫进池子」这类诉求没法靠档位/维度解决 —— 档位管尺度, 维度管语义面,
+ * 都太粗。给一个关键词黑名单: 命中 en/zh/kw/cat 任一字段就**整条语料**剔除
+ * (一条穿搭就是"她穿着 A、B、C"一整套, 删片段会剩半套)。
+ * 剔除在池子构建期做(见 nl-bank.js poolOf), 界面显示的"可抽 N 条"就是真实数。 */
+const nlBanKeys = computed(() => String(adv.nl.banned || '')
+  .split(/[,，;；]/).map((s) => s.trim()).filter(Boolean))
+const NL_DIM_ZH = { pose: '动作', costume: '穿搭', hair: '发型' }
+/** 已勾维度里被剔了多少、还剩多少 —— 让用户看见"我要的没进去"和"别剔光了" */
+const nlBanHint = computed(() => {
+  if (!nlBanKeys.value.length) return null
+  const dims = adv.nl.dims.length ? adv.nl.dims : ['pose', 'costume', 'hair']
+  const rows = dims.map((d) => {
+    const left = nlPoolSize(d)
+    return { zh: NL_DIM_ZH[d] || d, cut: nlBannedSize(d), left, dead: left === 0 }
+  })
+  return { text: rows.filter((r) => r.cut > 0).map((r) => `${r.zh}剔 ${r.cut} 剩 ${r.left}`).join(' · '), rows }
 })
-function toggleNlDim(id) {
-  const i = adv.nl.dims.indexOf(id)
-  if (i >= 0) adv.nl.dims.splice(i, 1)
-  else adv.nl.dims.push(id)
-}
+const nlBanDead = computed(() => !!nlBanHint.value?.rows.some((r) => r.dead))
 
 const slotsSorted = computed(() => adv.slots)   // 主进程已按「大区 → 词条数」排好
 const emptySlots = computed(() => adv.loaded && !adv.slots.length)
@@ -90,11 +103,171 @@ const slotGroups = computed(() => {
     }
     out[idx.get(key)].slots.push(s)
   }
+  // 伪槽(📝/🎬)不再混进 chips 流 —— 2026-11-11 用户反馈"都混在一起了":
+  // 真槽是"抽词/换词", 伪槽是"整面交出控制权", 两件事混在一行里只能靠颜色猜。
+  // 现在它们单独渲染成 ① 区底部的「整段接管」块(见 takeoverRows)。
   return out
 })
 
-/* ---------- ① 槽位: 随机/插入/禁用三态合一(2026-11-09) ---------- */
-/** 原「①参与随机」+「③禁用槽」两区合并: 同一个槽在 未选→随机→插入→禁用 里
+/** ① 区底部「整段接管」: 每一面一行, 列出这一面有哪些接管方式(📝 语料句 / 🎬 图库组合串)。
+ *  只在**有接管方式**的面上出现(发型只有 NL, 没有图库)。 */
+const takeoverRows = computed(() => {
+  const faces = [
+    { sec: 'pose', items: [
+      { kind: 'nl', dim: 'pose', zh: '📝 自然语言动作' },
+      { kind: 'cd', dim: 'pose', zh: '🎬 图库动作' },
+    ] },
+    { sec: 'outfit', items: [
+      { kind: 'nl', dim: 'costume', zh: '📝 自然语言穿搭' },
+      { kind: 'cd', dim: 'outfit', zh: '🎬 图库穿搭' },
+    ] },
+    { sec: 'hair', items: [
+      { kind: 'nl', dim: 'hair', zh: '📝 自然语言发型' },
+    ] },
+  ]
+  return faces.map((f) => ({
+    sec: f.sec,
+    zh: slotGroups.value.find((g) => g.id === f.sec)?.zh || f.sec,
+    items: f.items.map((it) => (it.kind === 'nl'
+      ? {
+          ...it,
+          cnt: nlPoolSize(it.dim),
+          total: nlTotalSize(it.dim),
+          on: adv.nl.dims.includes(it.dim),
+          title: nlRowTitleByDim(it.dim),
+          toggle: () => toggleNlRow(it.dim),
+        }
+      : {
+          ...it,
+          cnt: cdPoolSize(it.dim),
+          total: cdTotalSize(it.dim),
+          on: cdActive.value && adv.cd.dims.includes(it.dim),
+          title: cdRowTitleByDim(it.dim),
+          toggle: () => toggleCdRow(it.dim),
+        })),
+  }))
+})
+
+/** 伪槽开关: 勾上 = 开 NL 段 + 该维度; 取消 = 去掉该维度, 一个维度都不剩就整段关掉
+ *  (否则保存时会报「开了但一个维度都没勾」)。 */
+function toggleNlRow(dim) {
+  const i = adv.nl.dims.indexOf(dim)
+  if (i >= 0) {
+    adv.nl.dims.splice(i, 1)
+    if (!adv.nl.dims.length) adv.nl.enabled = false
+    return
+  }
+  adv.nl.dims.push(dim)
+  adv.nl.enabled = true
+  // 同维度三套互斥: 开了 NL 就把图库池的同维度关掉(反之见 toggleCdRow)
+  const cdDim = dim === 'costume' ? 'outfit' : dim
+  if (adv.cd.dims.includes(cdDim)) {
+    adv.cd.dims = adv.cd.dims.filter((x) => x !== cdDim)
+    if (!adv.cd.dims.length) adv.cd.enabled = false
+  }
+}
+
+/** 图库池那一行: 直接复用 advReplace 的 toggleCdDim(里面已经做了与 NL 的互斥) */
+function toggleCdRow(dim) {
+  toggleCdDim(dim)
+}
+
+/** 点灰槽 = **自动切回 tag 池**(用户选的 B 方案): 先关掉接管它的那一层, 再循环三态。
+ *  「那一层」可能是 NL 句, 也可能是图库组合池(第三套) —— 谁开着就关谁。
+ *  机位槽(viewpoint/camera_angle)归「带上机位」管, 关的是那个子开关, 不是整个动作维度。 */
+function onSlotClick(id) {
+  if (isCovered(id)) {
+    const k = coverOwnerOf(id)
+    if (k === 'view') {
+      adv.nl.poseView = false
+      ui.ok('已关掉「带上机位」, 视角 tag 交回槽位控制', 2200)
+    } else if (k && coversByCd(id)) {
+      toggleCdDim(cdDimOf(k))
+      ui.ok(`已关掉「图库${CD_DIM_ZH[cdDimOf(k)] || cdDimOf(k)}」, 这些槽改由 tag 池控制`, 2400)
+    } else if (k) {
+      const i = adv.nl.dims.indexOf(k)
+      if (i >= 0) adv.nl.dims.splice(i, 1)
+      if (!adv.nl.dims.length) adv.nl.enabled = false
+      ui.ok(`已关掉「自然语言${NL_DIM_ZH[k] || k}」, 这些槽改由 tag 池控制`, 2400)
+    }
+  }
+  cycleSlotMode(id)
+}
+
+/* ---------- ① 整段接管(📝 语料句 / 🎬 图库组合串, 2026-11-11) ----------
+ * 需求演进: 第一版「姿势大区有 3 个槽, 自然语言那份也该在这儿选」→ 做成与真槽并列的 chip;
+ * 第二版「可读性不好, 都混在一起了」→ 真槽和接管本来是两件事(抽词/换词 vs 整面交出
+ * 控制权), 混在一条 chip 流里只能靠颜色猜。现在拆成 ① 区底部的独立块, 每面一行。
+ * 它们**不是真槽**(没有词条归属/池子/钉词/权重), 只做开关, 不进三态循环 ——
+ * 互斥逻辑一行没改: 导出端 NL_STRIP_SLOTS 早在开启时把同面 tag 槽整批 ban 掉,
+ * 这里只是把那件事显性化(槽变灰 + 点一下就切回来)。 */
+const NL_DIM_LABEL = { pose: '自然语言动作', costume: '自然语言穿搭', hair: '自然语言发型' }
+const CD_DIM_LABEL = { pose: '图库动作', outfit: '图库穿搭' }
+/** 伪槽的悬停说明 —— 条数从语料库实时算(别写死) */
+function nlRowTitleByDim(dim) {
+  const on = adv.nl.dims.includes(dim)
+  const size = nlPoolSize(dim)
+  const all = nlTotalSize(dim)
+  const body = on
+    ? '已接管这一面的 tag 槽(导出时整槽剔除) —— 点一下取消, 交回 tag 池'
+    : `点一下 = 这一面追加一句「${NL_DIM_LABEL[dim] || dim}」自然语言, tag 槽由它接管(不必再手动关)`
+  return `${NL_DIM_LABEL[dim] || dim}: 当前档位可抽 ${size} 条 / 全量 ${all} 条\n${body}`
+}
+/** 被接管的槽 → 归属(pose/costume/hair 三个维度 + view 机位半边) */
+function coverOwnerOf(slotId) {
+  for (const [k, arr] of Object.entries(NL_STRIP_MAP)) if (arr.includes(slotId)) return k
+  return null
+}
+/** 当前真正会被剔掉的槽(与导出端同口径) */
+const stripSet = computed(() => new Set(nlStripSlots()))
+const isCovered = (id) => stripSet.value.has(id)
+
+/* ---------- ① 图库组合池(第三套, 2026-11-11) ----------
+ * char-db 的「动作/穿搭」是 **tag 组合串**(一条 = 一套完整写法), 不拆单词、不进
+ * 随机引擎, 抽出来直接并进 tag 段。它也是最省事的一套: 没有池子/钉词/权重, 只做一个
+ * 开关; 同面 tag 槽同样由它接管(导出端剔的是同一批槽)。
+ * 同一维度内与 NL **互斥** —— 点这个自动关那个, 否则会写出两套动作。 */
+const CD_DIM_ZH = { pose: '动作', outfit: '穿搭' }
+/** NL 维度名 → 图库维度名(costume ↔ outfit 是同一件事的两种叫法) */
+const cdDimOf = (k) => (k === 'costume' ? 'outfit' : k)
+/** 这个槽当前是不是被**图库池**接管(而不是 NL 句) —— 点灰槽时要知道关哪一层 */
+function coversByCd(slotId) {
+  const k = coverOwnerOf(slotId)
+  if (!k || k === 'view') return false
+  return adv.cd.enabled && adv.cd.dims.includes(cdDimOf(k))
+}
+/** 这一面现在被谁接管(给分组标题挂个标 —— 不然整组槽全灰, 看着像坏了没人知道为什么) */
+const SEC_NL_DIM = { pose: 'pose', outfit: 'costume', hair: 'hair' }
+function secTakeover(secId) {
+  const dim = SEC_NL_DIM[secId]
+  if (!dim) return null
+  if (cdActive.value && adv.cd.dims.includes(cdDimOf(dim))) {
+    return { kind: 'cd', text: `🎬 图库${CD_DIM_ZH[cdDimOf(dim)] || ''} 接管中` }
+  }
+  if (adv.nl.dims.includes(dim)) return { kind: 'nl', text: '📝 自然语言接管中' }
+  return null
+}
+/** 灰槽说明里的「谁接管」(NL 与图库两套都可能) */
+function coverLabel(slotId) {
+  if (coversByCd(slotId)) {
+    const d = cdDimOf(coverOwnerOf(slotId))
+    return `🎬 图库${CD_DIM_ZH[d] || d}`
+  }
+  return `📝 ${NL_DIM_LABEL[coverOwnerOf(slotId)] || '自然语言段'}`
+}
+/** 图库接管那一行的悬停说明 */
+function cdRowTitleByDim(dim) {
+  const on = cdActive.value && adv.cd.dims.includes(dim)
+  const size = cdPoolSize(dim)
+  const all = cdTotalSize(dim)
+  const body = on
+    ? '已接管这一面的 tag 槽(导出时整槽剔除) —— 点一下取消, 交回 tag 池'
+    : `点一下 = 这一面的 tag 槽改成从图库里抽一整套(整串并进 tag 段);`
+      + '与「自然语言」同维度互斥, 会互相顶掉'
+  return `${CD_DIM_LABEL[dim] || dim}: 可抽 ${size} 条 / 全量 ${all} 条(一条 = 一套完整 tag 组合)\n${body}`
+}
+
+/* ---------- ① 槽位: 随机/插入/禁用三态合一(2026-11-09) ---------- *//** 原「①参与随机」+「③禁用槽」两区合并: 同一个槽在 未选→随机→插入→禁用 里
  *  循环, 数据上由 advReplace.setSlotMode 保证三张清单互斥。用户反馈: 两区分开
  *  时同一个槽名要在两套排布里各找一遍, 且「没词也补」的插入需求没处放。 */
 const modeOf = (id) => slotMode(id)
@@ -284,6 +457,11 @@ function save() {
       .map((d) => NL_DIMS_UI.find((x) => x.id === d)?.zh)
       .filter(Boolean).join('·')
     bits.push(`自然语言段 ${names}(${NL_LEVELS_UI.find((l) => l.id === adv.nl.level)?.zh})`)
+    if (nlBanKeys.value.length) bits.push(`黑名单 ${nlBanKeys.value.length} 词`)
+  }
+  if (cdActive.value) {
+    const names = adv.cd.dims.map((d) => CD_DIM_ZH[d]).filter(Boolean).join('·')
+    bits.push(`图库池 ${names}(${adv.cd.dims.reduce((n, d) => n + cdPoolSize(d), 0)} 条可抽)`)
   }
   if (bits.length) ui.ok(`✅ 导出时生效${curSetName.value ? `(方案「${curSetName.value}」)` : ''}: ${bits.join(' · ')}`, 2600)
   else ui.ok('高级替换与自然语言段都已关闭', 2000)
@@ -351,8 +529,11 @@ function save() {
         <div class="tip">
           对导出的词条做四类处理(按序生效): <b>禁用槽删词 → 钉词定死 → 勾选槽随机换词 → 插入槽补词</b>。不在词槽词典里的词不参与, 原样保留。
           <br />
-          第 ③ 区是另一种路数: 不换 tag, 而是在 prompt 末尾追加一句<b>自然语言</b>(动作·自带机位 / 穿搭 / 发型) —— tag 侧只有 25 个粗粒度姿势词,
-          这里抽的是 {{ nlTotalSize('pose') }} 条具体动作句, 是"导出的图动作都差不多"的正解。
+          第 <b>① 区末行</b>有两类"不换 tag、只追加"的路数, 同一维度只能开一个:
+          <b>📝 自然语言</b>(从语料库抽一句人话, 动作自带机位 / 整套穿搭 / 发型) 和
+          <b>🎬 图库组合</b>(从 char-db 抽一条 tag 组合串, 如 <code>standing, hands on hips</code>) ——
+          tag 侧动作池只有二十来个粗粒度词, 这里能抽 {{ nlTotalSize('pose') }} 条动作句 / {{ cdTotalSize('pose') }} 条动作组合, 是"导出的图动作都差不多"的正解。
+          勾了任一条, 同面的 tag 槽会变灰(导出时整槽剔除); 点灰槽就切回 tag 池。
         </div>
 
         <!-- 总开关 -->
@@ -364,24 +545,66 @@ function save() {
           />
         </div>
 
-        <!-- ① 槽位: 点 chip 循环 未选→随机→插入→禁用(2026-11-09 两区合一) -->
+        <!-- ① 槽位: 上=抽词/换词的真槽, 下=整面交出控制权的接管(2026-11-11 拆块) -->
         <div class="zone">
-          <div class="zh">① 槽位 <span class="zh-sub">点槽循环: 🎲随机(只换不补) → ➕插入(=随机+没词也补) → 🚫禁用(必删) → 取消</span></div>
+          <div class="zh">① 槽位 <span class="zh-sub">点一下循环切换状态</span></div>
+          <div class="legend">
+            <span class="lg"><i class="dot d-off" />未选</span>
+            <span class="lg"><i class="dot d-random" />🎲 随机 —— 有词按率换, 不补</span>
+            <span class="lg"><i class="dot d-insert" />＋ 插入 —— 随机 + 没词也补</span>
+            <span class="lg"><i class="dot d-ban" />✕ 禁用 —— 整词删掉</span>
+          </div>
       <div v-for="g in slotGroups" :key="g.id" class="slot-sec">
-        <div class="slot-sec-t">{{ g.zh }}<span class="slot-sec-n">{{ g.slots.length }}</span></div>
+        <div class="slot-sec-t">
+          {{ g.zh }}<span class="slot-sec-n">{{ g.slots.length }}</span>
+          <span
+            v-if="secTakeover(g.id)"
+            class="sec-take"
+            :class="secTakeover(g.id).kind"
+          >{{ secTakeover(g.id).text }}</span>
+        </div>
         <div class="chips">
           <button
             v-for="s in g.slots"
             :key="s.id"
             type="button"
             class="chip"
-            :class="`m-${modeOf(s.id)}`"
-            :title="modeTitle(s)"
-            @click="cycleSlotMode(s.id)"
-          >{{ modeIcon(s.id) }}{{ s.zh }}<i class="chip-n">{{ s.cnt }}</i></button>
+            :class="[`m-${modeOf(s.id)}`, { covered: isCovered(s.id) }]"
+            :title="isCovered(s.id)
+              ? `${s.zh} —— 当前被「${coverLabel(s.id)}」接管, 导出时整槽剔除。\n点一下 = 关掉它, 这个槽改回 tag 池(并进入 🎲 随机)`
+              : modeTitle(s)"
+            @click="onSlotClick(s.id)"
+          >
+            {{ modeIcon(s.id) }}{{ s.zh }}<i class="chip-n">{{ s.cnt }}</i>
+          </button>
         </div>
       </div>
       <div v-if="emptySlots" class="empty">槽位清单加载失败, 关掉重开弹窗再试</div>
+
+      <!-- 整段接管: 与上面的真槽是**两件事** —— 上面是抽词/换词, 这里是把这一面的
+           控制权整体交出去。分开渲染, 不再靠 chip 颜色猜(2026-11-11 用户反馈)。 -->
+      <div v-if="takeoverRows.length" class="takeover">
+        <div class="tk-hd">
+          <b>整段接管</b>
+          <span>勾上 → 这一面的 tag 槽不再抽取(变灰), 由它整段顶掉; 点灰槽可随时切回</span>
+        </div>
+        <div v-for="r in takeoverRows" :key="r.sec" class="tk-row">
+          <span class="tk-face">{{ r.zh }}</span>
+          <div class="tk-chips">
+            <button
+              v-for="it in r.items"
+              :key="`${it.kind}:${it.dim}`"
+              type="button"
+              class="tk-chip"
+              :class="[it.kind, { on: it.on }]"
+              :title="it.title"
+              @click="it.toggle()"
+            >
+              {{ it.zh }}<i class="chip-n">{{ it.cnt }}<span v-if="it.cnt < it.total" class="chip-of">/{{ it.total }}</span></i>
+            </button>
+          </div>
+        </div>
+      </div>
       <!-- 换词率滑杆行: 随机/插入的槽各一行(禁用不需要)。
            插入槽同一根滑杆两用: 有词时 = 换词率, 缺词时 = 补上的概率。
            2026-11-10: 每行多一个「权重」—— 换/补出来的词套 (词:1.2) 壳, 空/1 = 不加。 -->
@@ -477,30 +700,26 @@ function save() {
     <!-- ③ 自然语言段(原 ④, 2026-11-09 禁用槽并入①区后编号前移) -->
     <div class="zone nl-zone">
       <div class="zh nl-t">
-        ③ 自然语言段 <span class="zh-sub">追加在 prompt 末尾的一句话(动作自带机位 / 穿搭 / 发型), 抽 N 条就 N 条都不一样</span>
+        ③ 自然语言段 <span class="zh-sub">选中的那一句追加在 prompt 末尾(🎬 图库组合串是 tag, 在 ① 里选, 不占这一段)</span>
       </div>
-      <div v-if="nlEmpty" class="empty">自然语言语料库缺失(安装包没带上 knowledge/nl-bank.json) —— 重装最新版即可</div>
+      <div v-if="nlEmpty" class="empty">自然语言语料缺失(安装包没带上 knowledge/nl-bank.json) —— 重装最新版即可</div>
       <template v-else>
+        <!-- 2026-11-11: 维度 chip 搬到 ① 槽位面板里了(📝 自然语言动作/穿搭/发型),
+             这里只留"选了哪些"的状态行 + 档位/语言/剔除/黑名单这些**参数**。 -->
+        <div class="nl-state">
+          <span class="nl-lb">当前维度</span>
+          <template v-if="adv.nl.dims.length || (adv.cd.enabled && adv.cd.dims.length)">
+            <span v-for="d in adv.nl.dims" :key="d" class="nl-tag">{{ NL_DIMS_UI.find((x) => x.id === d)?.zh }}<i class="chip-n">{{ nlPoolSize(d) }}</i></span>
+            <span v-for="d in (adv.cd.enabled ? adv.cd.dims : [])" :key="`cd-${d}`" class="nl-tag cd">{{ CD_DIM_ZH[d] }}<i class="chip-n">{{ cdPoolSize(d) }}</i></span>
+          </template>
+          <span v-else class="empty">未选 —— 去上面 ① 槽位里点 📝(语料句) 或 🎬(图库组合串) 那一行</span>
+        </div>
         <TvCheckbox
           v-model="adv.nl.enabled"
           label="启用自然语言段(导出时追加到 prompt 后面)"
-          :title="`把「动作/穿搭/发型」写成一句自然语言, 如: she is leaning back with both hands in her hair, she is wearing a black lace skirt`" 
+          :title="`勾上面的 📝 行会自动打开这里; 关掉 = 整段不追加(维度选择保留)。例: she is leaning back with both hands in her hair, she is wearing a lace skirt`"
         />
         <template v-if="adv.nl.enabled">
-          <div class="chips">
-            <button
-              v-for="d in NL_DIMS_UI"
-              :key="d.id"
-              type="button"
-              class="chip nl-chip"
-              :class="{ on: adv.nl.dims.includes(d.id) }"
-              :title="`${d.hint}\n当前档位可抽 ${nlPoolSize(d.id)} 条 / 语料全量 ${nlTotalSize(d.id)} 条(切档位可放开被闸门挡住的部分)`"
-              @click="toggleNlDim(d.id)"
-            >{{ d.zh }}<i class="chip-n">{{ nlPoolSize(d.id) }}<span
-              v-if="nlPoolSize(d.id) < nlTotalSize(d.id)"
-              class="chip-of"
-            >/{{ nlTotalSize(d.id) }}</span></i></button>
-          </div>
           <div class="nl-row">
             <span class="nl-lb">档位</span>
             <button
@@ -554,6 +773,21 @@ function save() {
             label="抽发型句时剔掉原图的发型词"
             title="剔的是发型**形状槽**(长度/发色/发型) —— 原图留一个 long hair, 就和你抽到的 her hair is a short bob 打架。发绳/发卡(hair_tie/hair_acc)句子基本不提, **保留**。默认剔掉, 想要并存就取消勾上"
           />
+          <div class="nl-row nl-ban-row">
+            <span class="nl-lb">本方案不要</span>
+            <input
+              v-model="adv.nl.banned"
+              class="seed nl-ban-in"
+              type="text"
+              placeholder="本方案额外不要的关键词, 逗号分隔(如: 针织)"
+              title="只对当前方案生效; 命中的语料整句剔除(中英文都行 —— 查英文原文、中文译文、源库关键词与分类名)。一条穿搭是一整套(A+B+C), 所以整条剔除, 不会剩半套。**要所有方案都不抽**: 去标签页工具栏的「📝 自然语言语料」里禁用, 那是全局层"
+            />
+          </div>
+          <div v-if="nlBanHint" class="nl-hint nl-ban-hint" :class="{ dead: nlBanDead }">
+            <template v-if="nlBanHint.text">{{ nlBanHint.text }}</template>
+            <template v-else>「{{ nlBanKeys.join('、') }}」没命中任何语料 —— 换个词试试(穿搭是整句, 查 "针织" 比 "针织衫" 更容易命中)</template>
+            <span v-if="nlBanDead" class="dead-t">⚠ 有维度被剔光了, 这批抽不出句子 —— 去掉几个关键词</span>
+          </div>
           <input
             v-model="adv.nl.seed"
             class="seed nl-seed"
@@ -643,9 +877,25 @@ function save() {
 .chips { display: flex; flex-wrap: wrap; gap: 4px; max-height: 132px; overflow-y: auto; }
 /* ① 区按大区分组(2026-11-08): 每组一片 chips, 组内不再各自滚动 ——
  * 否则 9 个组各带一条 132px 的滚动条, 一个区里九个滚动劫持, 滚轮根本没法用。 */
-.slot-sec + .slot-sec { margin-top: 5px; }
-.slot-sec-t { font-size: 10.5px; color: var(--faint); margin-bottom: 3px; }
-.slot-sec-n { margin-left: 4px; opacity: 0.65; }
+.slot-sec + .slot-sec { margin-top: 8px; }
+/* 分组标题加强(2026-11-11): 原来 10.5px + faint, 比 chip 还弱 —— 一眼扫下去分不出组,
+   整个 ① 区糊成一片。现在加粗 + 左侧色条 + 拉大组间距。 */
+.slot-sec-t {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 4px;
+}
+.slot-sec-t::before {
+  content: ''; width: 2px; height: 10px; border-radius: 1px; flex: none;
+  background: color-mix(in srgb, var(--faint) 55%, transparent);
+}
+.slot-sec-n { margin-left: 2px; font-size: 10px; font-weight: normal; color: var(--faint); }
+/* 整组被接管时的标记 —— 不然一片灰没人知道是被谁接管的(2026-11-11) */
+.sec-take {
+  margin-left: 4px; padding: 0 6px; border-radius: 8px;
+  font-size: 10px; font-weight: normal; line-height: 15px;
+}
+.sec-take.nl { color: var(--accent, #534ab7); border: 1px solid color-mix(in srgb, var(--accent, #534ab7) 55%, var(--border)); }
+.sec-take.cd { color: #c07a2c; border: 1px solid color-mix(in srgb, #c07a2c 55%, var(--border)); }
 .slot-sec .chips { max-height: none; overflow: visible; }
 .chip {
   display: inline-flex; align-items: center; gap: 2px;
@@ -659,6 +909,54 @@ function save() {
 .chip.m-ban { background: var(--danger, #c05050); border-color: var(--danger, #c05050); color: #fff; text-decoration: line-through; }
 .chip:disabled { opacity: 0.45; cursor: not-allowed; }
 .chip-n { font-style: normal; font-size: 10px; opacity: 0.6; margin-left: 3px; }
+/* 三态图例(2026-11-11): 把「🎲/＋/✕ 各是什么」从区标题那行长句子里挪出来。
+   标题留一句话, 图例给色点 —— 一眼扫色比读句子快。 */
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 10.5px; color: var(--faint); }
+.lg { display: inline-flex; align-items: center; gap: 4px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--border); flex: none; }
+.dot.d-off { background: var(--panel2); }
+.dot.d-random { background: var(--accent, #534ab7); border-color: var(--accent, #534ab7); }
+.dot.d-insert { background: var(--ok, #3d9970); border-color: var(--ok, #3d9970); }
+.dot.d-ban { background: var(--danger, #c05050); border-color: var(--danger, #c05050); }
+
+/* 整段接管(2026-11-11): 与上面的真槽**块级分隔** —— 真槽是"抽词/换词", 这里是
+   "把这一面的控制权整体交出去", 两件事混在一条 chip 流里只能靠颜色猜。 */
+.takeover {
+  margin-top: 12px; padding: 8px 10px 9px 12px; border-radius: var(--r-sm);
+  border: 1px dashed var(--border); background: var(--panel2);
+  border-left: 3px solid color-mix(in srgb, var(--accent, #534ab7) 55%, var(--border));
+  display: flex; flex-direction: column; gap: 7px;
+}
+.tk-hd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.tk-hd b { font-size: 11.5px; font-weight: 600; color: var(--text); }
+.tk-hd span { font-size: 10.5px; color: var(--faint); }
+.tk-row { display: flex; align-items: center; gap: 10px; }
+.tk-face {
+  width: 62px; flex: none; text-align: right;
+  font-size: 11px; color: var(--faint);
+}
+.tk-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.tk-chip {
+  display: inline-flex; align-items: center; justify-content: space-between; min-width: 168px;
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px;
+  background: var(--panel); color: var(--muted);
+  font-size: 11px; cursor: pointer; line-height: 1.4;
+}
+.tk-chip.nl { border-color: color-mix(in srgb, var(--accent, #534ab7) 50%, var(--border)); }
+.tk-chip.cd { border-color: color-mix(in srgb, #c07a2c 50%, var(--border)); }
+.tk-chip.nl.on { background: var(--accent, #534ab7); border-color: var(--accent, #534ab7); color: #fff; }
+.tk-chip.cd.on { background: #c07a2c; border-color: #c07a2c; color: #fff; }
+/* 被接管的 tag 槽: 灰掉 + 删除线, **仍可点** —— 点一下 = 关掉接管方,
+   该槽改回 tag 池(B 方案)。不做 disabled, 否则用户得先跑去别处找开关。 */
+.chip.covered { opacity: 0.35; text-decoration: line-through; }
+.chip.covered:hover { opacity: 0.72; }
+.nl-state { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 11px; }
+.nl-tag {
+  display: inline-flex; align-items: center; padding: 1px 7px; font-size: 11px;
+  border: 1px solid var(--accent, #534ab7); border-radius: 10px;
+  color: var(--accent, #534ab7); background: transparent;
+}
+.nl-tag.cd { border-color: #c07a2c; color: #a8641f; }
 .empty { font-size: 11px; color: var(--faint); }
 
 .rate { display: flex; align-items: center; gap: 6px; }
@@ -727,7 +1025,6 @@ function save() {
 
 /* ④ 自然语言段(2026-11-08) */
 .nl-t { color: var(--accent, #534ab7); }
-.nl-chip.on { background: var(--ok, #3d9970); border-color: var(--ok, #3d9970); }
 .nl-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .nl-lb { flex: 0 0 auto; font-size: 11px; color: var(--muted); margin-right: 2px; }
 /* .seed 是给 .other 那个横向 flex 行写的(flex-basis 200px)。这里父容器是纵向,
@@ -735,6 +1032,11 @@ function save() {
 .nl-seed { flex: 0 0 auto; width: 100%; max-width: 280px; height: auto; }
 .nl-hint { font-size: 10.5px; line-height: 1.65; color: var(--faint); }
 .nl-hint b { color: var(--muted); }
+/* 语料黑名单: 输入框吃掉整行剩余宽度(关键词可能挺长, "针织衫, knit, sweater") */
+.nl-ban-in { flex: 1 1 200px; width: auto; max-width: none; min-width: 0; height: auto; }
+.nl-ban-hint { margin-top: 1px; }
+.nl-ban-hint.dead { color: var(--danger, #c05050); }
+.dead-t { display: block; margin-top: 2px; }
 /* 分母: 当前档位 / 全量。只给"被闸门挡掉一部分"的维度显示, 全开时不冗余。 */
 .chip-of { opacity: 0.45; }
 </style>

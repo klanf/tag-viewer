@@ -145,7 +145,10 @@ export function checkPackaging() {
     'knowledge/slot-pools.json',
     // 自然语言语料库(2026-11-08): 少了它导出端"自然语言段"整块变空功能 ——
     // 界面会显示"语料库缺失", 用户以为功能没做。与 tag_slots 同理, 必须在包里。
-    'knowledge/nl-bank.json']) {
+    'knowledge/nl-bank.json',
+    // 图库组合池(2026-11-11): 第三套动作/穿搭来源。少了它「🎬 图库动作/穿搭」
+    // 两行会显示 0 条, 与 nl-bank 缺文件同样属于"功能看起来没做", 必须在包里。
+    'knowledge/cd-pools.json']) {
     if (!fs.existsSync(path.join(ROOT, need))) problems.push({ kind: `知识包缺文件: ${need}` })
   }
   return problems

@@ -356,6 +356,119 @@ ok('同时开随机换词 → 两套都生效, 动作仍不重复', () => {
   console.log(`      换词 ${both.randomized} 个 · 动作 ${new Set(exp).size} 种`)
 })
 
+/* ================= 图库组合池(第三套, 2026-11-11) ================= */
+console.log('\n=== 图库组合池段 ===')
+const CD_POOL = JSON.parse(fs.readFileSync(path.join(ROOT, 'knowledge/cd-pools.json'), 'utf8'))
+const SLOT_POOLS = JSON.parse(fs.readFileSync(path.join(ROOT, 'knowledge/slot-pools.json'), 'utf8')).pools
+const cdSet = (dim) => new Set(CD_POOL[dim].map((e) => e.tags.replace(/_/g, ' ')))
+const { classify } = await import(pathToFileURL(path.join(ROOT, 'electron/core/tagcats.js')).href)
+
+ok('池里没有一个词会被分段排序当噪声剔掉（构建期已剥，防换源后悄悄缺词）', () => {
+  const NOISE = new Set(['artist', 'char', 'series', 'meta'])
+  const killed = new Set()
+  for (const dim of ['pose', 'outfit']) {
+    for (const e of CD_POOL[dim]) {
+      for (const t of e.tags.split(',')) {
+        const w = t.trim().replace(/_/g, ' ')
+        if (NOISE.has(classify(w).seg)) killed.add(`${dim}:${w}`)
+      }
+    }
+  }
+  assert(killed.size === 0,
+    `${killed.size} 个词会被 exportSegSort 吃掉: ${[...killed].slice(0, 8).join(', ')}`)
+})
+const wordsOf = (...slots) => new Set(slots.flatMap((s) => (SLOT_POOLS[s] || [])
+  .map((w) => String(w.tag || w).replace(/_/g, ' ').toLowerCase())))
+/** 找出这行命中的池内整串（取最长匹配）。
+ *  2026-11-11 起组合串是**并进 tag 段**的（跟槽位词一样，不再另成末尾一段），
+ *  开分段排序时还会被按大类打散归堆 —— 所以只能按"这行是否含这套词"来认，
+ *  不能像以前那样从行尾切一段出来。head = 这套词之外的其余 tag。 */
+function cdHits(line, set) {
+  const have = new Set(line.toLowerCase().split(', '))
+  return [...set].filter((t) => t.split(', ').every((x) => have.has(x)))
+}
+
+ok('cd_dims 为空 → 回执 cd 是 null, 也没多出任何段', () => {
+  assert(plain.cd === null, `期望 null, 实际 ${JSON.stringify(plain.cd)}`)
+})
+
+const cdPose = buildExport({ ...BASE, cd_dims: 'pose', cd_seed: 'cd-pose' })
+ok('cd_dims=pose → 每行含一整套池内 tag 组合（并进 tag 段, 不再是末尾另起一段）', () => {
+  const set = cdSet('pose')
+  const ls = linesOf(cdPose)
+  let none = 0
+  for (const l of ls) if (!cdHits(l, set).length) none++
+  assert(none === 0, `${none}/${ls.length} 行找不到完整组合串`)
+  assert(cdPose.cd && cdPose.cd.picked === ls.length, `回执 picked=${cdPose.cd?.picked}`)
+  assert(cdPose.cd.dup === 0, `回执 dup=${cdPose.cd.dup}(发牌下应为 0)`)
+})
+
+ok('开分段排序(seg_mode) → 整串被打散归堆, 但一个词都不丢', () => {
+  // 池里 18 对串互为子集，一行天然可能"命中好几条"，所以只能要求 ≥1 且完整，
+  // 不能要求唯一命中（那正是老断言"60 行互不相同"误判的原因）。
+  const set = cdSet('pose')
+  const r = buildExport({ ...BASE, cd_dims: 'pose', cd_seed: 'cd-pose', seg_mode: '1' })
+  const ls = linesOf(r)
+  let none = 0
+  for (const l of ls) if (!cdHits(l, set).length) none++
+  assert(none === 0, `${none}/${ls.length} 行在分段排序后找不到完整组合串`)
+  // 对照：不开分段排序时产物必然不同（证明这份用例真的走到排序分支）
+  const raw = buildExport({ ...BASE, cd_dims: 'pose', cd_seed: 'cd-pose' })
+  assert(r.text !== raw.text, '开了 seg_mode 产物却一字不差 —— 排序分支没生效')
+})
+
+ok('cd_dims=pose → 原图的动作槽整批剔掉(不剔就会 standing + hands on hips 打架)', () => {
+  const set = cdSet('pose')
+  const poseWords = wordsOf('pose', 'pose_base', 'pose_risque')
+  const bad = []
+  for (const l of linesOf(cdPose)) {
+    const hits = cdHits(l, set)
+    if (hits.length !== 1) continue   // 互为子集的串会一行命中多条, 只验能唯一定位的那批
+    // 只看**这套词之外**的残留: 串里的动作词是本次抽出来的, 不算"原图残留"
+    const inSet = new Set(hits[0].toLowerCase().split(', '))
+    const hit = l.toLowerCase().split(', ').filter((t) => !inSet.has(t) && poseWords.has(t))
+    if (hit.length) bad.push(`${hit.join('+')} | ${l.slice(0, 60)}`)
+  }
+  assert(bad.length === 0, `${bad.length} 行的 tag 段仍含动作词:\n      ${bad[0]}`)
+  // 负向控制: 原图里确实有这些词, 否则"剔掉了"可能只是库里本来没有
+  const plainLines = linesOf(plain)
+  const had = plainLines.filter((l) => l.split(', ').some((t) => poseWords.has(t.toLowerCase())))
+  assert(had.length > 0, '负向控制失败: 原导出里本来就没有动作词')
+  console.log(`      对照: 未开图库时 ${had.length}/${plainLines.length} 行含动作词`)
+})
+
+ok('cd_dims=outfit → 单品槽剔掉, 材质/穿着状态保留', () => {
+  const set = cdSet('outfit')
+  const wearWords = wordsOf('top', 'bottom', 'outfit', 'underwear', 'legwear',
+    'footwear', 'headwear', 'handwear', 'accessory', 'eyewear', 'sleeves', 'swimwear', 'clothing_type')
+  const r = buildExport({ ...BASE, cd_dims: 'outfit', cd_seed: 'cd-ou' })
+  const bad = []
+  for (const l of linesOf(r)) {
+    const hits = cdHits(l, set)
+    if (hits.length !== 1) continue
+    const inSet = new Set(hits[0].toLowerCase().split(', '))
+    const hit = l.toLowerCase().split(', ').filter((t) => !inSet.has(t) && wearWords.has(t))
+    if (hit.length) bad.push(`${hit.join('+')} | ${l.slice(0, 60)}`)
+  }
+  assert(bad.length === 0, `${bad.length} 行的 tag 段仍含单品词:\n      ${bad[0]}`)
+  assert(r.cd && r.cd.dims.includes('outfit'), JSON.stringify(r.cd))
+})
+
+ok('同一维度 NL 优先: nl_dims=pose + cd_dims=pose → 图库那段被让出', () => {
+  const r = buildExport({ ...BASE, max_rows: 10, nl_dims: 'pose', cd_dims: 'pose', nl_seed: 'x', cd_seed: 'y' })
+  assert(r.nl && r.nl.dims.includes('pose'), 'NL 段没生效')
+  assert(r.cd === null, `cd 段不该生效, 实际 ${JSON.stringify(r.cd)}`)
+})
+
+ok('跨维度互不影响: nl_dims=pose + cd_dims=outfit → 两段都在', () => {
+  const r = buildExport({ ...BASE, max_rows: 10, nl_dims: 'pose', cd_dims: 'outfit', nl_seed: 'x2', cd_seed: 'y2' })
+  assert(r.nl && r.nl.dims.includes('pose'), 'NL 段没生效')
+  assert(r.cd && r.cd.dims.includes('outfit'), `cd 段没生效: ${JSON.stringify(r.cd)}`)
+  const l = linesOf(r)[0]
+  assert(/she is /.test(l), '第一行没有自然语言动作句')
+  assert(l.split(', ').length > 5, `第一行太短, 像是组合串丢了: ${l}`)
+})
+
 fs.rmSync(WORK, { recursive: true, force: true })
 console.log(`\n===== nl-export: ${pass} 通过, ${fail} 失败 =====`)
 process.exit(fail ? 1 : 0)

@@ -298,14 +298,27 @@ export const api = {
     slots: () => call('random:slots'),
     // 词归属反查: 传词数组(或单个词), 返回 [{word, slot, slotZh, sec}]
     wordinfo: (words) => call('random:wordinfo', { words }),
-    // 自然语言语料库概况: {dims:[{id, zh, total, byLevel}], totals, empty}
-    nlstats: () => call('random:nlstats'),
+    // 自然语言语料库概况: {dims:[{id, zh, total, byLevel, banned, bannedByLevel}], totals, empty}
+    // banned 传用户黑名单关键词串 → 额外返回被剔除条数(按档位分桶)
+    nlstats: (banned) => call('random:nlstats', { banned: banned || '' }),
+    // 图库组合池概况: {dims:[{id, zh, total, dual, available}], empty}
+    cdstats: () => call('random:cdstats'),
   },
 
   // 高级替换方案库(2026-11-09): {active, sets:[{id, name, cfg}]}, 整存整取
   advSets: {
     get: () => call('adv:sets'),
     save: (body) => call('adv:sets:save', body),
+  },
+
+  /* 自然语言语料管理(2026-11-11, 入口在标签页) —— 全局层, 与导出方案无关:
+   *   list   分页 + 搜索, 每条带 disabled/byKeys(被哪个关键词禁的)
+   *   get    当前覆盖 {bannedIds, bannedKeys}
+   *   patch  增量改 {addIds, removeIds, addKeys, removeKeys, clear} */
+  nlBank: {
+    list: (q) => call('nl:list', q),
+    overrides: () => call('nl:overrides:get'),
+    patch: (body) => call('nl:overrides:patch', body),
   },
 
   // 诊断

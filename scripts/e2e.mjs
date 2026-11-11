@@ -1449,6 +1449,103 @@ async function main() {
     // 收尾: 清掉测试留下的收藏, 别让后面的段落(以及人肉复跑)看到脏状态
     await cdp.eval(`localStorage.removeItem('tv_tag_favs'); localStorage.removeItem('tv_tags_fav_only'); return true`)
 
+    /* ---------------- 7.1 自然语言语料管理(2026-11-11) ----------------
+       入口在标签页工具栏, 管的是导出用的动作/穿搭/发型短句(全局层, 与方案无关)。
+       这一段守「入口通 + 禁用真落地 + 统计跟着动 + 能恢复」;
+       抽句层面的效果(禁了就是抽不到)由 test:nlmanage 守 —— 那段是纯后端, 比 UI 断言硬。 */
+    const nlOpen = await cdp.eval(`
+      const btn = document.querySelector('[data-test="nl-manage"]')
+      if (!btn) return { shown: false }
+      btn.click()
+      await new Promise(r => setTimeout(r, 1200))
+      return {
+        shown: !!document.querySelector('.nl-manage'),
+        rows: __t.count('.nl-manage .row'),
+        dims: __t.count('.nl-manage .tools .tv-chip'),
+        stat: __t.text('.nl-manage .stat-row'),
+      }
+    `)
+    check('语料管理: 标签页工具栏有入口, 打开能列出语料(维度/档位筛选齐全)',
+      nlOpen.shown && nlOpen.rows > 0 && nlOpen.dims >= 8 && /共/.test(nlOpen.stat || ''),
+      `行数=${nlOpen.rows} 筛选chip=${nlOpen.dims} 统计="${nlOpen.stat}"`)
+
+    const nlFlow = await cdp.eval(`
+      const dis = () => {
+        const t = [...document.querySelectorAll('.nl-manage .stat-row .stat')].map(e => e.textContent).join(' ')
+        const m = t.match(/已禁\\s*([\\d,]+)/)
+        return m ? Number(m[1].replace(/,/g, '')) : -1
+      }
+      const base = dis()
+      // ① 搜索: 中文命中(穿搭的中文译文里就写着"针织")
+      __t.setInput('.nl-manage .kw input', '针织')
+      await new Promise(r => setTimeout(r, 800))
+      const rows = [...document.querySelectorAll('.nl-manage .row')]
+      const search = { n: rows.length, hit: rows.slice(0, 30).some(r => /针织|knit/i.test(r.textContent)) }
+      // ② 清搜索 → 回到全量, 禁掉第一行
+      __t.setInput('.nl-manage .kw input', '')
+      await new Promise(r => setTimeout(r, 800))
+      const row = document.querySelector('.nl-manage .row')
+      row.querySelector('.tv-btn').click()
+      await new Promise(r => setTimeout(r, 800))
+      const one = { off: row.classList.contains('off'), dis: dis() }
+      // ③ 只看已禁: 服务端过滤, 列表里只剩刚禁的那一条
+      __t.clickText('.nl-manage .tv-chip', '只看已禁')
+      await new Promise(r => setTimeout(r, 700))
+      const only = { rows: __t.count('.nl-manage .row'), dis: dis() }
+      return { base, search, one, only }
+    `)
+    check('语料管理: 搜索「针织」筛出穿搭句(中文命中)',
+      nlFlow.search.n > 0 && nlFlow.search.n < 400 && nlFlow.search.hit === true,
+      `命中 ${nlFlow.search.n} 行`)
+    check('语料管理: 单条禁用 —— 该行变灰 + 「已禁」计数 +1',
+      nlFlow.one.off === true && nlFlow.one.dis === nlFlow.base + 1,
+      `已禁 ${nlFlow.base} → ${nlFlow.one.dis} · 行灰=${nlFlow.one.off}`)
+    check('语料管理: 「只看已禁」服务端过滤, 只剩刚禁的那条',
+      nlFlow.only.rows === 1 && nlFlow.only.dis === nlFlow.one.dis,
+      `行数=${nlFlow.only.rows} 已禁=${nlFlow.only.dis}`)
+
+    const nlFlow2 = await cdp.eval(`
+      const dis = () => {
+        const t = [...document.querySelectorAll('.nl-manage .stat-row .stat')].map(e => e.textContent).join(' ')
+        const m = t.match(/已禁\\s*([\\d,]+)/)
+        return m ? Number(m[1].replace(/,/g, '')) : -1
+      }
+      const before = dis()
+      // ④ 恢复那一条(还在「只看已禁」视图里, 行该消失)
+      document.querySelector('.nl-manage .row .tv-btn').click()
+      await new Promise(r => setTimeout(r, 800))
+      const afterUndo = { rows: __t.count('.nl-manage .row'), dis: dis() }
+      __t.clickText('.nl-manage .tv-chip', '只看已禁')
+      await new Promise(r => setTimeout(r, 700))
+      // ⑤ 按关键词批量禁用: 预览命中 → 禁用 → 已禁数跳到命中数
+      __t.setInput('.nl-manage .bulk-in input', '针织')
+      __t.clickText('.nl-manage .tv-btn', '预览命中')
+      await new Promise(r => setTimeout(r, 700))
+      const hint = __t.text('.nl-manage .bulk-hint')
+      __t.clickText('.nl-manage .tv-btn', '禁用这')
+      await new Promise(r => setTimeout(r, 1200))
+      const bulk = { hint, dis: dis(), keys: __t.count('.nl-manage .keys .tv-chip') }
+      // ⑥ 清空全部(两段式确认) → 已禁归零
+      __t.clickText('.nl-manage .stat-row .tv-btn', '清空全部禁用')
+      await new Promise(r => setTimeout(r, 200))
+      __t.clickText('.nl-manage .stat-row .tv-btn', '确认清空')
+      await new Promise(r => setTimeout(r, 1200))
+      const cleared = { dis: dis(), keys: __t.count('.nl-manage .keys .tv-chip'), rows: __t.count('.nl-manage .row') }
+      // ⑦ 关弹窗
+      document.querySelector('.nl-manage').closest('.mask')?.querySelector('.x')?.click()
+      await new Promise(r => setTimeout(r, 500))
+      return { before, afterUndo, bulk, cleared, closed: !document.querySelector('.nl-manage') }
+    `)
+    check('语料管理: 单条恢复 —— 计数回落且从「只看已禁」里消失',
+      nlFlow2.afterUndo.rows === 0 && nlFlow2.afterUndo.dis === nlFlow2.before - 1,
+      `行数=${nlFlow2.afterUndo.rows} 已禁 ${nlFlow2.before} → ${nlFlow2.afterUndo.dis}`)
+    check('语料管理: 按关键词批量禁用 —— 预览命中数 = 落盘后的已禁数, 并生成关键词胶囊',
+      /命中\s*\d+/.test(nlFlow2.bulk.hint || '') && nlFlow2.bulk.dis > 100 && nlFlow2.bulk.keys === 1,
+      `预览="${nlFlow2.bulk.hint}" 已禁=${nlFlow2.bulk.dis} 关键词胶囊=${nlFlow2.bulk.keys}`)
+    check('语料管理: 「清空全部禁用」两段式确认后归零, 弹窗正常关闭',
+      nlFlow2.cleared.dis === 0 && nlFlow2.cleared.keys === 0 && nlFlow2.closed === true,
+      `已禁=${nlFlow2.cleared.dis} 关键词=${nlFlow2.cleared.keys} 关闭=${nlFlow2.closed}`)
+
     /* 点标签 -> 图片。2026-09-20 起这是**下一级子页面** /tags/xxx(独立路由),
        不是挂在标签列表上的 ?tag= —— 顺带把层级(H1 面包屑 / 后退一步 / 顶栏选中)钉住。 */
     await cdp.eval(`__t.click('.tag-list .pill'); return true`)
@@ -2286,6 +2383,23 @@ async function main() {
       out.enabledBox = [...mask.querySelectorAll('.tv-check')].some(e => e.textContent.includes('启用高级替换'))
       out.nsfwBox = [...mask.querySelectorAll('.tv-check')].some(e => e.textContent.includes('成人词库'))
       out.seed = !!mask.querySelector('.seed')
+      /* ③ 自然语言段 · 语料黑名单(2026-11-11 用户要求: ban 掉有针织衫的句子)。
+       * 输入框只在启用后渲染 → 临时勾上测, 测完恢复原状(避免 NL 段影响后面的导出断言)。 */
+      const nlZone = mask.querySelector('.nl-zone')
+      const nlEnable = nlZone ? [...nlZone.querySelectorAll('.tv-check')][0] : null
+      const wasOn = !!nlEnable?.classList.contains('on')
+      if (nlEnable && !wasOn) { nlEnable.click(); await sleep(300) }
+      const banIn = nlZone?.querySelector('.nl-ban-in')
+      out.nlBan = { shown: !!banIn }
+      if (banIn) {
+        __t.setInput('.nl-zone .nl-ban-in', '针织衫')
+        await sleep(1100)          // 400ms 防抖 + IPC 往返 + 重渲染
+        out.nlBan.hint = nlZone.querySelector('.nl-ban-hint')?.textContent?.trim() || ''
+        __t.setInput('.nl-zone .nl-ban-in', '')
+        await sleep(700)
+        out.nlBan.hintCleared = (nlZone.querySelector('.nl-ban-hint')?.textContent?.trim() || '') === ''
+      }
+      if (nlEnable && !wasOn) { nlEnable.click(); await sleep(700) }
       // 取消关窗
       const cancel = [...mask.querySelectorAll('.tv-btn')].find(b => b.textContent.includes('取消'))
       cancel?.click(); await sleep(350)
@@ -2310,6 +2424,11 @@ async function main() {
       advModal.cycle && advModal.cycle[0].wIn === 1 && advModal.cycle[1].wIn === 1
       && advModal.cycle[2].wIn === 0 && advModal.cycle[3].wIn === 0,
       `权重输入数=${(advModal.cycle || []).map((c) => c.wIn).join('/')}`)
+    check('高级替换弹窗: 自然语言段有「不要的句子关键词」黑名单, 输入即显示剔除条数(2026-11-11)',
+      advModal.nlBan && advModal.nlBan.shown === true
+      && /剔\s*\d+/.test(advModal.nlBan.hint || '')
+      && advModal.nlBan.hintCleared === true,
+      `黑名单框=${advModal.nlBan?.shown} 提示="${advModal.nlBan?.hint}" 清空后消失=${advModal.nlBan?.hintCleared}`)
     check('高级替换弹窗: 「添加钉词」= 词输入(未选槽也能打字) + 槽下拉 + 权重, 总开关/成人词库/种子齐全',
       advModal.pinRow && advModal.pinRow.shown === true && advModal.pinRow.hasSlot === true
       && advModal.pinRow.hasWord === true && advModal.pinRow.hasWeight === true

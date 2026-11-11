@@ -73,7 +73,9 @@ import {
 import { ds, tagPoolSize, recomputeSafety, relocateRecord } from './core/dataset.js'
 import { randomSections, randomSlots, wordInfos } from './core/export-random.js'
 import { advSets, saveAdvSets } from './core/adv-sets.js'
-import { nlBankStats } from './core/nl-bank.js'
+import { nlBankStats, nlList } from './core/nl-bank.js'
+import { cdPoolsStats } from './core/cd-pools.js'
+import { loadNlOverrides, patchNlOverrides, mergeNlBan } from './core/nl-overrides.js'
 import { searchStats, clearSearchCache } from './core/search.js'
 import { moveFile, copyFile } from './core/fileTransfer.js'
 import { spawnOpenWith, detectPhotoshop, INPAINT_EXE } from './core/externalApp.js'
@@ -916,7 +918,25 @@ export function registerIpc({ onReload, onIngestDone, onTaggerDone, onCheckUpdat
     'random:slots': safe(() => randomSlots()),
     // 自然语言语料库概况(2026-11-08): 动作/穿搭/发型各多少条、按档位怎么分。
     // 前端用它显示"可抽 N 条", 并据此决定要不要给用户开这个开关(空库就不显示)。
-    'random:nlstats': safe(() => nlBankStats()),
+    // 统计口径含**两层黑名单**(2026-11-11): 方案级关键词 + 标签页维护的全局覆盖,
+    // 不合并就会报"可抽 N 条"比实际多 —— 界面数字必须等于真实能抽到的数。
+    'random:nlstats': safe((raw) => {
+      const g = loadNlOverrides()
+      const merged = mergeNlBan(g, raw?.banned)
+      return nlBankStats({ ...raw, banned: merged.banned, bannedIds: merged.bannedIds })
+    }),
+    // 图库组合池概况(2026-11-11): char-db 的「动作/穿搭」整串池有多少条。
+    // 与 nlstats 并列 —— 界面要在 ① 槽位面板里显示"图库动作 246 / 图库穿搭 439"。
+    'random:cdstats': safe(() => cdPoolsStats()),
+    // ---- 自然语言语料管理(标签页入口) ----
+    // 列表: dim/level/q/offset/limit, 禁用状态由**全局覆盖**算(方案级关键词也在里面)
+    'nl:list': safe((raw) => {
+      const g = loadNlOverrides()
+      return nlList({ ...(raw || {}), banned: g.bannedKeys, bannedIds: g.bannedIds })
+    }),
+    'nl:overrides:get': safe(() => loadNlOverrides()),
+    // 增量改(不是整体覆盖): 两个窗口同时开也不会把对方的改动回滚掉
+    'nl:overrides:patch': safe((body) => patchNlOverrides(body || {})),
     // 高级替换方案库(2026-11-09): 照替换规则组的模子 —— 多套方案手动命名, 预设里选哪一套
     'adv:sets': safe(() => advSets()),
     'adv:sets:save': safe((body) => saveAdvSets(body || {})),

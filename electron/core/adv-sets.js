@@ -34,10 +34,19 @@ const emptyCfg = () => ({
     enabled: false,
     dims: [],
     level: 'sfw',
+    lang: 'en',
     poseView: true,
     stripPose: true,
     stripCostume: true,
     stripHair: true,
+    seed: '',
+    banned: '',
+  },
+  // 图库组合池(2026-11-11): 第三套来源(char-db 的 tag 组合串), 与 nl 同维度互斥
+  cd: {
+    enabled: false,
+    dims: [],          // pose | outfit
+    dual: false,       // 是否抽含人数 tag 的双人条目
     seed: '',
   },
 })
@@ -96,12 +105,32 @@ function normCfg(raw) {
       ? raw.nl.dims.map((s) => String(s).trim()).filter((s) => ['pose', 'costume', 'hair'].includes(s))
       : []
     n.level = ['sfw', 'soft', 'nsfw'].includes(raw.nl.level) ? raw.nl.level : 'sfw'
+    n.lang = raw.nl.lang === 'zh' ? 'zh' : 'en'
     n.poseView = raw.nl.poseView !== false
     n.stripPose = raw.nl.stripPose !== false
     n.stripCostume = raw.nl.stripCostume !== false
     n.stripHair = raw.nl.stripHair !== false
     n.seed = typeof raw.nl.seed === 'string' ? raw.nl.seed : ''
+    // 语料黑名单: 原样存字符串(逗号分隔), 解析在 nl-bank.splitNlBan 一处做
+    n.banned = typeof raw.nl.banned === 'string'
+      ? raw.nl.banned
+      : (Array.isArray(raw.nl.banned) ? raw.nl.banned.join(',') : '')
     out.nl = n
+  }
+  if (raw.cd && typeof raw.cd === 'object') {
+    const c = { ...d.cd }
+    c.enabled = raw.cd.enabled === true
+    c.dims = Array.isArray(raw.cd.dims)
+      ? raw.cd.dims.map((s) => String(s).trim()).filter((s) => ['pose', 'outfit'].includes(s))
+      : []
+    c.dual = raw.cd.dual === true
+    c.seed = typeof raw.cd.seed === 'string' ? raw.cd.seed : ''
+    // 同一维度内三套互斥: NL 占了该维度就让给 NL(UI 也这么拦, 这里是手改 json 的兜底)
+    if (c.enabled && out.nl.enabled && out.nl.dims.length) {
+      c.dims = c.dims.filter((x) => !out.nl.dims.includes(x))
+      if (!c.dims.length) c.enabled = false
+    }
+    out.cd = c
   }
   return out
 }
