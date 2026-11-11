@@ -38,7 +38,7 @@ function rmrf(p) { try { fs.rmSync(p, { recursive: true, force: true }) } catch 
 
 async function main() {
   fs.mkdirSync(WORK, { recursive: true })
-  const { makeNlPicker, nlBankStats, nlDupReport, NL_DIMS } = await import('../electron/core/nl-bank.js')
+  const { makeNlPicker, nlBankStats, nlDupReport, splitNlBan, NL_DIMS } = await import('../electron/core/nl-bank.js')
 
   console.log('\n=== 语料库内容 ===')
   const st = nlBankStats()
@@ -52,9 +52,37 @@ async function main() {
     assert(!st.empty, '语料库为空 —— 先跑 tools/build-nl-bank.py')
     const byId = Object.fromEntries(st.dims.map((d) => [d.id, d]))
     assert(byId.pose.total >= 280, `姿势只有 ${byId.pose.total} 条, 期望 ≥280`)
-    assert(byId.costume.total >= 1200, `服装只有 ${byId.costume.total} 条, 期望 ≥1200`)
+    /* 2026-11-11 剥色: 1250 → 931(319 条只是同一版型的换色变体, 合并后不再重复发牌) */
+    assert(byId.costume.total >= 900, `服装只有 ${byId.costume.total} 条, 期望 ≥900`)
     assert(byId.hair.total >= 50, `发型只有 ${byId.hair.total} 条, 期望 ≥50`)
     assert(!byId.view, 'view 不该再是独立维度 —— 机位已改成 pose 的属性')
+  })
+
+  /* 颜色剥离(2026-11-11 用户要求): 语料只描述版型/材质, 颜色交回 tag 侧。
+   * 守两件事: ① 真的剥干净了(英中都没有颜色词); ② 剥色后重复项合并了(不然池里
+   * 会有一堆"同一套衣服换个颜色"的重复条目, 发牌抽出来看着一模一样)。 */
+  ok('语料不带颜色描述, 且剥色后的重复项已合并', () => {
+    const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'knowledge', 'nl-bank.json'), 'utf8'))
+    const COLOR_EN = ['black', 'white', 'grey', 'gray', 'red', 'blue', 'green', 'yellow', 'orange',
+      'purple', 'pink', 'brown', 'beige', 'ivory', 'cream', 'navy', 'khaki', 'olive', 'gold',
+      'silver', 'champagne', 'lavender', 'burgundy', 'maroon', 'blonde', 'auburn', 'platinum',
+      'mint', 'wine', 'cherry', 'chocolate', 'hazel', 'chestnut']
+    const COLOR_ZH = ['象牙白', '奶油色', '薄荷绿', '藏青', '卡其色', '酒红', '橄榄绿', '奶茶色',
+      '香槟色', '浅蓝', '深蓝', '浅粉', '浅灰', '深灰', '浅棕', '深棕', '银灰', '粉色', '灰色',
+      '黑色', '白色', '棕色', '金色', '银色', '米色', '蓝色', '红色', '绿色', '黄色', '橙色',
+      '紫色', '薰衣草', '黑发', '金发', '发色']
+    const reEn = new RegExp(`\\b(${COLOR_EN.join('|')})\\b`, 'i')
+    const bad = []
+    for (const dim of ['costume', 'hair']) {
+      for (const it of raw[dim]) {
+        if (reEn.test(it.en)) bad.push(`${dim}:${it.en}`)
+        else if (COLOR_ZH.some((c) => it.zh.includes(c))) bad.push(`${dim}:${it.zh}`)
+      }
+    }
+    assert(!bad.length, `仍有带颜色的语料 ${bad.length} 条: ${bad.slice(0, 3).join(' | ')}`)
+    const cov = raw.meta?.coverage || {}
+    assert((cov.costume?.merged || 0) > 200, `服装剥色后应合并掉一大批重复条目, 实际 ${cov.costume?.merged}`)
+    assert((cov.hair?.merged || 0) > 0, '发型应有合并(4 条「标准基础款」同句)')
   })
 
   ok('机位是动作的属性: 5 个角度值, 与动作组成 1400+ 条真实配对', () => {
@@ -283,7 +311,8 @@ console.log(JSON.stringify({ empty: st.empty, totals: st.totals, threw, text }))
     const hit = (k, dim) => idx.get(k)?.dim === dim
     assert(hit('she_is_standing_in_a_soft_s-curve', 'pose'), '动作句首段应入索引')
     assert(hit('hips_pushed_out_to_one_side', 'pose'), '动作句第二段(逗号拆开)也应入索引')
-    assert(hit('she_is_wearing_an_ivory_frilled_knit_top', 'costume'), '穿搭句应入索引')
+    /* 剥色后是 "a frilled knit top"(ivory 已按用户要求从语料里清掉) */
+    assert(hit('she_is_wearing_a_frilled_knit_top', 'costume'), '穿搭句应入索引')
     assert(hit('a_denim_mini_skirt', 'costume'), '穿搭枚举段也应入索引')
     assert(hit('her_hair_is_a_clean_basic_cut', 'hair'), '发型句应入索引')
     assert(hit('seen_from_above', 'view'), '机位段应入索引(dim=view)')
@@ -306,9 +335,56 @@ console.log(JSON.stringify({ empty: st.empty, totals: st.totals, threw, text }))
     assert(n === idx.size, `每条都该带 zh, 实际 ${n}/${idx.size}`)
     assert(idx.size > 1000, `索引规模该上千(286 动作×片段+1250 穿搭+54 发型+机位), 实际 ${idx.size}`)
   })
+  /* 2026-11-10 实锤 bug: 中文语料用「・」分隔, 老代码按「，」拆 → 拆不出段 →
+     **每个英文片段都被塞了整句中文**, 再叠加"首胜占位", a_headband 显示成
+     "黑色丝绒吊带衫・红色长裤・毛绒靴子・包・发箍"(别人家整套穿搭)。
+     修法: 段数一致逐段对齐; 对不齐才用本条整句当注脚。 */
+  ok('nl索引: 片段级中文逐段对齐(不再把整句糊给每个片段)', () => {
+    const idx = nlTagIndex()
+    assert(idx.get('a_corseted_bralette')?.zh === '束腰胸衣',
+      `a_corseted_bralette 应为"束腰胸衣", 实际 ${idx.get('a_corseted_bralette')?.zh}`)
+    assert(idx.get('lace_frilled_ankle_socks')?.zh === '蕾丝荷叶边短袜',
+      `lace_frilled_ankle_socks 应为"蕾丝荷叶边短袜", 实际 ${idx.get('lace_frilled_ankle_socks')?.zh}`)
+    assert(idx.get('a_headband')?.zh === '发箍',
+      `a_headband 应为"发箍"(曾被别条穿搭整句顶掉), 实际 ${idx.get('a_headband')?.zh}`)
+    // 整句注脚只该出现在"中英段数对不上"的少数条目上, 占比过高说明对齐又坏了
+    const dotted = [...idx.values()].filter((v) => (v.zh || '').includes('・')).length
+    assert(dotted < idx.size * 0.15, `整句注脚不该泛滥(实测约 6%), 实际 ${dotted}/${idx.size}`)
+  })
   ok('nl索引: 普通 danbooru tag 不在索引里(不会误翻)', () => {
     const idx = nlTagIndex()
     assert(!idx.has('1girl') && !idx.has('solo') && !idx.has('long_hair'), '普通 tag 不该混进 nl 索引')
+  })
+
+  /* 语料黑名单(2026-11-11 用户要求): "ban 掉有针织衫的句子" ——
+   * 命中 en/zh/kw/cat 任一字段就整条剔除, 且剔除发生在**池子构建期**
+   * (发牌队列里根本没有), 所以界面报的"可抽 N"和实际抽出的都对得上。 */
+  ok('nl黑名单: 中文关键词整条剔除(针织衫)', () => {
+    const all = nlBankStats({}).dims.find((d) => d.id === 'costume')
+    const cut = nlBankStats({ banned: '针织衫' }).dims.find((d) => d.id === 'costume')
+    assert(cut.banned > 0, `「针织衫」应命中一批穿搭, 实际 ${cut.banned}`)
+    assert(cut.bannedByLevel.sfw === cut.banned, '该命中的都是 sfw 档(实测如此), 分桶要对')
+    // 抽 60 条, 一条都不该再出现 knit
+    const p = makeNlPicker({ dims: ['costume'], banned: ['针织'] })
+    for (let i = 0; i < 60; i++) {
+      const t = p.pick(i).text
+      assert(!/knit/i.test(t), `被 ban 的穿搭漏进结果: ${t}`)
+    }
+    // 负向控制: 不 ban 时能抽到 —— 否则上一条断言只是"池子里本来没有"
+    const p0 = makeNlPicker({ dims: ['costume'] })
+    let hits = 0
+    for (let i = 0; i < 60; i++) if (/knit/i.test(p0.pick(i).text)) hits++
+    assert(hits > 0, '不 ban 时本该抽到 knit 穿搭(负向控制失败, 上面那条是假通过)')
+    assert(cut.total === all.total, '黑名单只该影响命中数, 不该改 total')
+  })
+  ok('nl黑名单: 英文关键词 + 分隔符容错', () => {
+    const en = nlBankStats({ banned: 'knit' }).dims.find((d) => d.id === 'costume')
+    assert(en.banned > 0, `「knit」应命中, 实际 ${en.banned}`)
+    // 中文逗号/分号/多余空格都要能拆
+    assert(splitNlBan('针织衫，knit; sweater ').length === 3, '中文逗号/分号分隔要能拆')
+    assert(splitNlBan('').length === 0 && splitNlBan(undefined).length === 0, '空输入应得空数组')
+    // 没命中的关键词不能误伤
+    assert(nlBankStats({ banned: 'zzz-not-exist' }).dims.every((d) => d.banned === 0), '无关词不该剔任何条')
   })
 
   rmrf(WORK)

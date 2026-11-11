@@ -113,6 +113,74 @@ def download(tmp):
     return tmp
 
 
+# ---------------- 颜色剥离(2026-11-11 用户要求) ----------------
+# 为什么做: 1250 条穿搭里 1219 条带颜色("象牙白针织衫・白色运动鞋"), 于是
+#   ① 同一版型的深浅色变体在池里各占一条, 发牌抽出来「看着一样」;
+#   ② 颜色写死在一整套里, 用户没法在方案层统一控制它跟 tag 侧颜色词的关系。
+# 处理口径: 语料只描述**版型与材质**, 颜色交回 tag 侧。剥离后重复的条目合并。
+#   服装走 build_costume 里**原子级跳过**(词表本来就是 color/material/style 分组, 精确无残留);
+#   发型英文走下面的正则(翻译表里颜色是嵌进句子的), 中文走 hair-color-fix.json 对照表。
+_COLOR_EN_HEADS = {
+    'black', 'white', 'grey', 'gray', 'red', 'blue', 'green', 'yellow', 'orange',
+    'purple', 'pink', 'brown', 'beige', 'ivory', 'cream', 'navy', 'khaki', 'olive',
+    'gold', 'silver', 'bronze', 'copper', 'champagne', 'lavender', 'lilac', 'violet',
+    'burgundy', 'maroon', 'wine', 'teal', 'turquoise', 'cyan', 'mint', 'coral', 'peach',
+    'apricot', 'mustard', 'camel', 'taupe', 'charcoal', 'blonde', 'auburn', 'platinum',
+    'hazel', 'chestnut', 'chocolate', 'cherry', 'multicolour', 'multicolor', 'iridescent',
+}
+_COLOR_EN_MODS = {
+    'light', 'dark', 'deep', 'pale', 'soft', 'bright', 'pastel', 'vivid', 'warm', 'cool',
+    'dusty', 'ashy', 'milky', 'milky-tea', 'mint', 'cherry', 'hazel', 'chestnut',
+    'chocolate', 'wine', 'olive', 'rose', 'pearl', 'metallic', 'neon', 'two-tone',
+}
+
+
+def _alt(words):
+    return '|'.join(sorted((re.escape(w) for w in words), key=len, reverse=True))
+
+
+_COLOR_TOK = rf'(?:{_alt(_COLOR_EN_MODS)}|{_alt(_COLOR_EN_HEADS)})'
+_COLOR_SEQ = rf'\b(?:{_COLOR_TOK}[\s-]+)*(?:{_alt(_COLOR_EN_HEADS)})\b'
+# "a short bob in light milky-tea brown" → 整段尾巴连 in 一起删, 否则留下悬空的 "in"
+_COLOR_TAIL = re.compile(rf'\s+(?:in|with)\s+{_COLOR_SEQ}\s*$', re.I)
+# "in a sheer, airy colour" / "in a dark shade" —— 不点具体色但仍在说发色
+_COLOR_VAGUE = re.compile(r'\s+in\s+an?\s+[\w\s,-]*?\b(?:colou?rs?|shades?|tones?)\b\s*$', re.I)
+_COLOR_DARKHAIR = re.compile(r'\s+in\s+(?:dark|light)\s+hair\s*$', re.I)
+_COLOR_ANY = re.compile(_COLOR_SEQ, re.I)
+
+
+def _fix_article(seg):
+    """颜色删掉后不定冠词要跟着首字母改: an ivory … → a frilled …"""
+    m = re.match(r'^(a|an|A|An)\s+(\S+)', seg)
+    if not m:
+        return seg
+    art, word = m.group(1), m.group(2)
+    vowel = word[0].lower() in 'aeiou'
+    want = 'an' if vowel else 'a'
+    if art.lower() == want:
+        return seg
+    return re.sub(r'^\S+', want.capitalize() if art[0].isupper() else want, seg, count=1)
+
+
+def strip_colors_en(s):
+    """删掉英文句子里的颜色描述, 并修掉留下的空格/冠词/悬空介词。"""
+    if not s:
+        return s
+    out = s
+    for pat in (_COLOR_TAIL, _COLOR_VAGUE, _COLOR_DARKHAIR):
+        out = pat.sub('', out)
+    out = _COLOR_ANY.sub(' ', out)
+    out = re.sub(r'\s{2,}', ' ', out)
+    out = re.sub(r'\s+([,.;])', r'\1', out)
+    out = re.sub(r',\s*,+', ',', out)
+    # 删色后留下的空介词: "in mint beige with X" → "in with X"、"… bob in" → 悬空
+    out = re.sub(r'\s+\b(?:in|with|of)\b\s+(?=(?:with|and)\b)', ' ', out, flags=re.I)
+    out = re.sub(r'\s+\b(?:in|with|of)\b\s*(?=,|;|$)', '', out, flags=re.I)
+    out = re.sub(r'\s{2,}', ' ', out)
+    out = _tidy(out.strip(' ,'))
+    return ', '.join(_fix_article(x.strip()) for x in out.split(',') if x.strip())
+
+
 # ---------------- 服装: 原子词拆解拼装 ----------------
 class Lex:
     """最长匹配优先的原子词表。中文顺序 颜色+材质+款式+单品 ≈ 英文同序, 直接拼。"""
@@ -133,25 +201,36 @@ class Lex:
         return None, None
 
     def parse_mods(self, s):
-        """贪婪最长匹配; 返回 (英文词列表, 剩余未识别串)"""
-        out, i, left = [], 0, ''
+        """贪婪最长匹配; 返回 (英文词列表, 剩余未识别串, 保留下来的中文修饰语)。
+
+        颜色原子(词表 color 组)**照常消费但不进产物** —— 见文件头「颜色剥离」。
+        「透明」虽然被词表归在 color 组, 说的是材质观感不是颜色, 照常保留。
+        """
+        out, kept, i, left = [], [], 0, ''
         while i < len(s):
             hit = None
-            for zh, en, _grp in self.atoms:
+            for zh, en, grp in self.atoms:
                 if s.startswith(zh, i):
-                    hit = (zh, en)
+                    hit = (zh, en, grp)
                     break
             if not hit:
                 left = s[i:]
                 break
-            if hit[1]:                      # 词典里给空串 = 这个词不译(如「款」)
+            is_color = hit[2] == 'color' and hit[0] != '透明'
+            if hit[1] and not is_color:     # 词典里给空串 = 这个词不译(如「款」)
                 out.append(hit[1])
+            if not is_color:
+                kept.append(hit[0])
             i += len(hit[0])
-        return out, left
+        return out, left, ''.join(kept)
 
 
 def build_costume(cost, lex, nvz):
-    """服装名 -> 英文短语。拼不出来就降级用英文关键词(nvz 的 キーワード)。"""
+    """服装名 -> 英文短语。拼不出来就降级用英文关键词(nvz 的 キーワード)。
+
+    颜色在 parse_mods 里就被丢掉了(见「颜色剥离」), 所以中文名也要同步抠掉那几段,
+    否则 中文名与英文句对不上(nlTagIndex 按「・」逐段对齐, 段内颜色对不齐会串味)。
+    """
     kw_by_id = {d['id']: d.get('キーワード', '') for d in nvz}
     out, fails = [], []
     seen = set()
@@ -160,31 +239,37 @@ def build_costume(cost, lex, nvz):
         if zh in seen:
             continue
         seen.add(zh)
-        parts = []
+        parts, parts_zh = [], []
         ok = True
         for seg in zh.split('・'):
             seg = seg.strip()
             if not seg:
                 continue
             mods, garment_en = lex.split_garment(seg)
+            garment_zh = seg[len(mods or ''):]
             if garment_en is None:
                 # 整段只有材质/颜色、没有单品(源数据里「・皮质」这种补充写法) ——
                 # 能完整解析就当残留描述跳过, 解析不了才算这条拼不出来。
-                _, left_only = lex.parse_mods(seg)
+                _, left_only, _ = lex.parse_mods(seg)
                 if left_only:
                     ok = False
                     break
                 continue
-            en_mods, left = lex.parse_mods(mods or '')
+            en_mods, left, mods_zh = lex.parse_mods(mods or '')
             if left:
                 ok = False
                 break
-            parts.append(' '.join(en_mods + [garment_en]))
+            phrase = ' '.join(en_mods + [garment_en])
+            if phrase in parts:              # 「黑半身裙・白半身裙」剥色后是同一件, 别写两遍
+                continue
+            parts.append(phrase)
+            parts_zh.append(mods_zh + garment_zh)
         if ok and parts:
             en = ', '.join(_with_article(p) for p in parts)
+            zh = '・'.join(parts_zh)
         else:
-            # 降级: 英文关键词原串(散词, 但至少是这条穿搭的真实描述)
-            en = kw_by_id.get(c['id'], '').strip()
+            # 降级: 英文关键词原串(散词, 但至少是这条穿搭的真实描述), 颜色同样剥掉
+            en = strip_colors_en(kw_by_id.get(c['id'], '').strip())
             if not en:
                 fails.append(zh)
                 continue
@@ -195,7 +280,7 @@ def build_costume(cost, lex, nvz):
             'zh': zh,
             'en': _tidy(en),
             'cat': cat,
-            'kw': kw_by_id.get(c['id'], ''),
+            'kw': strip_colors_en(kw_by_id.get(c['id'], '')),
             'level': level,
         })
     return out, fails
@@ -288,8 +373,20 @@ def build_pose(pose, table):
     return order, missing
 
 
-def build_hair(portrait, table):
-    out, missing = [], []
+_ZH_COLOR_HINT = ('色', '黑发', '白发', '金发', '银发', '灰', '棕', '咖啡', '栗', '奶茶',
+                  '薰衣草', '薄荷', '樱桃', '巧克力', '榛果')
+
+
+def _zh_has_color(s):
+    return any(h in s for h in _ZH_COLOR_HINT)
+
+
+def build_hair(portrait, table, zh_fix=None):
+    """发型英文/中文都剥掉颜色。中文没有词表可拆(整句是人写的名字), 走对照表
+    `tools/nl-bank/hair-color-fix.json`; 表里没覆盖又仍带颜色词的, 收集起来报警,
+    不允许静默留一条带色的句子进池子。"""
+    zh_fix = zh_fix or {}
+    out, missing, leftover = [], [], []
     for p in portrait:
         zh = p.get('发型名称')
         if not zh:
@@ -305,10 +402,36 @@ def build_hair(portrait, table):
         if not en:
             missing.append((cat, zh))
             continue
-        item = {'zh': zh, 'en': en, 'cat': cat, 'level': 'sfw'}
+        en = strip_colors_en(en)
+        zh2 = zh_fix.get(zh, zh)
+        if _zh_has_color(zh2):
+            leftover.append((cat, zh, zh2))
+        item = {'zh': zh2, 'en': en, 'cat': cat, 'level': 'sfw'}
         if item not in out:
             out.append(item)
-    return out, missing
+    return out, missing, leftover
+
+
+def dedupe(items, dim):
+    """剥掉颜色后可能撞句("黑蕾丝裙" / "白蕾丝裙" → 同一句) —— 同一 dim 里英文归一
+    相同就合并: 保留首条, 档位取**更严**的(别把一条 nsfw 吞进 sfw 池), 机位取并集。"""
+    rank = {'sfw': 0, 'soft': 1, 'nsfw': 2}
+    view_order = [zh for _src, _en, zh in VIEW_TABLE]
+    out, idx, merged = [], {}, 0
+    for it in items:
+        k = re.sub(r'\s+', ' ', it['en'].strip().lower())
+        cur = idx.get(k)
+        if cur is None:
+            idx[k] = it
+            out.append(it)
+            continue
+        merged += 1
+        if rank.get(it.get('level', 'sfw'), 0) > rank.get(cur.get('level', 'sfw'), 0):
+            cur['level'] = it['level']
+        if dim == 'pose' and it.get('views'):
+            vs = set(cur.get('views') or []) | set(it['views'])
+            cur['views'] = [v for v in view_order if v in vs]
+    return out, merged
 
 
 def main():
@@ -333,12 +456,17 @@ def main():
 
     pose_tbl = load_json(os.path.join(BANK_DIR, 'pose-zh-en.json'))
     hair_tbl = load_json(os.path.join(BANK_DIR, 'hair-zh-en.json'))
+    hair_fix = load_json(os.path.join(BANK_DIR, 'hair-color-fix.json'))
     lex = Lex(load_json(os.path.join(BANK_DIR, 'garment-lexicon.json')))
 
     pose, pose_missing = build_pose(pose_src, pose_tbl)
-    hair, hair_missing = build_hair(portrait_src, hair_tbl)
+    hair, hair_missing, hair_left = build_hair(portrait_src, hair_tbl, hair_fix)
     costume, costume_fail = build_costume(costume_src, lex, nvz_src)
     views = build_view()
+
+    pose, pose_dup = dedupe(pose, 'pose')
+    costume, costume_dup = dedupe(costume, 'costume')
+    hair, hair_dup = dedupe(hair, 'hair')
 
     lv = {'sfw': 0, 'soft': 0, 'nsfw': 0}
     for it in pose:
@@ -347,18 +475,19 @@ def main():
     combos = sum(len(it['views']) for it in pose)
     short = [it for it in pose if len(it['views']) < len(VIEW_TABLE)]
     cov = {
-        'pose': {'src': len(pose_src), 'built': len(pose), 'missing': len(pose_missing)},
-        'hair': {'src': len(portrait_src), 'built': len(hair), 'missing': len(hair_missing)},
-        'costume': {'src': len(costume_src), 'built': len(costume), 'fallbackKw': len(costume_fail)},
+        'pose': {'src': len(pose_src), 'built': len(pose), 'missing': len(pose_missing), 'merged': pose_dup},
+        'hair': {'src': len(portrait_src), 'built': len(hair), 'missing': len(hair_missing), 'merged': hair_dup},
+        'costume': {'src': len(costume_src), 'built': len(costume), 'fallbackKw': len(costume_fail),
+                    'merged': costume_dup},
         'view': {'actions': len(pose), 'combos': combos,
                  'full': len(pose) - len(short), 'partial': len(short)},
     }
 
     print()
     print('=== 生成结果 ===')
-    print(f"  姿势  源 {len(pose_src):5d} -> 唯一 {len(pose):4d}  (缺翻译 {len(pose_missing)})  档位 {lv}")
-    print(f"  发型  源 {len(portrait_src):5d} -> 唯一 {len(hair):4d}  (缺翻译 {len(hair_missing)})")
-    print(f"  服装  源 {len(costume_src):5d} -> 唯一 {len(costume):4d}  (降级用关键词 {len(costume_fail)})")
+    print(f"  姿势  源 {len(pose_src):5d} -> 唯一 {len(pose):4d}  (缺翻译 {len(pose_missing)}, 剥色后合并 {pose_dup})  档位 {lv}")
+    print(f"  发型  源 {len(portrait_src):5d} -> 唯一 {len(hair):4d}  (缺翻译 {len(hair_missing)}, 剥色后合并 {hair_dup})")
+    print(f"  服装  源 {len(costume_src):5d} -> 唯一 {len(costume):4d}  (降级用关键词 {len(costume_fail)}, 剥色后合并 {costume_dup})")
     print(f"  机位  随动作成套: 组合数 {combos}  (满 5 机位 {len(pose) - len(short)} 个动作, 缺机位 {len(short)} 个)")
     for it in short:
         print(f"          缺: {it['zh']} 只有 {len(it['views'])} 个机位 ({'/'.join(it['views'])})")
@@ -371,15 +500,23 @@ def main():
         print('\n  [缺发型翻译]')
         for cat, zh in hair_missing[:20]:
             print(f'    {cat} | {zh}')
+    if hair_left:
+        print('\n  [发型中文仍带颜色词, 补 tools/nl-bank/hair-color-fix.json]')
+        for cat, zh, zh2 in hair_left[:40]:
+            print(f'    {cat} | {zh} -> {zh2}')
     if costume_fail:
         print(f'\n  [服装降级样例 前 20 / 共 {len(costume_fail)}]')
         for zh in costume_fail[:20]:
             print(f'    {zh}')
 
+
     if a.report:
         return 0
     if pose_missing or hair_missing:
         print('\n有缺翻译, 不写产物(先补齐 tools/nl-bank/*.json)')
+        return 1
+    if hair_left:
+        print('\n有发型中文仍带颜色词, 不写产物(补 tools/nl-bank/hair-color-fix.json)')
         return 1
 
     bank = {
