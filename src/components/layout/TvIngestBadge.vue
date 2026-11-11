@@ -33,6 +33,15 @@ const router = useRouter()
 /** 完成/失败后的摘要保留时长: 太短看不清数字, 太长挡视线 */
 const LINGER_MS = 6000
 
+/** onnxruntime provider → 人话。**DirectML 也是显卡**, 不能和 CPU 一起归成"CPU" */
+const PROVIDER_LABEL = {
+  CUDAExecutionProvider: 'CUDA',
+  DmlExecutionProvider: 'DirectML',
+  CPUExecutionProvider: 'CPU',
+  TensorrtExecutionProvider: 'TensorRT',
+}
+const providerLabel = (p) => PROVIDER_LABEL[p] || p || ''
+
 /** 哪些 phase 算"还在跑"。同步与反推的 phase 名不重叠, 合成一张表更省事 */
 const RUNNING_PHASES = new Set([
   'running', 'enum', 'compare', 'read', 'folder-done', 'rebuild-tags',   // 同步
@@ -269,7 +278,7 @@ onBeforeUnmount(clearTimer)
             <template v-if="st.failed"> · 失败 <b>{{ st.failed }}</b></template>
           </div>
           <div class="note dim">
-            <template v-if="st.provider">provider {{ st.provider === 'CUDAExecutionProvider' ? 'CUDA' : 'CPU' }} · </template>
+            <template v-if="st.provider">provider {{ providerLabel(st.provider) }} · </template>
             模型加载 {{ (st.loadMs / 1000).toFixed(1) }}s · 耗时 {{ (st.ms / 1000).toFixed(1) }}s
           </div>
         </template>

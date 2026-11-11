@@ -528,8 +528,17 @@ export async function startService(opts = {}, onLog) {
       proc = null
       continue
     }
-    const provider = (info.providers || []).includes('CUDAExecutionProvider') && prov !== 'cpu'
-      ? 'CUDAExecutionProvider' : 'CPUExecutionProvider'
+    /* 握手回执里的 `providers` 是**全部可用**列表, 不是最终选中的那个(真相要等首张
+       infer 的回执)。这里按 CLI 的 auto 优选顺序猜一个即可 —— 但**必须把 DirectML
+       算进来**: 绿色包自带的 onnxruntime-directml 只有 DML/CPU 两个 EP, 旧写法
+       (非 CUDA 一律当 CPU) 会让看板把"正在用显卡跑"报成 CPU, 用户以为没加速
+       (2026-11-11 用户反馈: 装了 onnxruntime-gpu 还是显示没有 CUDA / provider CPU)。 */
+    const availP = info.providers || []
+    const preferChain = prov === 'cpu' ? []
+      : prov === 'dml' ? ['DmlExecutionProvider']
+      : prov === 'cuda' ? ['CUDAExecutionProvider']
+      : ['CUDAExecutionProvider', 'DmlExecutionProvider', 'CPUExecutionProvider']
+    const provider = preferChain.find((p) => availP.includes(p)) || 'CPUExecutionProvider'
     activeConfig = { ...cfg, model, csv, preprocess: launch.preprocess }
     activeSig = launch.sig
     // 分类词表(角色/系列反查)必须跟反推用的是同一份 CSV —— 切 v1.0 后
@@ -952,6 +961,19 @@ export function taggerStatus() {
     pythonOwned = [path.join(appDir, 'runtime', 'python', 'python.exe'), getSettings().pythonPath]
       .some((p) => { try { return !!p && fs.existsSync(p) } catch { return false } })
   } catch { /* workspace 还没起来就当没有 */ }
+  /* 「Python 是不是软件自己那套」(装在软件目录里: 包内 python\ 或 runtime\python\)。
+     和 pythonOwned 不是一回事 —— 用户把 settings.pythonPath 指到自己的 conda 也算
+     owned, 但那时 pip 装的东西**是生效的**。设置页的说明文案必须按这个分叉, 否则对
+     "自备 Python" 的用户会说反话(2026-11-11)。 */
+  let pythonBundled = false
+  try {
+    const py = cfg.pythonOnDisk ? String(cfg.python || '') : ''
+    if (py && /[\\/]/.test(py)) {
+      const resolved = path.resolve(py).toLowerCase()
+      const roots = [getWorkspace().appDir, PROJECT_ROOT].filter(Boolean).map((d) => path.resolve(d).toLowerCase() + path.sep)
+      pythonBundled = roots.some((r) => resolved.startsWith(r))
+    }
+  } catch { /* 忽略 */ }
   return {
     ...taggerState,
     queue,
@@ -959,6 +981,7 @@ export function taggerStatus() {
       python: cfg.python || '',
       pythonOnDisk: cfg.pythonOnDisk,
       pythonOwned,
+      pythonBundled,
       script: cfg.script || '',
       model: cfg.model || '',
       csv: cfg.csv || '',

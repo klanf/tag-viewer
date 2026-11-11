@@ -221,19 +221,30 @@ async function downloadModel() {
 }
 
 /** 换档建议：只说本机实测过的数字，不猜 */
+/** 换档建议：只说本机实测过的数字，不猜。
+ *  **CUDA 与 DirectML 必须分开**：小图（336）两者持平甚至 DML 略快；大图 DML 慢一到两个
+ *  数量级（672 约 14 s、1008 约 27 s）。混成一句"有加速"会让用户选了大档白等一小时
+ *  （2026-11-11 复查：原来 fast 把 DML 也算进来，672+DML 会得到"值得换"这种废话）。 */
 const modelAdvice = computed(() => {
   if (!accel.value?.ok) return ''
   const ps = accel.value.providers || []
-  const fast = ps.includes('DmlExecutionProvider') || ps.includes('CUDAExecutionProvider')
-  const v1 = ['v1.0', 'v1.0-336', 'v1.0-672'].includes(prefs.model)
-  if (fast && prefs.model !== 'v1.0-336') return '这台机器有 DirectML/CUDA：336-ft 批量约 0.17 s/张，值得换'
-  if (!fast && v1) return '纯 CPU 上 v1.0 系列比 v0.9 慢很多（336 约 5.8 s/张 vs v0.9 约 2.0 s/张）'
+  const cuda = ps.includes('CUDAExecutionProvider')
+  const dml = ps.includes('DmlExecutionProvider')
+  const m = prefs.model
+  if (!cuda && dml && m === 'v1.0-672') return '⚠️ DirectML 跑 672 约 14 秒/张（CUDA 才 0.26 秒）。批量请换 336-ft，或用 1008 单独复核关键图'
+  if (!cuda && dml && m === 'v1.0') return '⚠️ DirectML 跑 1008 约 27 秒/张（CUDA 约 1.2 秒）。批量请换 336-ft'
+  if ((cuda || dml) && m !== 'v1.0-336' && !(cuda && m === 'v1.0-672')) {
+    return `这台机器有 ${cuda ? 'CUDA' : 'DirectML'}：336-ft 批量约 0.17 s/张，值得换`
+  }
+  if (!cuda && !dml && ['v1.0', 'v1.0-336', 'v1.0-672'].includes(m)) {
+    return '纯 CPU 上 v1.0 系列比 v0.9 慢很多（336 约 5.8 s/张 vs v0.9 约 2.0 s/张）'
+  }
   return ''
 })
 
 const PROVIDER_OPTIONS = [
-  { value: 'auto', label: '自动（CUDA > DirectML > CPU）' },
-  { value: 'cuda', label: '强制 CUDA（N 卡，需 onnxruntime-gpu）' },
+  { value: 'auto', label: '自动（推荐：CUDA > DirectML > CPU）' },
+  { value: 'cuda', label: '强制 CUDA（N 卡 · 需自装 onnxruntime-gpu，一般不必）' },
   { value: 'dml', label: '强制 DirectML（N/A/I 卡 + 核显）' },
   { value: 'cpu', label: '强制 CPU（最慢但零依赖）' },
 ]
@@ -377,18 +388,19 @@ async function checkUpdate() {
   finally { checking.value = false }
 }
 
-async function copyCudaCmd() {
-  try {
-    await navigator.clipboard.writeText('pip install onnxruntime-gpu')
-    ui.ok('命令已复制', 1600)
-  } catch { ui.err('复制失败，请手动输入') }
-}
-
 const usedProvider = () => {
   const p = accel.value?.usedProvider
   return p ? (PROVIDER_LABEL[p] || p) : ''
 }
 const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider')
+const hasDml = () => !!accel.value?.providers?.includes('DmlExecutionProvider')
+/** 只要有一个走显卡的 EP 就算"有 GPU 加速" —— DirectML 借 DirectX 12, N/A/I 卡通吃,
+ *  且绿色包/安装包默认装的就是它。把它和 CPU 一起当"没加速"会让用户白折腾 CUDA。 */
+const hasGpu = () => hasCuda() || hasDml()
+
+/** 用的 Python 是「软件自带的那套」还是「用户自备的」—— 决定 pip 说明该说哪一套。
+ *  自带 = 包内 python\ 或 runtime\python\；自备 = 用户 setting 里指的系统/conda python。 */
+const bundledPython = computed(() => !!app.tagger?.config?.pythonBundled)
 </script>
 
 <template>
@@ -416,19 +428,35 @@ const hasCuda = () => !!accel.value?.providers?.includes('CUDAExecutionProvider'
           <span class="k">
             onnxruntime
             <TvInfoTip>
-              <b>想要 CUDA 加速？</b>命令行执行
-              <span class="mono">pip install onnxruntime-gpu</span>
-              <button class="linkbtn" type="button" @click="copyCudaCmd">复制命令</button><br>
-              需要 NVIDIA 显卡 + CUDA 12 运行库；装好后的<b>首次反推</b>会有几分钟内核编译，
-              之后比 DirectML 更快。不装也完全能用，DirectML 对多数场景已经够快。
+              <template v-if="bundledPython">
+                <b>软件用的是「它自己的」Python 环境</b>（随包附带的 <span class="mono">python\</span>，
+                或首次反推时自动装到 <span class="mono">runtime\python\</span> 的那套，里面是
+                <span class="mono">onnxruntime-directml</span>）。所以往 <b>系统 Python / conda</b> 里
+                <span class="mono">pip install onnxruntime-gpu</span> 是<b>不会生效</b>的 —— 这里探测的
+                永远是软件自己那套。<br>
+                真要上 CUDA（且只有 N 卡）：在<b>软件自带的那个解释器</b>里装
+                <span class="mono">onnxruntime-gpu</span>，它需要 CUDA 12 + cuDNN 运行库；
+                <b>装了会顶掉既有的 directml 版</b>，缺运行库时会连显卡都用不上、只能退 CPU。
+                拿不准就别装。
+              </template>
+              <template v-else>
+                你用的是<b>自己准备的 Python</b>（路径见下方「Python」一行），所以
+                <span class="mono">pip install onnxruntime-gpu</span> <b>是生效的</b> ——
+                前提是装进<b>同一个</b>解释器，装完重启软件再反推。<br>
+                它需要 NVIDIA 显卡 + CUDA 12 / cuDNN 运行库；只装包不配运行库，会话初始化会失败、
+                退到 CPU。不想折腾 CUDA 就装 <span class="mono">onnxruntime-directml</span>，
+                走 DirectX 12，N/A/I 卡通吃，速度基本持平。
+              </template>
+              <br><b>需要装 CUDA 版吗？多半不需要</b>：DirectML 已经走显卡，本机实测 336-ft
+              约 0.17 秒/张，和 CUDA（约 0.19）基本持平。
             </TvInfoTip>
           </span>
           <span v-if="probing" class="v">探测中…</span>
           <span v-else-if="accel?.ok" class="v inline">
             v{{ accel.version }} · 可用后端:
             <span class="mono">{{ (accel.providers || []).map((p) => PROVIDER_LABEL[p] || p).join(' / ') || '无' }}</span>
-            <span v-if="!hasCuda()" class="warn">没有 CUDA 后端（点 ⓘ 看装法）</span>
-            <span v-else class="oktxt">✓ CUDA 已就绪</span>
+            <span v-if="hasGpu()" class="oktxt">✓ GPU 加速已启用（{{ hasCuda() ? 'CUDA' : 'DirectML' }}）</span>
+            <span v-else class="warn">目前只有 CPU（点 ⓘ 看怎么开显卡加速）</span>
           </span>
           <span v-else class="v">
             <span class="warn">探测失败: {{ accel?.error || '还没有可用的 Python 解释器' }}</span>
