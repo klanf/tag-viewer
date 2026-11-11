@@ -53,6 +53,7 @@
     "test:nodata": "node scripts/test-nodata-boot.mjs",
     "test:boot-rescue": "node scripts/test-boot-rescue.mjs",
     "test:nlbank": "node scripts/test-nl-bank.mjs",
+    "test:cdpool": "node scripts/test-cd-pools.mjs",
     "test:nlexport": "node scripts/test-nl-export.mjs",
     "test:advsets": "node scripts/test-adv-sets.mjs",
     "test:chars": "node scripts/test-series-search.mjs",
@@ -71,7 +72,12 @@
     "txt:archive:undo": "node scripts/archive-legacy-txt.mjs --undo",
     "test:modeldl": "node scripts/test-model-download.mjs",
     "test:safety-kb": "node scripts/test-safety-knowledge.mjs",
-    "test:safety-floor": "node scripts/test-safety-floor.mjs"
+    "test:safety-floor": "node scripts/test-safety-floor.mjs",
+    "test:nlmanage": "node scripts/test-nl-manage.mjs",
+    "test:metachars": "node scripts/test-meta-chars.mjs",
+    "test:fast": "node scripts/run-tests.mjs --fast",
+    "test:heavy": "node scripts/run-tests.mjs --heavy",
+    "test:all": "node scripts/run-tests.mjs --all"
   },
   "dependencies": {
     "pinia": "^3.0.3",
