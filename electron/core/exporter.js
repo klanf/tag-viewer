@@ -24,6 +24,60 @@ import path from 'node:path'
 import { BUNDLED_KNOWLEDGE_DIR } from './paths.js'
 import { openDb } from './store.js'
 
+/* ---------- 混合来源的配比(2026-11-11 用户定) ----------
+ * "pose:40/40/20;costume:50/30/20" —— 三段固定是 **tag 槽池 / 自然语言句 / 图库组合串**。
+ * 维度口径与 nl_dims 一致(pose/costume/hair)。
+ *
+ * 为什么不能"三套各抽一条都塞进去": 一行里会同时出现 standing 与
+ * "she is standing with her hands on her hips" 与 leaning forward, hand on floor ——
+ * 三个动作互相打架, 模型只实现一个, 剩下全是噪声。所以混合的粒度是**行**:
+ * 每一行、每个维度 roll 一次来源, 这一行只由那一个来源供词。
+ *
+ * 图库池只有 pose/outfit 两个维度, 所以 hair 的第三段恒为 0, 前两段重新归一 ——
+ * 否则用户写 hair:40/40/20 时会有 20% 的行因为"图库抽不出来"静默退回 tag 池。
+ */
+const MIX_DIMS = ['pose', 'costume', 'hair']
+const MIX_CD_DIM = { pose: 'pose', costume: 'outfit' }   // 语义面 -> 图库池维度
+
+export function parseMixDims(raw) {
+  const out = {}
+  for (const seg of String(raw || '').split(/[;|]/)) {
+    const s = seg.trim()
+    if (!s) continue
+    const i = s.indexOf(':')
+    if (i <= 0) continue
+    const dim = s.slice(0, i).trim().toLowerCase()
+    if (!MIX_DIMS.includes(dim)) continue
+    const nums = s.slice(i + 1).split('/').map((x) => {
+      const v = Number(String(x).trim())
+      return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 0
+    })
+    const w = { tag: nums[0] || 0, nl: nums[1] || 0, cd: nums[2] || 0 }
+    if (!MIX_CD_DIM[dim]) w.cd = 0
+    const sum = w.tag + w.nl + w.cd
+    if (sum <= 0) continue          // 全 0 = 这个维度不开混合
+    out[dim] = { ...w, sum }
+  }
+  return out
+}
+
+/** 行内稳定伪随机: 同 seed + 同行 + 同维度 → 同结果(与异步分片顺序无关) */
+function mixHash01(s) {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return ((h >>> 0) % 1000003) / 1000003
+}
+
+function pickMixSrc(seed, idx, dim, w) {
+  const r = mixHash01(`${seed}::mix::${dim}::${idx}`) * w.sum
+  if (r < w.tag) return 'tag'
+  if (r < w.tag + w.nl) return 'nl'
+  return 'cd'
+}
+
 /**
  * 比较两个标签"是不是同一个"用的归一化键: 忽略大小写, 且把下划线/空格视作等价。
  * 库里存的是 best_quality, 用户在追加框里手打成 best quality, 其实是同一个标签。
@@ -84,6 +138,7 @@ function advSetParams(cfg = {}) {
     .join(',')
   const nl = cfg.nl || {}
   const cd = cfg.cd || {}
+  const mix = cfg.mix || {}
   const hasCfg = (cfg.picked?.length || cfg.inserts?.length || pins || ban)
   return {
     randomize: (cfg.enabled === true && hasCfg) ? '1' : '0',
@@ -108,6 +163,14 @@ function advSetParams(cfg = {}) {
     cd_dims: (cd.enabled === true && Array.isArray(cd.dims) && cd.dims.length) ? cd.dims.join(',') : '',
     cd_dual: cd.dual === true ? '1' : '0',
     cd_seed: String(cd.seed || ''),
+    // 混合来源(2026-11-11): 维度 -> "tag/nl/cd" 配比, 逐行 roll
+    mix_dims: (mix.enabled === true && mix.ratios && typeof mix.ratios === 'object')
+      ? Object.entries(mix.ratios)
+        .filter(([d, r]) => MIX_DIMS.includes(d) && r && (r.tag + r.nl + r.cd) > 0)
+        .map(([d, r]) => `${d}:${r.tag}/${r.nl}/${r.cd}`)
+        .join(';')
+      : '',
+    mix_seed: String(mix.seed || ''),
   }
 }
 
@@ -157,7 +220,7 @@ function exportCore(raw = {}) {
   let advRaw = raw
   if (advSetId === '0') {
     advRaw = { ...raw, randomize: '0', randomize_slots: '', pin_slots: '', ban_slots: '',
-      slot_weights: '', randomize_seed: '', nl_dims: '', nl_ban: '', cd_dims: '' }
+      slot_weights: '', randomize_seed: '', nl_dims: '', nl_ban: '', cd_dims: '', mix_dims: '' }
   } else if (advSetId) {
     const { active, sets } = advSets()
     const set = advSetId === '@active'
@@ -263,8 +326,16 @@ function exportCore(raw = {}) {
    *   nl_ban       语料黑名单, 逗号分隔关键词("针织衫,knit"): 命中 en/zh/kw/cat 任一
    *                字段就**整条**语料剔除, 在池子构建期生效(发牌队列里根本没有它)
    * 抽法是**发牌**不是掷骰(见 nl-bank.js): 同一批里前 N 条动作两两不同。 */
+  // 混合来源: 该维度由"逐行 roll"决定, 所以不能再同时挂进 nl_dims / cd_dims
+  const mixSpec = parseMixDims(advRaw.mix_dims)
+  const mixOn = Object.keys(mixSpec).length > 0
+  const mixSeed = String(advRaw.mix_seed || '').trim()
+    || `${Date.now()}::${Math.floor(Math.random() * 2 ** 31)}`
+  const mixUsed = {}    // dim -> {tag, nl, cd} 实际命中次数(回执展示, 也是测试的把手)
+
   const nlDims = String(advRaw.nl_dims || '')
-    .split(',').map((s) => s.trim()).filter((d) => NL_DIMS.includes(d))
+    .split(',').map((s) => s.trim())
+    .filter((d) => NL_DIMS.includes(d) && !mixSpec[d])
   const nlOn = nlDims.length > 0
   const nlLevel = NL_LEVELS.includes(String(advRaw.nl_level || '')) ? String(advRaw.nl_level) : 'sfw'
   const nlPos = String(raw.nl_pos || 'after') === 'before' ? 'before' : 'after'
@@ -312,9 +383,12 @@ function exportCore(raw = {}) {
   /* 词黑名单有两层(2026-11-11): 本方案的 cfg.nl.banned + 标签页里维护的全局
      nl_overrides.json。并集后再交给 picker —— 全局层换了方案也照样生效。 */
   const nlBanMerged = mergeNlBan(loadNlOverrides(), nlBan)
-  const nlp = nlOn
+  // 混合模式下也要造 picker —— 但只调 pickDim(按维度取), 不调 pick(整句)
+  const nlp = (nlOn || mixOn)
     ? makeNlPicker({
-        dims: nlDims, maxLevel: nlLevel, seed: advRaw.nl_seed || null,
+        // 混合模式下没单独设 nl_seed 就跟着 mix_seed 走 —— 否则"固定 mix_seed 可复现"
+        // 是句空话: 逐行 roll 稳定了, 但抽到语料的那些行取哪一句还是每次不同。
+        dims: nlDims, maxLevel: nlLevel, seed: advRaw.nl_seed || (mixOn ? mixSeed : null),
         poseView: nlPoseView, lang: nlLang,
         banned: nlBanMerged.banned, bannedIds: nlBanMerged.bannedIds,
       })
@@ -328,7 +402,8 @@ function exportCore(raw = {}) {
    * 剔槽沿用 NL 的口径 —— 出了整串动作就别再留 pose 槽的词, 否则 "standing" 会和
    * 串里的 "hands on hips, standing" 打架。 */
   const cdDimsRaw = String(advRaw.cd_dims || '')
-    .split(',').map((s) => s.trim()).filter((d) => CD_DIMS.includes(d))
+    .split(',').map((s) => s.trim())
+    .filter((d) => CD_DIMS.includes(d) && !mixSpec[d === 'outfit' ? 'costume' : d])
   const cdDropped = cdDimsRaw.filter((d) => nlDims.includes(d))
   const cdDims = cdDimsRaw.filter((d) => !nlDims.includes(d))
   const cdOn = cdDims.length > 0
@@ -337,7 +412,9 @@ function exportCore(raw = {}) {
     if (cdDims.includes('pose')) for (const slot of NL_STRIP_SLOTS.pose) rndBan.add(slot)
     if (cdDims.includes('outfit')) for (const slot of NL_STRIP_SLOTS.costume) rndBan.add(slot)
   }
-  const cdp = cdOn ? makeCdPicker({ dims: cdDims, seed: advRaw.cd_seed || null, allowDual: cdDual }) : null
+  const cdp = (cdOn || mixOn)
+    ? makeCdPicker({ dims: cdDims, seed: advRaw.cd_seed || (mixOn ? mixSeed : null), allowDual: cdDual })
+    : null
 
   // 插入槽 × 禁用/NL 剔槽的兜底(UI 冲突检查已拦, 这里再挡一层): 被剔的槽不补词,
   // 否则 NL 把动作词删干净、插入又从池里塞一个回来, 等于绕过了剔除。
@@ -471,8 +548,35 @@ function exportCore(raw = {}) {
     // 只勾禁用、不勾随机/钉词也要生效 —— 所以判断的是 rndBan.size, 不看 rnd
     // (2026-11-08: 自然语言段抽动作句时会自动往 rndBan 里塞 pose/pose_base,
     //  那条路径同样没有开随机, 所以这里不能再用 rndOn 门控)。
-    if (rndBan.size) {
-      const res = filterBannedSlots(tags, rndBan, new Set(rndPins.keys()))
+    /* ---- 混合来源: 这一行每个维度由谁供词(2026-11-11) ----
+     * roll 必须在**禁用槽之前** —— 抽中语料/图库的维度要整面剔槽, 并且禁止随机换词
+     * 再往这些槽里塞词(否则刚删掉的动作又被抽回来, 变成"跪着 tag + 站着的句子")。
+     * 抽不出来的(池空 / 被关键词黑名单禁光)退回 tag 池, 不留"剔了动作却没句子补"的空洞。 */
+    let mixSrc = null
+    let rowBan = null
+    let rowSkip = null
+    if (mixOn) {
+      mixSrc = {}
+      for (const [dim, w] of Object.entries(mixSpec)) {
+        let src = pickMixSrc(mixSeed, recIdx, dim, w)
+        if (src === 'nl' && !(nlp && nlp.avail(dim))) src = 'tag'
+        if (src === 'cd' && !(cdp && cdp.avail(MIX_CD_DIM[dim]))) src = 'tag'
+        mixSrc[dim] = src
+        if (!mixUsed[dim]) mixUsed[dim] = { tag: 0, nl: 0, cd: 0 }
+        mixUsed[dim][src]++
+        if (src === 'tag') continue
+        if (!rowBan) { rowBan = new Set(); rowSkip = new Set() }
+        for (const slot of NL_STRIP_SLOTS[dim]) { rowBan.add(slot); rowSkip.add(slot) }
+        // 动作句自带机位 → 视角槽同样交出去(与纯 NL 模式同一口径)
+        if (dim === 'pose' && src === 'nl' && nlPoseView) {
+          for (const slot of NL_STRIP_SLOTS.view) { rowBan.add(slot); rowSkip.add(slot) }
+        }
+      }
+    }
+    const banAll = rowBan ? new Set([...rndBan, ...rowBan]) : rndBan
+
+    if (banAll.size) {
+      const res = filterBannedSlots(tags, banAll, new Set(rndPins.keys()))
       if (res.banned) {
         slotBanned += res.banned
         for (const [slot, n] of Object.entries(res.bySlot || {})) slotBannedBy[slot] = (slotBannedBy[slot] || 0) + n
@@ -541,7 +645,8 @@ function exportCore(raw = {}) {
     // 随机出的新词不会再被这些过滤步误伤; 排在 segMode 之前, 产物仍能归堆排序。
     // 1:1 语义: 原图该大类有 N 个词就换 N 个(同槽同量), prompt 结构不动。
     if (rnd) {
-      const res = rnd.randomize(recIdx, tags)
+      // rowSkip: 本行被语料/图库接管的槽, 不让随机换词再往里塞词(只有混合模式会给)
+      const res = rnd.randomize(recIdx, tags, rowSkip)
       randomized += res.replaced
       for (const [sec, n] of Object.entries(res.bySec || {})) rndBySec[sec] = (rndBySec[sec] || 0) + n
       tags = res.tags
@@ -550,31 +655,58 @@ function exportCore(raw = {}) {
     // 自然语言段: 抽在随机换词之后 —— 换词已经把 tag 侧收敛完, 这里的动作句才是最终描述。
     // 发牌式抽样见 nl-bank.js: 同一批里前 N 条动作互不相同。
     // 雷同体检要的是**干净快照**(此时还没并入图库串), 所以在这里就记下来。
+    // 用 nlOn 而不是 nlp 门控: 混合模式下也会造 picker(只调 pickDim), 不能让它整句自动抽。
     let nlText = ''
-    if (nlp) {
+    if (nlOn) {
       const got = nlp.pick(recIdx, nlLang)
       nlText = got.text
       if (got.parts.length) nlRows.push({ nlParts: got.parts, tags })
+    }
+    // 混合模式里被 roll 到「语料」的维度: 逐维度取句, 拼成同一段
+    if (mixSrc) {
+      const bits = []
+      const parts = []
+      for (const [dim, src] of Object.entries(mixSrc)) {
+        if (src !== 'nl') continue
+        const got = nlp && nlp.pickDim(recIdx, dim, nlLang)
+        if (!got) continue
+        bits.push(got.text)
+        parts.push(got.part)
+      }
+      if (bits.length) {
+        const sep = nlLang === 'zh' ? '，' : ', '
+        const text = bits.join(sep)
+        nlText = nlText ? `${nlText}${sep}${text}` : text
+        nlRows.push({ nlParts: parts, tags })
+      }
     }
     // 图库组合池(第三套): 抽出来的整串**就是 tag**, 直接并进 tag 段 —— 不做"末尾单独追加一段"
     // (2026-11-11 用户定的: 它跟槽位词的唯一差别只是来源, 没必要在产物里分两层)。
     // 位置交给 exportSegSort 归堆; 同大类的词相邻, 成套关系在语义上不散。
     if (cdp) {
-      const got = cdp.pick(recIdx, tags.map(normKey))
-      if (got.parts.length) {
+      const gotParts = cdOn ? cdp.pick(recIdx, tags.map(normKey)).parts : []
+      // 混合模式里被 roll 到「图库」的维度: 逐维度取串
+      if (mixSrc) {
+        for (const [dim, src] of Object.entries(mixSrc)) {
+          if (src !== 'cd') continue
+          const one = cdp.pickDim(recIdx, MIX_CD_DIM[dim], tags.map(normKey))
+          if (one) gotParts.push(one.part)
+        }
+      }
+      if (gotParts.length) {
         const seen = new Set(tags.map(normKey))
         const add = []
-        for (const part of got.parts) {
+        for (const part of gotParts) {
           for (const t of String(part.tags).split(',')) {
             const k = normKey(t)
             if (!k || seen.has(k)) continue
             seen.add(k)
             add.push(k)
           }
+          cdUse.set(part.tags, (cdUse.get(part.tags) || 0) + 1)
         }
         if (add.length) tags = [...tags, ...add]
-        cdRows.push({ parts: got.parts })
-        cdUse.set(got.tags, (cdUse.get(got.tags) || 0) + 1)
+        cdRows.push({ parts: gotParts })
       }
     }
     recIdx++
@@ -630,6 +762,19 @@ function exportCore(raw = {}) {
           picked: cdRows.length,
           dup: [...cdUse.values()].reduce((n, c) => n + Math.max(0, c - 1), 0),
           dealt: cdp.stats(),
+        }
+      : null,
+    // 混合来源回执(2026-11-11): 每个维度实际抽中各来源的行数 —— 配比有没有生效看这里,
+    // 也是测试的把手(不靠肉眼数产物)。tag 段记 0 也不代表没用上: 该维度本轮可能一次没 roll 到。
+    mix: mixOn
+      ? {
+          spec: Object.fromEntries(Object.entries(mixSpec).map(([d, w]) => [d, `${w.tag}/${w.nl}/${w.cd}`])),
+          used: mixUsed,
+          seed: mixSeed,
+          dealt: {
+            nl: nlp ? nlp.stats() : {},
+            cd: cdp ? cdp.stats() : {},
+          },
         }
       : null,
     ms: Date.now() - t0,

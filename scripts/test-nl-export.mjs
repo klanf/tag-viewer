@@ -469,6 +469,124 @@ ok('跨维度互不影响: nl_dims=pose + cd_dims=outfit → 两段都在', () =
   assert(l.split(', ').length > 5, `第一行太短, 像是组合串丢了: ${l}`)
 })
 
+/* ================= 混合来源(2026-11-11) =================
+ * 混合 = 每条 roll 一次"这个维度由谁供词"(tag 池 / 语料句 / 图库整串), 但一行仍然只出一套。
+ * 守四件事:
+ *   ① 配比真的生效(100/0/0 = 纯 tag、0/0/100 = 纯图库、40/40/20 = 三套都出现)
+ *   ② 一行不会同时出现两套 —— 这是整个功能存在的理由, 也是最容易写错的地方
+ *   ③ 同 seed 可复现
+ *   ④ 被混合接管的那一行, 原图动作槽的词要剔掉(否则跪姿 tag + 站着的句子)
+ */
+console.log('\n=== 混合来源 ===')
+
+const mixAll = buildExport({ ...BASE, mix_dims: 'pose:40/40/20', mix_seed: 'mx-1' })
+const mixLines = linesOf(mixAll)
+
+ok('mix_dims=pose:40/40/20 → 回执有 spec/used, 三套来源都抽到过', () => {
+  assert(mixAll.mix, '回执没有 mix 段')
+  assert(mixAll.mix.spec.pose === '40/40/20', `spec=${JSON.stringify(mixAll.mix.spec)}`)
+  const u = (mixAll.mix.used || {}).pose || {}
+  assert(u.tag > 0 && u.nl > 0 && u.cd > 0,
+    `三套都要出现: tag=${u.tag} nl=${u.nl} cd=${u.cd}(${mixLines.length} 行)`)
+  const sum = (u.tag || 0) + (u.nl || 0) + (u.cd || 0)
+  assert(sum === mixLines.length, `used 合计 ${sum} ≠ 行数 ${mixLines.length}`)
+})
+
+ok('每行只出一套: 含自然语言句的行里不会再冒出图库整串', () => {
+  // 判据(有局限, 但足以守回归): 自然语言句一定含 "she is/has" 或 "her <身体部位>";
+  // 图库整串按"某条 ≥4 词的长串全部词都在本行"认定。两者同真 = 出了两套。
+  const longSets = CD_POOL.pose
+    .map((e) => e.tags.split(',').map((t) => t.trim().replace(/_/g, ' ').toLowerCase()))
+    .filter((ks) => ks.length >= 4)
+    .map((ks) => new Set(ks))
+  const bad = []
+  for (const l of mixLines) {
+    if (!/\bshe (is|has)\b|\bher (hair|body|back|legs?|arms?|hands?)\b/.test(l)) continue
+    const row = new Set(l.split(', ').map((t) => t.toLowerCase()))
+    if (longSets.some((ks) => [...ks].every((k) => row.has(k)))) bad.push(l.slice(0, 110))
+  }
+  assert(bad.length === 0, `${bad.length} 行同时出现语料句与图库整串:\n      ${bad[0]}`)
+})
+
+ok('100/0/0 = 纯 tag 池: 没有语料句, 也没有图库整串, 原图动作词保留', () => {
+  const r = buildExport({ ...BASE, mix_dims: 'pose:100/0/0', mix_seed: 'mx-tag' })
+  const ls = linesOf(r)
+  const nl = ls.filter((l) => /\bshe (is|has)\b/.test(l))
+  assert(nl.length === 0, `${nl.length} 行出现了语料句:\n      ${nl[0]?.slice(0, 100)}`)
+  const u = r.mix.used.pose
+  assert(u.tag === ls.length && u.nl === 0 && u.cd === 0, JSON.stringify(u))
+  const poseWords = wordsOf('pose', 'pose_base', 'pose_risque')
+  const kept = ls.filter((l) => l.split(', ').some((t) => poseWords.has(t.toLowerCase())))
+  assert(kept.length > 0, '全是纯 tag 却没有任何动作词 —— 剔槽逻辑串了')
+})
+
+ok('0/0/100 = 纯图库: 每行都含池内整串, 且抽中的整串互不相同', () => {
+  const r = buildExport({ ...BASE, mix_dims: 'pose:0/0/100', mix_seed: 'mx-cd' })
+  const ls = linesOf(r)
+  const set = cdSet('pose')
+  const tails = []
+  let ambiguous = 0
+  for (const l of ls) {
+    const hits = cdHits(l, set)
+    assert(hits.length > 0, `这行不含池内组合串: ${l.slice(0, 90)}`)
+    // 池里有互为子集/相交的串, 一行可能命中好几条 —— 只对**唯一命中**的行比对,
+    // 否则"取最长"这种启发式会自己造出假重复(实测 1 条)
+    if (hits.length === 1) tails.push(hits[0])
+    else ambiguous++
+  }
+  assert(tails.length > ls.length * 0.6, `唯一命中的行太少(${tails.length}/${ls.length}), 判据失效`)
+  assert(new Set(tails).size === tails.length,
+    `有重复整串(${tails.length - new Set(tails).size} 条; ${ambiguous} 行多命中已跳过)`)
+  const u = r.mix.used.pose
+  assert(u.cd === ls.length && u.tag === 0 && u.nl === 0, JSON.stringify(u))
+})
+
+ok('0/0/100 时原图动作槽的词被剔掉(不然跪姿 tag 与整串打架)', () => {
+  const r = buildExport({ ...BASE, mix_dims: 'pose:0/0/100', mix_seed: 'mx-cd2' })
+  const set = cdSet('pose')
+  const poseWords = wordsOf('pose', 'pose_base', 'pose_risque')
+  const bad = []
+  for (const l of linesOf(r)) {
+    const hits = cdHits(l, set)
+    if (!hits.length) continue
+    // 剔掉**所有**命中串的词: 一行可能同时满足好几条串, 只剔最长那条会把自己抽中的
+    // 动作词当成"原图残留"(实测 seiza 就是这么假报的)
+    const ks = new Set(hits.flatMap((h) => h.split(', ')))
+    const head = l.split(', ').filter((t) => !ks.has(t.toLowerCase()))
+    const hit = head.filter((t) => poseWords.has(t.toLowerCase()))
+    if (hit.length) bad.push(`${hit.join('+')} | ${l.slice(0, 70)}`)
+  }
+  assert(bad.length === 0, `${bad.length} 行仍含原图动作词:\n      ${bad[0]}`)
+})
+
+ok('同 seed 逐字可复现, 换 seed 结果不同', () => {
+  const a = linesOf(buildExport({ ...BASE, mix_dims: 'pose:40/40/20', mix_seed: 'mx-fix' }))
+  const b = linesOf(buildExport({ ...BASE, mix_dims: 'pose:40/40/20', mix_seed: 'mx-fix' }))
+  const c = linesOf(buildExport({ ...BASE, mix_dims: 'pose:40/40/20', mix_seed: 'mx-other' }))
+  assert(a.join('\n') === b.join('\n'), '同 seed 两次结果不同')
+  assert(a.join('\n') !== c.join('\n'), '换 seed 结果居然一样')
+})
+
+ok('混合维度不再挂进 nl_dims/cd_dims(同一维度不能两套同时在)', () => {
+  const r = buildExport({
+    ...BASE, max_rows: 10,
+    mix_dims: 'pose:40/40/20', nl_dims: 'pose', cd_dims: 'pose', mix_seed: 'mx-x',
+  })
+  assert(r.nl === null, `nl 不该生效, 实际 ${JSON.stringify(r.nl)}`)
+  assert(r.cd === null, `cd 不该生效, 实际 ${JSON.stringify(r.cd)}`)
+  assert(r.mix && r.mix.used.pose, 'mix 段没生效')
+})
+
+ok('跨面各管各的: pose 走混合 + costume 走纯语料 → 两套互不干扰', () => {
+  const r = buildExport({
+    ...BASE, max_rows: 10,
+    mix_dims: 'pose:40/40/20', nl_dims: 'costume', mix_seed: 'mx-y', nl_seed: 'nl-y',
+  })
+  assert(r.nl && r.nl.dims.join(',') === 'costume', `纯语料段应只剩 costume: ${JSON.stringify(r.nl?.dims)}`)
+  assert(r.mix && r.mix.spec.pose, '混合段丢失')
+  assert(!r.mix.used.costume, 'costume 不该进混合')
+})
+
 fs.rmSync(WORK, { recursive: true, force: true })
 console.log(`\n===== nl-export: ${pass} 通过, ${fail} 失败 =====`)
 process.exit(fail ? 1 : 0)

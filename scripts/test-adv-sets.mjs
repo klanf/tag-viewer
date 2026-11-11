@@ -295,5 +295,66 @@ ok('槽位权重非法值 → 忽略(不套壳, 不报错)', () => {
   nassert.equal(cntWrappedLegwear(linesOf(r)), 0, '非法权重也套了壳')
 })
 
+/* ================= 混合来源(2026-11-11) =================
+ * 混合的配比要存得住, 且手改 json 写重了(同维度既挂 nl 又挂 mix)要能收敛 ——
+ * 一个维度只能有一种供词方式, 否则导出端会同时剔槽又抽句, 产物自相矛盾。 */
+console.log('\n=== 混合来源 ===')
+ok('方案库存得住 mix 配比, 发型的图库段被抹成 0', () => {
+  const first = advSets().sets[0]
+  saveAdvSets({
+    active: first.id,
+    sets: [{
+      id: first.id,
+      name: first.name,
+      cfg: {
+        mix: {
+          enabled: true,
+          seed: 's1',
+          ratios: { pose: { tag: 40, nl: 40, cd: 20 }, hair: { tag: 50, nl: 50, cd: 30 } },
+        },
+      },
+    }],
+  })
+  const back = advSetById(first.id)
+  nassert.ok(back?.cfg?.mix, '读回来没有 mix 段')
+  nassert.equal(back.cfg.mix.enabled, true)
+  nassert.deepEqual(back.cfg.mix.ratios.pose, { tag: 40, nl: 40, cd: 20 })
+  nassert.equal(back.cfg.mix.ratios.hair.cd, 0, '发型没有图库池, cd 该被抹成 0')
+})
+
+ok('同维度既挂 nl 又挂 mix → 混合赢, 那个维度从 nl 里摘掉', () => {
+  const first = advSets().sets[0]
+  saveAdvSets({
+    active: first.id,
+    sets: [{
+      id: first.id,
+      name: first.name,
+      cfg: {
+        nl: { enabled: true, dims: ['pose', 'hair'], level: 'sfw' },
+        mix: { enabled: true, ratios: { pose: { tag: 40, nl: 40, cd: 20 } } },
+      },
+    }],
+  })
+  const back = advSetById(first.id)
+  nassert.deepEqual(back.cfg.nl.dims, ['hair'], `nl 该只剩 hair, 实际 ${JSON.stringify(back.cfg.nl.dims)}`)
+  nassert.equal(back.cfg.nl.enabled, true, 'hair 还在用 nl, 不该整段关掉')
+  nassert.ok(back.cfg.mix.ratios.pose, '混合段丢了')
+})
+
+ok('配比全 0 → 该维度不开混合(enabled 落 false)', () => {
+  const first = advSets().sets[0]
+  saveAdvSets({
+    active: first.id,
+    sets: [{
+      id: first.id,
+      name: first.name,
+      cfg: { mix: { enabled: true, ratios: { pose: { tag: 0, nl: 0, cd: 0 } } } },
+    }],
+  })
+  const back = advSetById(first.id)
+  nassert.equal(back.cfg.mix.enabled, false, '全 0 还开着混合, 会白跑一遍 roll')
+  nassert.equal(Object.keys(back.cfg.mix.ratios).length, 0)
+})
+
 console.log(`\n===== adv-sets: ${pass} 通过, ${fail} 失败 =====`)
 process.exit(fail ? 1 : 0)

@@ -55,6 +55,14 @@ export const adv = reactive({
     seed: '',
   },
   cdStats: null,         // {dims:[{id, zh, total, dual, available}], empty}
+  /* 混合来源(2026-11-11): 同一维度内不再"整面二选一", 而是**逐行**按配比 roll ——
+     这一行由 tag 池 / 语料句 / 图库串里的哪一套供词是抽出来的, 但一行只出一套。
+     键用 nl 的语义面口径(pose/costume/hair), 值 = 三段权重 0-100。 */
+  mix: {
+    enabled: false,
+    ratios: {},          // { pose: {tag:40, nl:40, cd:20}, costume: {...} }
+    seed: '',
+  },
   slots: [],             // 槽清单 [{id, zh, cnt, words}] —— 主进程下发
   sections: [],          // 大类清单(给老回执的 sec id 做中文映射)
   loaded: false,
@@ -118,6 +126,11 @@ function cfgFromAdv() {
       dual: adv.cd.dual === true,
       seed: String(adv.cd.seed || ''),
     },
+    mix: {
+      enabled: adv.mix.enabled === true && Object.keys(adv.mix.ratios).length > 0,
+      ratios: JSON.parse(JSON.stringify(adv.mix.ratios || {})),
+      seed: String(adv.mix.seed || ''),
+    },
   }
 }
 
@@ -173,9 +186,32 @@ function applyCfgToAdv(cfg = {}) {
     adv.cd.dims = Array.isArray(c.dims) ? c.dims.filter((x) => ['pose', 'outfit'].includes(x)) : []
     adv.cd.dual = c.dual === true
     adv.cd.seed = String(c.seed || '')
-    // 手改 json 的兜底: 同一维度被 NL 占了就让给 NL(UI 点选时也会互斥)
+    const m = cfg.mix || {}
+    adv.mix.enabled = m.enabled === true && !!m.ratios && typeof m.ratios === 'object'
+    adv.mix.ratios = {}
+    for (const dim of ['pose', 'costume', 'hair']) {
+      const r = (m.ratios || {})[dim]
+      if (!r || typeof r !== 'object') continue
+      const num = (v) => {
+        const x = Number(v)
+        return Number.isFinite(x) ? Math.max(0, Math.min(100, Math.round(x))) : 0
+      }
+      const w = { tag: num(r.tag), nl: num(r.nl), cd: dim === 'hair' ? 0 : num(r.cd) }
+      if (w.tag + w.nl + w.cd > 0) adv.mix.ratios[dim] = w
+    }
+    adv.mix.seed = String(m.seed || '')
+    if (!Object.keys(adv.mix.ratios).length) adv.mix.enabled = false
+    // 手改 json 的兜底: 同一维度被 NL 占了就让给 NL(UI 点选时也会互斥);
+    // 混合占的维度同样要从 nl/cd 里摘掉 —— 一个维度不能既固定来源又逐行 roll
     if (adv.cd.enabled && adv.nl.enabled && adv.nl.dims.length) {
       adv.cd.dims = adv.cd.dims.filter((x) => !adv.nl.dims.includes(x))
+      if (!adv.cd.dims.length) adv.cd.enabled = false
+    }
+    if (adv.mix.enabled) {
+      const mixed = Object.keys(adv.mix.ratios)
+      adv.nl.dims = adv.nl.dims.filter((x) => !mixed.includes(x))
+      if (!adv.nl.dims.length) adv.nl.enabled = false
+      adv.cd.dims = adv.cd.dims.filter((x) => !mixed.includes(x === 'outfit' ? 'costume' : x))
       if (!adv.cd.dims.length) adv.cd.enabled = false
     }
   } finally { loading = false }
@@ -550,6 +586,65 @@ export function cdTotalSize(dim) {
   return d ? (d.total || 0) : 0
 }
 
+/* ================= 混合来源(2026-11-11, 同一维度的第四种状态) =================
+ * tag 池(默认) / 📝 语料 / 🎬 图库 / 🔀 混合 —— 混合不是"三套各抽一条", 而是
+ * **逐行 roll 一次**: 这一行这个维度由谁供词是抽出来的, 所以一行仍然只有一套。
+ * 键用 nl 的语义面口径(pose/costume/hair), 图库那边 costume 叫 outfit。 */
+export const MIX_DIMS = ['pose', 'costume', 'hair']
+export const MIX_CD_FACE = { pose: 'pose', costume: 'outfit', hair: '' }
+
+/** 该维度是否处于混合态 */
+export function mixOn(dim) {
+  return adv.mix.enabled === true && !!adv.mix.ratios[dim]
+}
+
+/** 该维度的配比(没设过就给默认值; 发型没有图库池, 那一段恒 0) */
+export function mixRatioOf(dim) {
+  const r = adv.mix.ratios[dim]
+  if (r) return { tag: r.tag, nl: r.nl, cd: dim === 'hair' ? 0 : r.cd }
+  return dim === 'hair' ? { tag: 50, nl: 50, cd: 0 } : { tag: 40, nl: 40, cd: 20 }
+}
+
+/** 混合占用的槽 —— 界面上画成**半灰**: 这些槽只在 roll 到 tag 池的那几行里还有效 */
+export function mixStripSlots() {
+  if (adv.mix.enabled !== true) return []
+  const out = new Set()
+  if (adv.mix.ratios.pose) for (const s of NL_STRIP_MAP.pose) out.add(s)
+  if (adv.mix.ratios.costume) for (const s of NL_STRIP_MAP.costume) out.add(s)
+  if (adv.mix.ratios.hair) for (const s of NL_STRIP_MAP.hair) out.add(s)
+  return [...out]
+}
+
+/** 开/关某维度的混合 —— 同维度的 📝 与 🎬 让位(一个维度只能有一种供词方式) */
+export function toggleMixDim(dim) {
+  if (!MIX_DIMS.includes(dim)) return
+  if (adv.mix.ratios[dim]) {
+    delete adv.mix.ratios[dim]
+    if (!Object.keys(adv.mix.ratios).length) adv.mix.enabled = false
+    return
+  }
+  adv.mix.ratios[dim] = mixRatioOf(dim)
+  adv.mix.enabled = true
+  if (adv.nl.dims.includes(dim)) {
+    adv.nl.dims = adv.nl.dims.filter((x) => x !== dim)
+    if (!adv.nl.dims.length) adv.nl.enabled = false
+  }
+  const cdDim = MIX_CD_FACE[dim]
+  if (cdDim && adv.cd.dims.includes(cdDim)) {
+    adv.cd.dims = adv.cd.dims.filter((x) => x !== cdDim)
+    if (!adv.cd.dims.length) adv.cd.enabled = false
+  }
+}
+
+/** 改混合配比(0-100 取整); 三段全 0 没有意义, 兜底回 100/0/0 */
+export function setMixRatio(dim, src, val) {
+  const r = adv.mix.ratios[dim]
+  if (!r || !['tag', 'nl', 'cd'].includes(src)) return
+  const n = Math.max(0, Math.min(100, Math.round(Number(val) || 0)))
+  r[src] = n
+  if (r.tag + r.nl + r.cd <= 0) r.tag = 100
+}
+
 /**
  * 切换某维度的图库池开关 —— **同一维度内三套互斥**: 开了图库就把 NL 里同维度关掉
  * (反过来 NL 那边关图库), 因为两者都是"整段接管", 同时开会写出两套动作/穿搭。
@@ -655,5 +750,12 @@ export function advParams() {
     cd_dims: cdActive.value ? adv.cd.dims.join(',') : '',
     cd_dual: adv.cd.dual ? '1' : '0',
     cd_seed: adv.cd.seed.trim(),
+    // 混合来源: "pose:40/40/20;costume:40/40/20" —— 三段恒为 tag/语料/图库
+    mix_dims: (adv.mix.enabled === true && Object.keys(adv.mix.ratios).length)
+      ? Object.entries(adv.mix.ratios)
+        .map(([d, r]) => `${d}:${r.tag}/${r.nl}/${d === 'hair' ? 0 : r.cd}`)
+        .join(';')
+      : '',
+    mix_seed: String(adv.mix.seed || '').trim(),
   }
 }

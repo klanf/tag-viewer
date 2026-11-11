@@ -33,6 +33,7 @@ import {
   slotWeightOf, setSlotWeight, pinWeightOf,
   nlActive, nlPoolSize, nlTotalSize, nlBannedSize, nlStripSlots, NL_STRIP_MAP,
   cdActive, cdPoolSize, cdTotalSize, toggleCdDim,
+  mixOn, mixRatioOf, mixStripSlots, toggleMixDim, setMixRatio,
   switchAdvSet, addAdvSet, renameAdvSet, deleteAdvSet,
 } from '@/utils/advReplace.js'
 
@@ -113,22 +114,20 @@ const slotGroups = computed(() => {
  *  只在**有接管方式**的面上出现(发型只有 NL, 没有图库)。 */
 const takeoverRows = computed(() => {
   const faces = [
-    { sec: 'pose', items: [
+    { sec: 'pose', dim: 'pose', cdDim: 'pose', items: [
       { kind: 'nl', dim: 'pose', zh: '📝 自然语言动作' },
       { kind: 'cd', dim: 'pose', zh: '🎬 图库动作' },
     ] },
-    { sec: 'outfit', items: [
+    { sec: 'outfit', dim: 'costume', cdDim: 'outfit', items: [
       { kind: 'nl', dim: 'costume', zh: '📝 自然语言穿搭' },
       { kind: 'cd', dim: 'outfit', zh: '🎬 图库穿搭' },
     ] },
-    { sec: 'hair', items: [
+    { sec: 'hair', dim: 'hair', cdDim: '', items: [
       { kind: 'nl', dim: 'hair', zh: '📝 自然语言发型' },
     ] },
   ]
-  return faces.map((f) => ({
-    sec: f.sec,
-    zh: slotGroups.value.find((g) => g.id === f.sec)?.zh || f.sec,
-    items: f.items.map((it) => (it.kind === 'nl'
+  return faces.map((f) => {
+    const items = f.items.map((it) => (it.kind === 'nl'
       ? {
           ...it,
           cnt: nlPoolSize(it.dim),
@@ -144,9 +143,46 @@ const takeoverRows = computed(() => {
           on: cdActive.value && adv.cd.dims.includes(it.dim),
           title: cdRowTitleByDim(it.dim),
           toggle: () => toggleCdRow(it.dim),
-        })),
-  }))
+        }))
+    // 🔀 混合(2026-11-11): 这一面不再整段交给某一套, 而是**逐行**按配比抽 ——
+    // 一行仍然只出一套(不会同时冒出两个动作), 只是"这一行由谁供词"是抽的。
+    const mx = mixOn(f.dim)
+    const ratio = mixRatioOf(f.dim)
+    items.push({
+      kind: 'mix',
+      dim: f.dim,
+      zh: `🔀 混合 ${ratio.tag}/${ratio.nl}/${ratio.cd}`,
+      cnt: 0,
+      total: 0,
+      on: mx,
+      title: mixRowTitle(f.dim, ratio),
+      toggle: () => toggleMixRow(f.dim),
+    })
+    return {
+      ...f,
+      zh: slotGroups.value.find((g) => g.id === f.sec)?.zh || f.sec,
+      items,
+      mixOnState: mx,
+      // 比例条只在开混合时出现; 发型没有图库池, 所以那一格不渲染
+      mixSrcs: [
+        { id: 'tag', zh: '槽池', val: ratio.tag },
+        { id: 'nl', zh: '语料', val: ratio.nl },
+        { id: 'cd', zh: '图库', val: ratio.cd },
+      ].filter((s) => s.id !== 'cd' || f.cdDim),
+      mixSum: ratio.tag + ratio.nl + ratio.cd,
+    }
+  })
 })
+
+/** 悬停说明: 配比是什么、每行会发生什么 */
+function mixRowTitle(dim, ratio) {
+  const face = NL_DIM_LABEL[dim] || dim
+  const cd = MIX_CD_LABEL[dim] || ''
+  return `混合(${face}): 每导出一条, 按 ${ratio.tag}/${ratio.nl}/${ratio.cd} 抽一个来源 —— `
+    + `槽池 ${ratio.tag}% / 语料 ${ratio.nl}%${cd ? ` / 图库 ${ratio.cd}%` : ''}。\n`
+    + '每一行仍然只出一套(不会同时冒出两个动作), 只是由谁供词是抽的。\n'
+    + '点一下 = 开关; 开后下面出现三个数字, 改配比立刻生效。'
+}
 
 /** 伪槽开关: 勾上 = 开 NL 段 + 该维度; 取消 = 去掉该维度, 一个维度都不剩就整段关掉
  *  (否则保存时会报「开了但一个维度都没勾」)。 */
@@ -190,6 +226,13 @@ function onSlotClick(id) {
       if (!adv.nl.dims.length) adv.nl.enabled = false
       ui.ok(`已关掉「自然语言${NL_DIM_ZH[k] || k}」, 这些槽改由 tag 池控制`, 2400)
     }
+  } else if (isMixed(id)) {
+    // 混合模式下这些槽**半灰**: 只有 roll 到 tag 池的那几行还在用它。点一下 = 整面交回 tag 池
+    const k = coverOwnerOf(id)
+    if (k && mixOn(k)) {
+      toggleMixDim(k)
+      ui.ok(`已关掉「混合 · ${NL_DIM_LABEL[k] || k}」, 这一面交回 tag 池`, 2400)
+    }
   }
   cycleSlotMode(id)
 }
@@ -221,6 +264,10 @@ function coverOwnerOf(slotId) {
 /** 当前真正会被剔掉的槽(与导出端同口径) */
 const stripSet = computed(() => new Set(nlStripSlots()))
 const isCovered = (id) => stripSet.value.has(id)
+/* 混合占用的槽 —— 画成**半灰**: 这些槽只在 roll 到 tag 池的那几行里还有效。
+   与全灰(covered)区分开, 否则用户会以为整面都不用了。 */
+const mixedSet = computed(() => new Set(mixStripSlots()))
+const isMixed = (id) => mixedSet.value.has(id) && !isCovered(id)
 
 /* ---------- ① 图库组合池(第三套, 2026-11-11) ----------
  * char-db 的「动作/穿搭」是 **tag 组合串**(一条 = 一套完整写法), 不拆单词、不进
@@ -228,6 +275,16 @@ const isCovered = (id) => stripSet.value.has(id)
  * 开关; 同面 tag 槽同样由它接管(导出端剔的是同一批槽)。
  * 同一维度内与 NL **互斥** —— 点这个自动关那个, 否则会写出两套动作。 */
 const CD_DIM_ZH = { pose: '动作', outfit: '穿搭' }
+/* 🔀 混合(2026-11-11): 不把这一面整段交给某一套, 而是每条按配比抽来源。
+   配比存在 adv.mix.ratios 里(键用 nl 的语义面口径), 导出端逐行 roll。 */
+const MIX_CD_LABEL = { pose: '图库动作', costume: '图库穿搭', hair: '' }
+function toggleMixRow(dim) {
+  const was = mixOn(dim)
+  toggleMixDim(dim)
+  ui.ok(was
+    ? `已关掉「混合 · ${NL_DIM_LABEL[dim] || dim}」, 这一面交回 tag 池`
+    : `已开「混合 · ${NL_DIM_LABEL[dim] || dim}」: 每条按配比抽一个来源, 一行仍只出一套`, 2600)
+}
 /** NL 维度名 → 图库维度名(costume ↔ outfit 是同一件事的两种叫法) */
 const cdDimOf = (k) => (k === 'costume' ? 'outfit' : k)
 /** 这个槽当前是不是被**图库池**接管(而不是 NL 句) —— 点灰槽时要知道关哪一层 */
@@ -241,6 +298,10 @@ const SEC_NL_DIM = { pose: 'pose', outfit: 'costume', hair: 'hair' }
 function secTakeover(secId) {
   const dim = SEC_NL_DIM[secId]
   if (!dim) return null
+  if (mixOn(dim)) {
+    const r = mixRatioOf(dim)
+    return { kind: 'mix', text: `🔀 混合 ${r.tag}/${r.nl}/${r.cd} · 接管中` }
+  }
   if (cdActive.value && adv.cd.dims.includes(cdDimOf(dim))) {
     return { kind: 'cd', text: `🎬 图库${CD_DIM_ZH[cdDimOf(dim)] || ''} 接管中` }
   }
@@ -569,10 +630,12 @@ function save() {
             :key="s.id"
             type="button"
             class="chip"
-            :class="[`m-${modeOf(s.id)}`, { covered: isCovered(s.id) }]"
+            :class="[`m-${modeOf(s.id)}`, { covered: isCovered(s.id), mixed: isMixed(s.id) }]"
             :title="isCovered(s.id)
               ? `${s.zh} —— 当前被「${coverLabel(s.id)}」接管, 导出时整槽剔除。\n点一下 = 关掉它, 这个槽改回 tag 池(并进入 🎲 随机)`
-              : modeTitle(s)"
+              : isMixed(s.id)
+                ? `${s.zh} —— 「混合」在抽: 这个槽只在 roll 到 tag 池的那几行里生效(其余行由语料/图库整段顶掉)。\n点一下 = 关掉这一面的混合, 全部交回 tag 池`
+                : modeTitle(s)"
             @click="onSlotClick(s.id)"
           >
             {{ modeIcon(s.id) }}{{ s.zh }}<i class="chip-n">{{ s.cnt }}</i>
@@ -582,11 +645,12 @@ function save() {
       <div v-if="emptySlots" class="empty">槽位清单加载失败, 关掉重开弹窗再试</div>
 
       <!-- 整段接管: 与上面的真槽是**两件事** —— 上面是抽词/换词, 这里是把这一面的
-           控制权整体交出去。分开渲染, 不再靠 chip 颜色猜(2026-11-11 用户反馈)。 -->
+           控制权整体交出去。分开渲染, 不再靠 chip 颜色猜(2026-11-11 用户反馈)。
+           🔀 混合是第三种: 不整段交出去, 而是每条按配比抽来源(一行仍只出一套)。 -->
       <div v-if="takeoverRows.length" class="takeover">
         <div class="tk-hd">
           <b>整段接管</b>
-          <span>勾上 → 这一面的 tag 槽不再抽取(变灰), 由它整段顶掉; 点灰槽可随时切回</span>
+          <span>📝/🎬 勾上 → 这一面的 tag 槽不再抽取(变灰); 🔀 混合 → 每条按配比抽来源, 槽只在一部分行里生效(半灰)。点灰槽可随时切回</span>
         </div>
         <div v-for="r in takeoverRows" :key="r.sec" class="tk-row">
           <span class="tk-face">{{ r.zh }}</span>
@@ -600,8 +664,24 @@ function save() {
               :title="it.title"
               @click="it.toggle()"
             >
-              {{ it.zh }}<i class="chip-n">{{ it.cnt }}<span v-if="it.cnt < it.total" class="chip-of">/{{ it.total }}</span></i>
+              <template v-if="it.kind === 'mix'">{{ it.zh }}</template>
+              <template v-else>{{ it.zh }}<i class="chip-n">{{ it.cnt }}<span v-if="it.cnt < it.total" class="chip-of">/{{ it.total }}</span></i></template>
             </button>
+          </div>
+          <!-- 混合配比: 只在开混合时出现。三段不必凑满 100, 导出端按总和归一 -->
+          <div v-if="r.mixOnState" class="tk-mix">
+            <label v-for="s in r.mixSrcs" :key="s.id" class="tk-mix-in" :title="`${s.zh} 占多少 —— 不必凑满 100, 按总和归一`">
+              {{ s.zh }}
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="5"
+                :value="s.val"
+                @input="setMixRatio(r.dim, s.id, $event.target.value)"
+              />
+            </label>
+            <span class="tk-mix-sum">合计 {{ r.mixSum }}</span>
           </div>
         </div>
       </div>
@@ -896,6 +976,7 @@ function save() {
 }
 .sec-take.nl { color: var(--accent, #534ab7); border: 1px solid color-mix(in srgb, var(--accent, #534ab7) 55%, var(--border)); }
 .sec-take.cd { color: #c07a2c; border: 1px solid color-mix(in srgb, #c07a2c 55%, var(--border)); }
+.sec-take.mix { color: #0f6e56; border: 1px solid color-mix(in srgb, #0f6e56 55%, var(--border)); }
 .slot-sec .chips { max-height: none; overflow: visible; }
 .chip {
   display: inline-flex; align-items: center; gap: 2px;
@@ -930,7 +1011,7 @@ function save() {
 .tk-hd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .tk-hd b { font-size: 11.5px; font-weight: 600; color: var(--text); }
 .tk-hd span { font-size: 10.5px; color: var(--faint); }
-.tk-row { display: flex; align-items: center; gap: 10px; }
+.tk-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .tk-face {
   width: 62px; flex: none; text-align: right;
   font-size: 11px; color: var(--faint);
@@ -946,10 +1027,29 @@ function save() {
 .tk-chip.cd { border-color: color-mix(in srgb, #c07a2c 50%, var(--border)); }
 .tk-chip.nl.on { background: var(--accent, #534ab7); border-color: var(--accent, #534ab7); color: #fff; }
 .tk-chip.cd.on { background: #c07a2c; border-color: #c07a2c; color: #fff; }
+/* 🔀 混合: 第三个色系(青) —— 它不是"整段接管", 而是逐行按配比轮换, 视觉上要能一眼分开 */
+.tk-chip.mix { border-color: color-mix(in srgb, #0f6e56 50%, var(--border)); }
+.tk-chip.mix.on { background: #0f6e56; border-color: #0f6e56; color: #fff; }
+.tk-mix {
+  flex-basis: 100%; margin-left: 72px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 10.5px; color: var(--faint);
+}
+.tk-mix-in { display: inline-flex; align-items: center; gap: 4px; }
+.tk-mix-in input {
+  width: 46px; padding: 1px 4px; font-size: 11px; text-align: right;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel); color: var(--text);
+}
+.tk-mix-sum { opacity: 0.68; }
 /* 被接管的 tag 槽: 灰掉 + 删除线, **仍可点** —— 点一下 = 关掉接管方,
    该槽改回 tag 池(B 方案)。不做 disabled, 否则用户得先跑去别处找开关。 */
 .chip.covered { opacity: 0.35; text-decoration: line-through; }
 .chip.covered:hover { opacity: 0.72; }
+/* 混合占用的槽: **半灰 + 虚线**(不是删除线) —— 它还在用, 只是只在一部分行里生效。
+   与 covered 区分开, 否则会被读成"这面不用了"。 */
+.chip.mixed { opacity: 0.6; border-style: dashed; }
+.chip.mixed:hover { opacity: 0.85; }
 .nl-state { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 11px; }
 .nl-tag {
   display: inline-flex; align-items: center; padding: 1px 7px; font-size: 11px;

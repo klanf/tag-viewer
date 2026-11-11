@@ -140,6 +140,28 @@ export function makeCdPicker(opts = {}) {
   return {
     active,
     /**
+     * 只抽**一个维度** —— 混合模式下每个维度各自决定来源, 谁被图库池选中就只找它要一条。
+     * @param {number} idx 行号(派生 rng 用)
+     * @param {string} dim pose | outfit (调用方负责把语义面的 costume 翻成 outfit)
+     * @param {Set<string>|string[]} [rowKeys] 本行已有 tag 归一键(查重用)
+     * @returns {{tags: string, part: {dim, zh, cat, id, tags}}|null}
+     */
+    pickDim(idx = 0, dim = 'pose', rowKeys) {
+      if (!CD_DIMS.includes(dim)) return null
+      const keys = rowKeys instanceof Set ? rowKeys
+        : new Set((rowKeys || []).map(keyOf).filter(Boolean))
+      const it = takeOne(dim, keys)
+      if (!it) return null
+      return {
+        tags: it.tags,
+        part: { dim, zh: it.zh || '', cat: it.cat || '', id: it.id || '', tags: it.tags },
+      }
+    },
+    /** 该维度有没有可抽的条目(混合模式先问一句, 免得"剔了槽却抽不出串") */
+    avail(dim) {
+      return CD_DIMS.includes(dim) && poolOf(dim, allowDual).length > 0
+    },
+    /**
      * @param {number} idx 行号，只用来派生 rng
      * @param {Set<string>|string[]} [rowKeys] 本行已有的 tag 归一键（查重用）
      * @returns {{tags: string, parts: Array<{dim, zh, cat, id}>}}
@@ -158,7 +180,10 @@ export function makeCdPicker(opts = {}) {
     },
     stats() {
       const out = {}
-      for (const dim of active) {
+      // 混合模式下维度是 pickDim 逐个取的, 抽过的维度也要报(否则回执缺池子大小)
+      const dims = [...new Set([...active, ...dealt.keys()])]
+        .sort((a, b) => CD_DIMS.indexOf(a) - CD_DIMS.indexOf(b))
+      for (const dim of dims) {
         const q = queues.get(dim)
         out[dim] = {
           pool: q?.pool || poolOf(dim, allowDual).length,

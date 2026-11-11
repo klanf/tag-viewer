@@ -334,8 +334,48 @@ export function makeNlPicker(opts = {}) {
     return { zh, en: bank().views?.[zh] || zh }
   }
 
+  /** 单个维度抽一条(带机位); 混合模式按维度分别取, 所以要能单独调 */
+  function takeDim(dim, idx) {
+    if (!NL_DIMS.includes(dim)) return null
+    const it = takeOne(dim, idx)
+    if (!it) return null
+    const part = { dim, zh: it.zh, en: it.en, level: it.level || 'sfw' }
+    if (dim === 'pose' && poseView) {
+      const vw = takeView(it)
+      if (vw) part.view = vw
+    }
+    return part
+  }
+
+  /** 单句拼装(中/英各一套模板, 模板本身带主语/动词, 逗号连起来就是通顺的话) */
+  function sentence(p, zh) {
+    const meta = DIM_META[p.dim]
+    if (zh) {
+      const base = meta.tplZh(p.zh)
+      return p.view ? `${base}，${p.view.zh}视角` : base
+    }
+    const base = meta.tpl(p.en)
+    return p.view ? `${base}, seen ${p.view.en}` : base
+  }
+
   return {
     active,
+    /**
+     * 只抽**一个维度** —— 混合模式下每个维度各自决定来源, 谁被 NL 选中就只找它要一条。
+     * @param {number} idx 行号(派生 rng 用)
+     * @param {string} dim pose | costume | hair
+     * @param {string} lang 'en' | 'zh'
+     * @returns {{text: string, part: {dim, zh, en, level?, view?}}|null}
+     */
+    pickDim(idx = 0, dim = 'pose', lang = 'en') {
+      const part = takeDim(dim, idx)
+      if (!part) return null
+      return { text: sentence(part, lang === 'zh'), part }
+    },
+    /** 该维度有没有可抽的句子(混合模式先问一句, 免得"剔了动作却没句子补") */
+    avail(dim) {
+      return NL_DIMS.includes(dim) && poolOf(dim, maxLevel, banned, bannedIds).length > 0
+    },
     /**
      * @param {number} idx 这次导出的行号 —— 只用来派生 rng, 不决定"抽第几张"
      * @param {string} lang 拼句语言: 'en'(默认) | 'zh'(每条语料自带的手工译文)
@@ -344,33 +384,23 @@ export function makeNlPicker(opts = {}) {
     pick(idx = 0, lang = 'en') {
       const parts = []
       for (const dim of active) {
-        const it = takeOne(dim, idx)
-        if (!it) continue
-        const part = { dim, zh: it.zh, en: it.en, level: it.level || 'sfw' }
-        if (dim === 'pose' && poseView) {
-          const vw = takeView(it)
-          if (vw) part.view = vw
-        }
-        parts.push(part)
+        const part = takeDim(dim, idx)
+        if (part) parts.push(part)
       }
       const zh = lang === 'zh'
       // 拼成一句话: 英文 "she is <动作>, seen from above, wearing <穿搭>, her hair is <发型>";
       // 中文 "S形站姿・胯部侧顶，俯视视角，她穿着…，她的头发是…" —— 各维度模板自己带
       // 主语/动词, 用逗号连起来就是通顺的自然语言段
-      const text = parts.map((p) => {
-        const meta = DIM_META[p.dim]
-        if (zh) {
-          const base = meta.tplZh(p.zh)
-          return p.view ? `${base}，${p.view.zh}视角` : base
-        }
-        const base = meta.tpl(p.en)
-        return p.view ? `${base}, seen ${p.view.en}` : base
-      }).join(zh ? '，' : ', ')
+      const text = parts.map((p) => sentence(p, zh)).join(zh ? '，' : ', ')
       return { text, parts }
     },
     stats() {
       const out = {}
-      for (const dim of active) {
+      // 混合模式下维度是被 pickDim 逐个取的, 不一定在 active 里 —— 抽过的也要报出来,
+      // 否则回执少了池子大小, 界面上那几行数字会变成 0
+      const dims = [...new Set([...active, ...dealt.keys()])]
+        .sort((a, b) => NL_DIMS.indexOf(a) - NL_DIMS.indexOf(b))
+      for (const dim of dims) {
         const q = queues.get(dim)
         const row = { pool: q?.pool || poolOf(dim, maxLevel, banned, bannedIds).length, dealt: dealt.get(dim) || 0 }
         // pose 的真实可发组合数 = 每个动作各带几个机位, 给回执/界面做说明

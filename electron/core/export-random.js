@@ -365,7 +365,14 @@ export function makeRandomizer(opts = {}) {
   }
 
   return {
-    randomize(idx, tags) {
+    /**
+     * @param {number} idx 行号
+     * @param {string[]} tags 本行标签
+     * @param {Set<string>} [skipSlots] **本行**临时跳过的槽(混合模式下逐行决定来源:
+     *   这一行的动作交给语料/图库了, 就不能再让随机换词往这些槽里塞词)。
+     *   与构建期的 banSlots 不同 —— 那是整批恒定, 这个是逐行变化。
+     */
+    randomize(idx, tags, skipSlots) {
       // seed 固定 → 每条派生可复现; 留空 → 每条独立随机
       const rng = opts.seed != null && String(opts.seed).length
         ? mulberry32(`${opts.seed}::export::${idx}`)
@@ -420,6 +427,7 @@ export function makeRandomizer(opts = {}) {
         const info = sl[key]
         if (!info?.slot) return t
         if (pins.has(info.slot)) return t      // 钉词优先: 该槽已定死
+        if (skipSlots && skipSlots.has(info.slot)) return t   // 本行该槽交给接管方了
         const inSlot = slotSet.has(info.slot)
         const inSec = secs.has(info.sec)
         if (!inSlot && !inSec) return t
@@ -446,6 +454,7 @@ export function makeRandomizer(opts = {}) {
         }
         for (const [slot, rate] of inserts) {
           if (have.has(slot)) continue
+          if (skipSlots && skipSlots.has(slot)) continue
           if (rate < 1 && rng() >= rate) continue
           const fresh = pickFor(slot, null, recordKeys, rng)
           if (!fresh) continue

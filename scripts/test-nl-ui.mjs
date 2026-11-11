@@ -596,6 +596,88 @@ try {
     return true
   `)
 
+  /* ---------- 🔀 混合来源(2026-11-11) ----------
+   * 混合 = 每条按配比抽一个来源(槽池/语料/图库), 一行仍只出一套。
+   * UI 上要能: ① 看到开关与当前配比 ② 开后能改三段数字 ③ 槽是**半灰**不是全灰
+   * ④ 点半灰槽能整面交回 tag 池。 */
+  const mixUi = await cdp.eval(`
+    const z = [...document.querySelectorAll('.zone')].find((el) => (el.innerText || '').includes('① 槽位'))
+    const chipOf = (re) => [...z.querySelectorAll('.tk-chip')].find((c) => re.test(c.innerText))
+    const mixPose = chipOf(/混合/)
+    if (!mixPose) return { has: false }
+    for (const b of z.querySelectorAll('.tk-chip.on')) { b.click(); await new Promise((r) => setTimeout(r, 180)) }
+    const before = {
+      covered: z.querySelectorAll('.chip.covered').length,
+      mixed: z.querySelectorAll('.chip.mixed').length,
+    }
+    mixPose.click()
+    await new Promise((r) => setTimeout(r, 420))
+    const row = mixPose.closest('.tk-row')
+    const inputs = [...row.querySelectorAll('.tk-mix input')]
+    const after = {
+      on: mixPose.className.includes('on'),
+      text: mixPose.innerText.replace(/\\s+/g, ' '),
+      nInputs: inputs.length,
+      vals: inputs.map((i) => i.value),
+      mixed: z.querySelectorAll('.chip.mixed').length,
+      covered: z.querySelectorAll('.chip.covered').length,
+      badge: [...z.querySelectorAll('.sec-take')].map((e) => e.innerText.trim()),
+    }
+    if (inputs.length >= 3) {
+      const set = (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })) }
+      set(inputs[0], '70'); set(inputs[1], '30'); set(inputs[2], '0')
+      await new Promise((r) => setTimeout(r, 420))
+    }
+    const changed = {
+      text: mixPose.innerText.replace(/\\s+/g, ' '),
+      vals: inputs.map((i) => i.value),
+      sum: row.querySelector('.tk-mix-sum') ? row.querySelector('.tk-mix-sum').innerText.trim() : '',
+    }
+    return { has: true, before, after, changed, faces: [...z.querySelectorAll('.tk-chip')].filter((c) => /混合/.test(c.innerText)).length }
+  `)
+  ok('① 区三面都有 🔀 混合 chip(姿势/服装/头发)', () => {
+    assert.ok(mixUi.has, `没找到混合 chip: ${JSON.stringify(mixUi)}`)
+    assert.equal(mixUi.faces, 3, `混合 chip 应有 3 个, 实际 ${mixUi.faces}`)
+  })
+  ok('点 🔀 → 点亮 + 展开三段配比(槽池/语料/图库)', () => {
+    assert.equal(mixUi.after.on, true, `点了没亮: ${JSON.stringify(mixUi.after)}`)
+    assert.equal(mixUi.after.nInputs, 3, `配比输入应有 3 个, 实际 ${mixUi.after.nInputs}`)
+    assert.match(mixUi.after.text, /混合\s*\d+\/\d+\/\d+/, `chip 上没显示配比: ${mixUi.after.text}`)
+  })
+  ok('混合态下同面 tag 槽是**半灰**(mixed), 不是全灰(covered)', () => {
+    assert.ok(mixUi.after.mixed > 0, '混合没让槽变半灰 —— 用户看不出来这一面只在部分行生效')
+    assert.equal(mixUi.after.covered, 0, `不该有全灰槽(混合不是整段接管): ${mixUi.after.covered}`)
+    console.log(`      分组标: ${mixUi.after.badge.join(' / ')}`)
+  })
+  ok('改配比 → chip 文案与输入框同步(70/30/0)', () => {
+    assert.match(mixUi.changed.text, /70\/30\/0/, `chip 没跟着变: ${mixUi.changed.text}`)
+    assert.deepEqual(mixUi.changed.vals, ['70', '30', '0'], JSON.stringify(mixUi.changed.vals))
+    assert.match(mixUi.changed.sum, /100/, `合计显示不对: ${mixUi.changed.sum}`)
+  })
+
+  // 留一张混合态的实拍(配比刚被改成 70/30/0, 正好能看出"槽池优先")
+  await cdp.shotOf('[role="dialog"]', path.join(SHOTS, 'nl-mix-on.png'))
+
+  const mixSlotClick = await cdp.eval(`
+    const z = [...document.querySelectorAll('.zone')].find((el) => (el.innerText || '').includes('① 槽位'))
+    const mixPose = [...z.querySelectorAll('.tk-chip')].find((c) => /混合/.test(c.innerText))
+    const slot = [...z.querySelectorAll('.chip.mixed')][0]
+    if (!slot) return { hasSlot: false }
+    slot.click()
+    await new Promise((r) => setTimeout(r, 450))
+    return {
+      hasSlot: true,
+      mixOn: mixPose.classList.contains('on'),
+      mixed: z.querySelectorAll('.chip.mixed').length,
+      toast: document.body.innerText.includes('已关掉'),
+    }
+  `)
+  ok('点半灰槽 → 关掉这一面的混合、槽恢复(与 B 方案同款手感)', () => {
+    assert.ok(mixSlotClick.hasSlot, '没有半灰槽可点')
+    assert.equal(mixSlotClick.mixOn, false, `点完混合还开着: ${JSON.stringify(mixSlotClick)}`)
+    assert.equal(mixSlotClick.mixed, 0, `还有 ${mixSlotClick.mixed} 个半灰槽没恢复`)
+  })
+
   /* ---------- 运行期异常 ---------- */
   ok('全程没有未捕获的渲染层异常', () => {
     const real = cdp.exceptions.filter((e) => !/ResizeObserver/.test(e))

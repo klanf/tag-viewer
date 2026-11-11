@@ -49,6 +49,14 @@ const emptyCfg = () => ({
     dual: false,       // 是否抽含人数 tag 的双人条目
     seed: '',
   },
+  /* 混合来源(2026-11-11): 同一维度内按配比**逐行 roll** —— 这一行由哪套供词是抽的,
+     但一行仍然只有一套(不会同时冒出两个动作)。ratios 的键用 nl 的语义面口径
+     (pose/costume/hair), 值 = {tag, nl, cd} 三段权重(0-100, 不必凑满 100)。 */
+  mix: {
+    enabled: false,
+    ratios: {},        // { pose: {tag:40, nl:40, cd:20}, ... }
+    seed: '',
+  },
 })
 
 /** 任意输入 -> 合法 cfg(字段逐个收敛, 类型不对就落默认值) */
@@ -125,12 +133,49 @@ function normCfg(raw) {
       : []
     c.dual = raw.cd.dual === true
     c.seed = typeof raw.cd.seed === 'string' ? raw.cd.seed : ''
-    // 同一维度内三套互斥: NL 占了该维度就让给 NL(UI 也这么拦, 这里是手改 json 的兜底)
+    // 同一维度内三套互斥: NL 占了该维度就让给 NL(UI 也这么拦, 这里是手改 json 的兜底)。
+    // 混合(mix)也算"占了这个维度"—— 同一个维度不能既按固定来源又按逐行 roll。
+    const mixDims = (out.mix && out.mix.enabled && out.mix.ratios) ? Object.keys(out.mix.ratios) : []
     if (c.enabled && out.nl.enabled && out.nl.dims.length) {
       c.dims = c.dims.filter((x) => !out.nl.dims.includes(x))
-      if (!c.dims.length) c.enabled = false
     }
+    if (c.enabled && mixDims.length) {
+      c.dims = c.dims.filter((x) => !mixDims.includes(x === 'outfit' ? 'costume' : x))
+    }
+    if (!c.dims.length) c.enabled = false
     out.cd = c
+  }
+  if (raw.mix && typeof raw.mix === 'object') {
+    const m = { ...d.mix }
+    m.enabled = raw.mix.enabled === true
+    m.seed = typeof raw.mix.seed === 'string' ? raw.mix.seed : ''
+    const ratios = {}
+    const src = (raw.mix.ratios && typeof raw.mix.ratios === 'object') ? raw.mix.ratios : {}
+    for (const dim of ['pose', 'costume', 'hair']) {
+      const r = src[dim]
+      if (!r || typeof r !== 'object') continue
+      const num = (v) => {
+        const n = Number(v)
+        return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 0
+      }
+      const w = { tag: num(r.tag), nl: num(r.nl), cd: dim === 'hair' ? 0 : num(r.cd) }
+      if (w.tag + w.nl + w.cd <= 0) continue
+      ratios[dim] = w
+    }
+    m.ratios = ratios
+    if (!Object.keys(ratios).length) m.enabled = false
+    // 被混合占用的维度从 nl/cd 里摘掉(反向兜底: 手改 json 时两边都写了)
+    if (m.enabled) {
+      if (out.nl.enabled) {
+        out.nl.dims = out.nl.dims.filter((x) => !ratios[x])
+        if (!out.nl.dims.length) out.nl.enabled = false
+      }
+      if (out.cd.enabled) {
+        out.cd.dims = out.cd.dims.filter((x) => !ratios[x === 'outfit' ? 'costume' : x])
+        if (!out.cd.dims.length) out.cd.enabled = false
+      }
+    }
+    out.mix = m
   }
   return out
 }

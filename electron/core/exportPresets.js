@@ -179,6 +179,8 @@ const PARAM_STRS = ['q', 'exclude', 'sort', 'append', 'replace_set',
   // 图库组合池(2026-11-11): 第三套动作/穿搭来源, 参数与 nl_* 同形。
   // 同样必须进白名单 —— 漏一个键就被 normParams 静默剥掉(这个坑已经踩过三次)。
   'cd_dims', 'cd_seed', 'cd_dual',
+  // 混合来源(2026-11-11): 维度 -> "tag/nl/cd" 配比, 逐行 roll; mix_seed 固定则整批可复现
+  'mix_dims', 'mix_seed',
   // 高级替换方案(2026-11-09): '@active'=跟随当前方案 / '0'=不启用 / 方案 id / 空=旧版快照参数。
   // 预设选了方案后, exporter 以方案库 cfg 为准, 上面的 randomize_*/nl_* 快照参数被覆盖。
   'adv_set']
